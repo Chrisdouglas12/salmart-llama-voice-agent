@@ -193,7 +193,11 @@ All model access goes through the **Meta Model API** at
 blocked by a dead key. SAM 3.1 is not integrated; Shelfie boxes come from the
 vision model and are cropped server-side with ffmpeg.
 
-## Verification (during the event)
+## Run and verify
+
+**Judges start here: [`JUDGES.md`](JUDGES.md)** — hosted demo URL + test
+account (no keys needed), the in-repo test command, and the video/release
+checklist.
 
 Runnable from this repo with zero dependencies (no Mongo, no keys, no host
 app) — this is the executable verification judges can run in seconds:

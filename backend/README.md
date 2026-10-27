@@ -18,6 +18,7 @@ app.use('/api/assistant', assistantRoutes);
 | --- | --- | --- | --- |
 | `POST` | `/api/assistant/chat` | JWT | Meta → Groq → Gemini orchestrator |
 | `POST` | `/api/assistant/transcribe` | JWT | voice → text (multipart field `audio`, ≤10 MB) |
+| `POST` | `/api/assistant/speak` | JWT | text → spoken WAV (Gemini TTS; JSON `{ text }`) |
 | `POST` | `/api/assistant/ad-from-image` | JWT | photo → `fill_ad` draft (field `image`, JPEG/PNG/WebP ≤8 MB) |
 | `POST` | `/api/assistant/scan-shop` | JWT | Shelfie: shelf photo → priced drafts (field `image`) |
 | `POST` | `/api/assistant/rank-photos` | JWT | gallery ranking (pre-existing route file, Groq/Gemini) |

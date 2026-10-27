@@ -134,6 +134,11 @@ curl -X POST $BASE/api/assistant/chat \
 curl -X POST $BASE/api/assistant/transcribe \
   -H "Authorization: Bearer $JWT" -F "audio=@voice.m4a"
 
+# text → spoken reply (JSON { text }, ≤500 chars; base64 WAV back)
+curl -X POST $BASE/api/assistant/speak \
+  -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+  -d '{"text":"I find one iPhone for you for 195,000 naira."}'
+
 # vision → ad draft (multipart field `image`, JPEG/PNG/WebP ≤8 MB)
 curl -X POST $BASE/api/assistant/ad-from-image \
   -H "Authorization: Bearer $JWT" -F "image=@photo.jpg" -F "text=50k Abuja brand new"
@@ -170,6 +175,7 @@ All model access goes through the **Meta Model API** at
 | --- | --- |
 | Chat, tool calling, image understanding | `muse-spark-1.3` |
 | Speech to text | `muse-voice-transcribe-1.0` |
+| Spoken replies (voice output) | Gemini TTS (Meta and Groq are STT-only; key already configured) |
 | Deeper planning (configured, not on the critical path) | `muse-wonder-1.0` |
 | Image generation (configured, not on the critical path) | `muse-image-1.0` |
 

@@ -1,6 +1,6 @@
 # Mobile — event diff extract
 
-`salmart-mobile.event.patch` (+343/−12, base: pre-kickoff app commit `5ce993f`)
+`salmart-mobile.event.patch` (+394/−16, base: pre-kickoff app commit `5ce993f`)
 is the complete event frontend work. No pre-hackathon app code is copied into
 this repo.
 
@@ -8,9 +8,9 @@ this repo.
 
 | File | Event change |
 | --- | --- |
-| `src/state/AssistantContext.js` | `sessionId`, product-card shaping, `add_to_cart`, gallery ranking, Shelfie scan → inline cards → cache crop → Create Ad, navigation |
+| `src/state/AssistantContext.js` | `sessionId`, product-card shaping, `add_to_cart`, gallery ranking, server-voice replies (`/speak` + expo-speech fallback), Shelfie scan → inline cards → cache crop → Create Ad, navigation |
 | `src/screens/AssistantScreen.js` | brain label from `/status`, shelf scan button, `Scan my shelf` chip, inline draft row |
-| `src/api/endpoints.js` | `assistantStatus()`, `assistantShelfScan()`, `sessionId` on `/chat` |
+| `src/api/endpoints.js` | `assistantStatus()`, `assistantShelfScan()`, `assistantSpeak()`, `sessionId` on `/chat` |
 | `src/api/client.js` | full-origin `EXPO_PUBLIC_API_URL` override, no production failover for it |
 | `src/assistant/dialog.js` | one `Scan my shelf` starter chip |
 | `config.js` | exposes `EXPO_PUBLIC_API_URL` (`API_URL` build-time fallback) |

@@ -55,7 +55,7 @@ index 12f7767..ee64f88 100644
  const DEFAULT_TIMEOUT = 15000;
  const GET_RETRIES = 2;
 diff --git a/src/api/endpoints.js b/src/api/endpoints.js
-index 76cbcf4..bea5a53 100644
+index 76cbcf4..1371035 100644
 --- a/src/api/endpoints.js
 +++ b/src/api/endpoints.js
 @@ -21,8 +21,8 @@ import {
@@ -69,7 +69,7 @@ index 76cbcf4..bea5a53 100644
  }
  
  export async function assistantAdFromImage({ image, text = '', draft = null } = {}) {
-@@ -42,6 +42,33 @@ export async function assistantRankPhotos({ photos = [], query = '' } = {}) {
+@@ -42,6 +42,44 @@ export async function assistantRankPhotos({ photos = [], query = '' } = {}) {
    return apiUpload('/api/assistant/rank-photos', form);
  }
  
@@ -98,6 +98,17 @@ index 76cbcf4..bea5a53 100644
 + */
 +export async function assistantStatus(opts) {
 +  return apiGet('/api/assistant/status', { retries: 0, ...opts });
++}
++
++/**
++ * POST /api/assistant/speak (JSON { text }) → { success, audio (base64 WAV),
++ * mimeType, provider, model, voice }
++ * Gemini TTS on the server. Failures come back as HTTP 200 with
++ * { success:false, code, message }, so the caller reads `success` and falls
++ * back to the phone's own TTS.
++ */
++export async function assistantSpeak({ text } = {}) {
++  return apiPost('/api/assistant/speak', { text }, { retries: 0 });
 +}
 +
  /**
@@ -353,7 +364,7 @@ index 8cb8221..cea7e8b 100644
    chip: { backgroundColor: T.bgSoft || T.bg, borderWidth: StyleSheet.hairlineWidth, borderColor: T.border, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
    chipText: { color: T.emerald, fontWeight: '700' },
 diff --git a/src/state/AssistantContext.js b/src/state/AssistantContext.js
-index eff30a0..5af651c 100644
+index eff30a0..fb45352 100644
 --- a/src/state/AssistantContext.js
 +++ b/src/state/AssistantContext.js
 @@ -4,12 +4,15 @@ import { Audio } from 'expo-av';
@@ -363,7 +374,7 @@ index eff30a0..5af651c 100644
 -import { assistantChat, assistantAdFromImage, transcribeAudio } from '../api/endpoints';
 +import { useCart } from './CartContext';
 +import { useAuth } from './AuthContext';
-+import { assistantChat, assistantAdFromImage, assistantShelfScan, transcribeAudio, shapeListing } from '../api/endpoints';
++import { assistantChat, assistantAdFromImage, assistantShelfScan, assistantSpeak, transcribeAudio, shapeListing } from '../api/endpoints';
  import { useTheme } from '../theme/theme';
  import { sanitizeAdPatch } from '../assistant/adDraft';
  import { toHistory } from '../assistant/history';
@@ -406,7 +417,57 @@ index eff30a0..5af651c 100644
  // Route name of the full assistant screen. The floating mic hides there because
  // that screen has its own mic.
  const ASSISTANT_ROUTE = 'assistant';
-@@ -50,6 +77,8 @@ const MAX_RECORD_MS = 60 * 1000;
+@@ -33,11 +60,45 @@ const CHAT_TIMEOUT_MS = 65000;
+ // An unconsumed patch (form never opened) must not leak into a later session.
+ const AD_PATCH_TTL_MS = 2 * 60 * 1000;
+ 
++// Spoken replies prefer the server voice (Gemini TTS via /api/assistant/speak).
++// The phone's own TTS is the fallback: if the server voice ever fails, it is
++// switched off for the rest of the session so one bad call can't add latency
++// to every later reply.
++let serverVoiceDown = false;
++let currentSound = null;
++
++async function stopServerVoice() {
++  const s = currentSound;
++  currentSound = null;
++  if (s) {
++    try { await s.unloadAsync(); } catch (_e) { /* ignore */ }
++  }
++}
++
++async function playServerVoice(line) {
++  const res = await assistantSpeak({ text: line });
++  if (!res || !res.success || !res.audio) throw new Error((res && res.code) || 'tts_failed');
++  const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
++  const uri = `${dir}aya-reply-${Date.now()}.wav`;
++  await FileSystem.writeAsStringAsync(uri, res.audio, { encoding: FileSystem.EncodingType.Base64 });
++  await stopServerVoice();
++  const { sound } = await Audio.Sound.createAsync({ uri }, { shouldPlay: true });
++  currentSound = sound;
++}
++
+ const speak = text => {
+-  try {
+-    Speech.stop();
+-    Speech.speak(String(text || ''), { rate: 1.05 });
+-  } catch (_e) { /* speech is optional */ }
++  const line = String(text || '').trim();
++  if (!line) return;
++  try { Speech.stop(); } catch (_e) { /* speech is optional */ }
++  stopServerVoice().catch(() => {});
++  if (!serverVoiceDown) {
++    playServerVoice(line).catch(() => {
++      serverVoiceDown = true;
++      try { Speech.speak(line, { rate: 1.05 }); } catch (_e) { /* speech is optional */ }
++    });
++    return;
++  }
++  try { Speech.speak(line, { rate: 1.05 }); } catch (_e) { /* speech is optional */ }
+ };
+ 
+ const VOICE_OPTIONS = {
+@@ -50,6 +111,8 @@ const MAX_RECORD_MS = 60 * 1000;
  
  export function AssistantProvider({ children }) {
    const nav = useNav();
@@ -415,7 +476,7 @@ index eff30a0..5af651c 100644
    const screen = useNavSelector(s => s.current.name);
    const screenRef = useRef(screen);
    screenRef.current = screen;
-@@ -156,6 +185,7 @@ export function AssistantProvider({ children }) {
+@@ -156,6 +219,7 @@ export function AssistantProvider({ children }) {
          : assistantChat({
            messages: [{ role: 'user', content: clean }],
            history,
@@ -423,7 +484,7 @@ index eff30a0..5af651c 100644
            // Use the server's vocabulary so form-edit mode switches on there.
            context: {
              screen: onForm ? SERVER_AD_SCREEN : screenRef.current,
-@@ -223,7 +253,45 @@ export function AssistantProvider({ children }) {
+@@ -223,7 +287,45 @@ export function AssistantProvider({ children }) {
          return true;
        }
  
@@ -470,7 +531,7 @@ index eff30a0..5af651c 100644
        if (navs.length && Date.now() - lastNavRef.current > 800) {
          lastNavRef.current = Date.now();
          for (const n of navs) {
-@@ -252,7 +320,7 @@ export function AssistantProvider({ children }) {
+@@ -252,7 +354,7 @@ export function AssistantProvider({ children }) {
      } finally {
        setIsBusy(false);
      }
@@ -479,7 +540,7 @@ index eff30a0..5af651c 100644
  
    // ── Gallery choose: tap or voice -> full-size photo -> ad-from-image ──────
    const chooseCandidate = useCallback(async (cand) => {
-@@ -274,6 +342,96 @@ export function AssistantProvider({ children }) {
+@@ -274,6 +376,96 @@ export function AssistantProvider({ children }) {
      if (c) chooseCandidate(c);
    };
  
@@ -576,7 +637,23 @@ index eff30a0..5af651c 100644
    // ── Global Voice Logic ────────────────────────────────────────────────────
    const stopAndTranscribe = useCallback(async (history) => {
      if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
-@@ -351,6 +509,7 @@ export function AssistantProvider({ children }) {
+@@ -320,6 +512,7 @@ export function AssistantProvider({ children }) {
+     try {
+       Keyboard.dismiss();
+       try { Speech.stop(); } catch (_e) { /* ignore */ }
++      stopServerVoice().catch(() => {});
+       const perm = await Audio.requestPermissionsAsync();
+       if (!perm?.granted) {
+         setMessages(prev => [...prev, { key: `err-${Date.now()}`, role: 'bot', kind: 'text', text: 'Please allow microphone access.', at: Date.now() }]);
+@@ -343,6 +536,7 @@ export function AssistantProvider({ children }) {
+   useEffect(() => () => {
+     if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
+     try { Speech.stop(); } catch (_e) { /* ignore */ }
++    stopServerVoice().catch(() => {});
+     const rec = recorderRef.current;
+     recorderRef.current = null;
+     if (rec) rec.stopAndUnloadAsync().catch(() => {});
+@@ -351,6 +545,7 @@ export function AssistantProvider({ children }) {
    return (
      <AssistantContext.Provider value={{
        messages, setMessages, isBusy, isReady, setIsReady, processMessage,

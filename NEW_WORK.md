@@ -34,8 +34,8 @@ byte-identical to the live sources (verified by hash).
 
 | Patch | Base (pre-kickoff) | Change |
 | --- | --- | --- |
-| `backend/routes/assistantRoutes.event.patch` | server `routes/assistantRoutes.js` at `8c5bef3e2` (Oct 26, pre-kickoff) | +166/−3: Meta imports, recovery probe, Shelfie helpers, `runMetaAgent`, Meta-first `PROVIDERS` order, `metaVision`, Meta transcription, `provider`/`model` fields, `GET /status`, `POST /scan-shop` |
-| `mobile/salmart-mobile.event.patch` | app at `5ce993f` (Oct 26, pre-kickoff) | +343/−12 across 7 files: `sessionId`, product cards, `add_to_cart`, brain label, Shelfie UI, `assistantStatus`, `assistantShelfScan`, LAN override, one starter chip |
+| `backend/routes/assistantRoutes.event.patch` | server `routes/assistantRoutes.js` at `8c5bef3e2` (Oct 26, pre-kickoff) | +252/−3: Meta imports, recovery probe, Shelfie helpers, `runMetaAgent`, Meta-first `PROVIDERS` order, `metaVision`, Meta transcription, `provider`/`model` fields, `GET /status`, `POST /scan-shop`, Gemini TTS (`POST /speak`) |
+| `mobile/salmart-mobile.event.patch` | app at `5ce993f` (Oct 26, pre-kickoff) | +394/−16 across 7 files: `sessionId`, product cards, `add_to_cart`, brain label, Shelfie UI, `assistantStatus`, `assistantShelfScan`, `assistantSpeak` + server-voice playback, LAN override, one starter chip |
 
 Both patches were verified with `git apply --check --reverse` against the live
 worktrees. No other files in either source repo were touched by the event work.

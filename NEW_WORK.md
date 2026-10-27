@@ -25,8 +25,8 @@ byte-identical to the live sources (verified by hash).
 | `backend/lib/assistant/mockAgent.js` | 15535 | deterministic fallback brain |
 | `backend/lib/assistant/mongoSearch.js` | 3233 | catalogue search over the host Post model |
 | `backend/lib/assistant/shelfie.js` | 27044 | **Aya Shelfie**: vision boxes, crops, deterministic price bands |
-| `backend/routes/visionRoutes.js` | 11642 | `POST /rank-photos`, `POST /ad-from-image` |
-| `backend/routes/voiceRoutes.js` | 2402 | `POST /transcribe` |
+| `backend/routes/visionRoutes.js` | 11642 | standalone vision routes, written during the event (reference — not mounted in `app.js`; the mounted equivalents are `/api/assistant/rank-photos` and `/api/assistant/ad-from-image`) |
+| `backend/routes/voiceRoutes.js` | 2402 | standalone transcribe route, written during the event (reference — not mounted; the mounted equivalent is `/api/assistant/transcribe`) |
 | `backend/package.json` | new | fresh manifest for the extract |
 | `backend/.env.example` | new | fresh template, blank values |
 

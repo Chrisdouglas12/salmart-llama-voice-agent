@@ -76,8 +76,10 @@ backend/
     mongoSearch.js             NEW: catalogue search over the host Post model
     shelfie.js                 NEW: Aya Shelfie — boxes, crops, deterministic price bands
   routes/
-    visionRoutes.js            NEW: POST /rank-photos, POST /ad-from-image
-    voiceRoutes.js             NEW: POST /transcribe (+ client-transcript fallback)
+    visionRoutes.js            NEW: standalone voice/vision route modules written
+    voiceRoutes.js             during the event (reference — NOT mounted; the
+                               mounted equivalents are the /api/assistant routes
+                               below, which is what the app and any test calls)
     assistantRoutes.event.patch  EVENT DIFF to the pre-existing live route file:
                                Meta-first orchestrator, runMetaAgent, metaVision,
                                Meta transcription, /status, /ping reply fields,
@@ -95,14 +97,55 @@ Apply points (in the private Salmart repos, not here):
 # server repo root — the host already mounts /api/assistant
 git apply /path/to/extract/backend/routes/assistantRoutes.event.patch
 cp backend/lib/assistant/*.js <server>/lib/assistant/
-cp backend/routes/visionRoutes.js backend/routes/voiceRoutes.js <server>/routes/
+```
 
+`visionRoutes.js` / `voiceRoutes.js` are event-written reference modules, not
+server wiring: the live `app.js` mounts only `/api/assistant`, so copying them
+into `<server>/routes/` alone exposes nothing. They are included as reviewable
+event work; the mounted voice/vision surface is the `/api/assistant` table
+below, which is what the app calls and what any test should call.
+
+Both patches were verified with `git apply --check --reverse` against the live
+worktrees they were taken from.
+
+```bash
 # app repo root
 git apply /path/to/extract/mobile/salmart-mobile.event.patch
 ```
 
-Both patches were verified with `git apply --check --reverse` against the live
-worktrees they were taken from.
+## Test against the main backend
+
+All of these hit the mounted `/api/assistant` router. `/status` and `/ping`
+are public; everything else needs the app's JWT (`Authorization: Bearer …`).
+
+```bash
+BASE=https://app.salmartonline.com.ng   # or http://<laptop-LAN-IP>:3000 locally
+JWT=<test JWT>
+
+# which brain is live (public)
+curl $BASE/api/assistant/status
+
+# chat (Meta-first, Groq/Gemini fallback)
+curl -X POST $BASE/api/assistant/chat \
+  -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"find me iPhone under 200k"}],"sessionId":"test-1"}'
+
+# voice → text (multipart field `audio`, ≤10 MB)
+curl -X POST $BASE/api/assistant/transcribe \
+  -H "Authorization: Bearer $JWT" -F "audio=@voice.m4a"
+
+# vision → ad draft (multipart field `image`, JPEG/PNG/WebP ≤8 MB)
+curl -X POST $BASE/api/assistant/ad-from-image \
+  -H "Authorization: Bearer $JWT" -F "image=@photo.jpg" -F "text=50k Abuja brand new"
+
+# Shelfie → priced drafts (multipart field `image`)
+curl -X POST $BASE/api/assistant/scan-shop \
+  -H "Authorization: Bearer $JWT" -F "image=@shelf.jpg"
+```
+
+Recoverable failures return HTTP 200 with `{ success: false, code, message }`
+(`NO_AUDIO`, `NO_IMAGE`, `BAD_IMAGE`, `TRANSCRIBE_FAILED`, `VISION_UNAVAILABLE`,
+`SCAN_FAILED`) — the client reads `success`, not the status code.
 
 ## Pre-existing integration points (not in this repo)
 

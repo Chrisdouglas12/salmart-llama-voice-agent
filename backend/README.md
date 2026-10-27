@@ -5,6 +5,27 @@ Whole files here are new modules written during the event (Oct 26 – Nov 4,
 is the event's diff to the pre-existing live route file — no pre-hackathon code
 is copied into this repo.
 
+## Mounted surface (what the app and any test calls)
+
+The live `app.js` mounts exactly one assistant router — nothing else in this
+folder is reachable over HTTP:
+
+```js
+app.use('/api/assistant', assistantRoutes);
+```
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/api/assistant/chat` | JWT | Meta → Groq → Gemini orchestrator |
+| `POST` | `/api/assistant/transcribe` | JWT | voice → text (multipart field `audio`, ≤10 MB) |
+| `POST` | `/api/assistant/ad-from-image` | JWT | photo → `fill_ad` draft (field `image`, JPEG/PNG/WebP ≤8 MB) |
+| `POST` | `/api/assistant/scan-shop` | JWT | Shelfie: shelf photo → priced drafts (field `image`) |
+| `POST` | `/api/assistant/rank-photos` | JWT | gallery ranking (pre-existing route file, Groq/Gemini) |
+| `GET` | `/api/assistant/status` | public | provider + model state |
+| `GET` | `/api/assistant/ping` | public | liveness |
+
+See the top-level README for curl examples against these routes.
+
 ## New modules
 
 ```
@@ -16,9 +37,14 @@ lib/assistant/form.js         Pidgin/English parsing → exact form values
 lib/assistant/mockAgent.js    deterministic fallback brain
 lib/assistant/mongoSearch.js  catalogue search (calls the host Post model)
 lib/assistant/shelfie.js      Aya Shelfie: boxes, crops, price bands
-routes/visionRoutes.js        POST /rank-photos, POST /ad-from-image
-routes/voiceRoutes.js         POST /transcribe
+routes/visionRoutes.js        standalone vision routes (reference, NOT mounted)
+routes/voiceRoutes.js         standalone transcribe route (reference, NOT mounted)
 ```
+
+`visionRoutes.js` / `voiceRoutes.js` are event-written reference modules.
+Nothing in the live server requires or mounts them, so copying them into
+`<server>/routes/` alone exposes nothing — they are included as reviewable
+event work. The mounted voice/vision paths are the `/api/assistant` rows above.
 
 Requires `express`, `multer`, `dotenv`, `@ffmpeg-installer/ffmpeg`
 (`backend/package.json`; open-source, labelled). `mongoSearch.js` imports the
@@ -39,7 +65,6 @@ Apply from the server repo root (it already mounts `/api/assistant`):
 ```bash
 git apply /path/to/extract/backend/routes/assistantRoutes.event.patch
 cp backend/lib/assistant/*.js <server>/lib/assistant/
-cp backend/routes/visionRoutes.js backend/routes/voiceRoutes.js <server>/routes/
 ```
 
 ## Configuration

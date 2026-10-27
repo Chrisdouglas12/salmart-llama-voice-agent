@@ -555,7 +555,7 @@ index 973ab2d..fe31da6 100644
      flexDirection: 'row', alignItems: 'center', gap: 4,
      paddingVertical: 7, paddingHorizontal: 12, borderRadius: 999,
 diff --git a/src/screens/CreateAdScreen.js b/src/screens/CreateAdScreen.js
-index 24385d5..81c06ab 100644
+index 24385d5..9d2ea99 100644
 --- a/src/screens/CreateAdScreen.js
 +++ b/src/screens/CreateAdScreen.js
 @@ -143,7 +143,7 @@ export default function CreateAdScreen({ route }) {
@@ -563,7 +563,7 @@ index 24385d5..81c06ab 100644
    const insets = useSafeAreaInsets();
    const { firstName, lastName } = useAuth();
 -  const { adPatch, ackAdPatch, reportAdSnapshot } = useAssistant();
-+  const { adPatch, ackAdPatch, reportAdSnapshot, scanPickedPhoto } = useAssistant();
++  const { adPatch, ackAdPatch, reportAdSnapshot, scanPickedPhoto, toggleMic, recording: assistantRecording } = useAssistant();
  
    const editingId = route?.params?.postId || null;
    const isEdit = !!editingId;
@@ -599,6 +599,35 @@ index 24385d5..81c06ab 100644
  
    const pickDigitalFile = useCallback(async () => {
      const res = await DocumentPicker.getDocumentAsync({
+@@ -718,6 +728,20 @@ export default function CreateAdScreen({ route }) {
+             <Tiny style={{ color: T.muted }}>{loadingEdit ? 'Loading listing…' : (stage === 'story' ? 'Photo & caption' : 'Details')}</Tiny>
+           </View>
+         </View>
++        {/* Assistant mic: the global FAB stays off this form (Publish bar
++            owns the bottom), so the top bar carries its own voice entry. */}
++        <Pressable
++          onPress={() => toggleMic([])}
++          hitSlop={10}
++          style={[
++            styles.micBtn,
++            { backgroundColor: assistantRecording ? (T.danger || '#ef4444') : T.emerald },
++          ]}
++          accessibilityRole="button"
++          aria-label={assistantRecording ? 'Stop recording' : 'Talk to the assistant'}
++        >
++          <Ionicons name={assistantRecording ? 'stop' : 'mic'} size={16} color="#fff" />
++        </Pressable>
+         <Pressable onPress={publish} disabled={busy || filling} hitSlop={10} style={styles.publishBtn} accessibilityRole="button" aria-label="Publish">
+           <Tiny style={{ color: '#fff', fontWeight: '800' }}>{busy ? '…' : (isEdit ? 'Save' : 'Post')}</Tiny>
+         </Pressable>
+@@ -1059,6 +1083,7 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+     borderBottomColor: T.border, gap: 8,
+   },
+   iconBtn: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
++  micBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+   topCenter: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+   publishBtn: {
+     backgroundColor: T.emerald, paddingHorizontal: 16, height: 32,
 diff --git a/src/state/AssistantContext.js b/src/state/AssistantContext.js
 index eff30a0..fb80f25 100644
 --- a/src/state/AssistantContext.js

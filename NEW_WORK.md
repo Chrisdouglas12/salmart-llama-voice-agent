@@ -42,6 +42,12 @@ byte-identical to the live sources (verified by hash).
 Both patches were verified with `git apply --check --reverse` against the live
 worktrees. No other files in either source repo were touched by the event work.
 
+**Provenance attestation:** the nine whole backend files above
+(`lib/assistant/*.js`, `routes/visionRoutes.js`, `routes/voiceRoutes.js`)
+were written fresh during the event window — not carried over from any
+pre-kickoff experiment. Pre-existing code enters this repo only as diff
+context lines inside the two event patches, never as copied files.
+
 ### Aya Shelfie (event work)
 
 | Rule | Implementation |

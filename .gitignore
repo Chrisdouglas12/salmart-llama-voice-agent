@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Secrets (only .env.example files are tracked; they hold blank values)
+.env
+.env.*
+!.env.example
+
+# Runtime noise
+uploads/
+*.log
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini

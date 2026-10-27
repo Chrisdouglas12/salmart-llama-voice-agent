@@ -1,0 +1,5 @@
+# Keep text files LF so the event patches apply cleanly.
+* text=auto eol=lf
+
+# Patch files themselves are text.
+*.patch text eol=lf

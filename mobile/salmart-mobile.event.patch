@@ -1,0 +1,586 @@
+diff --git a/.env.example b/.env.example
+index 7d51f1d..1f6ea31 100644
+--- a/.env.example
++++ b/.env.example
+@@ -11,3 +11,12 @@ NODE_ENV=production
+ # FCM_TOKEN_URL=https://app.salmartonline.com.ng/api/save-fcm-token
+ # ANON_TOKEN_URL=https://app.salmartonline.com.ng/api/save-anonymous-fcm-token
+ # LINK_TOKEN_URL=https://app.salmartonline.com.ng/api/link-anonymous-fcm-token
++
++# Full API origin, including scheme and port. Point the app at a backend you
++# run yourself (for example the hackathon build on your laptop). When this is
++# set it wins over API_DOMAIN and the production fallback host is disabled.
++# Expo only inlines EXPO_PUBLIC_* variables at build time, so use that prefix
++# and restart Metro after changing it.
++# Use the machine's LAN IP, not localhost: a phone cannot reach your laptop's
++# loopback address.
++# EXPO_PUBLIC_API_URL=http://192.168.1.20:3000
+diff --git a/config.js b/config.js
+index 87bcf4f..1d29d40 100644
+--- a/config.js
++++ b/config.js
+@@ -45,6 +45,12 @@ export const CONFIG = {
+   MAIN_URL: endpoints.mainUrl,
+   SIGNIN_URL: `${endpoints.mainUrl}/index.html#/signin`,
+   MAIN_DOMAIN: 'salmartonline.com.ng',
++  // Full API origin, including scheme and port. Use this for local testing:
++  //   EXPO_PUBLIC_API_URL=http://192.168.1.20:3000
++  // Expo only inlines EXPO_PUBLIC_* variables. API_URL is kept as a fallback
++  // for builds that inject it with a custom transformer.
++  // When empty, the client builds https://<API_DOMAIN> as before.
++  API_URL: process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || '',
+   API_DOMAIN: endpoints.apiDomain,
+   API_FALLBACK_DOMAIN: endpoints.apiFallbackDomain || endpoints.apiDomain,
+   GOOGLE_AUTH_URL: endpoints.googleAuthUrl,
+diff --git a/src/api/client.js b/src/api/client.js
+index 12f7767..ee64f88 100644
+--- a/src/api/client.js
++++ b/src/api/client.js
+@@ -15,8 +15,15 @@ import NetInfo from '@react-native-community/netinfo';
+ import { AppState } from 'react-native';
+ import { CONFIG } from '../../config';
+ 
+-export const API_BASE = `https://${CONFIG.API_DOMAIN}`;
+-export const API_FALLBACK_BASE = `https://${CONFIG.API_FALLBACK_DOMAIN}`;
++// A full origin override (scheme + host + optional port) is used for local
++// testing against a machine on the LAN. Otherwise the HTTPS host is built
++// from API_DOMAIN as before.
++const OVERRIDE_BASE = String(CONFIG.API_URL || '').trim().replace(/\/+$/, '');
++
++export const API_BASE = OVERRIDE_BASE || `https://${CONFIG.API_DOMAIN}`;
++// A local override points at one specific server; never fail over to the
++// production host from it.
++export const API_FALLBACK_BASE = OVERRIDE_BASE ? '' : `https://${CONFIG.API_FALLBACK_DOMAIN}`;
+ 
+ const DEFAULT_TIMEOUT = 15000;
+ const GET_RETRIES = 2;
+diff --git a/src/api/endpoints.js b/src/api/endpoints.js
+index 76cbcf4..bea5a53 100644
+--- a/src/api/endpoints.js
++++ b/src/api/endpoints.js
+@@ -21,8 +21,8 @@ import {
+   absUrl, mediaUrl,
+ } from './client';
+ 
+-export async function assistantChat({ messages = [], history = [], context = null } = {}) {
+-  return apiPost('/api/assistant/chat', { messages, history, context }, { retries: 0 });
++export async function assistantChat({ messages = [], history = [], context = null, sessionId = null } = {}) {
++  return apiPost('/api/assistant/chat', { messages, history, context, ...(sessionId ? { sessionId } : {}) }, { retries: 0 });
+ }
+ 
+ export async function assistantAdFromImage({ image, text = '', draft = null } = {}) {
+@@ -42,6 +42,33 @@ export async function assistantRankPhotos({ photos = [], query = '' } = {}) {
+   return apiUpload('/api/assistant/rank-photos', form);
+ }
+ 
++/**
++ * POST /api/assistant/scan-shop (multipart, field `image`) →
++ * { success, message, count, items:[{ id, index, title, fields, price, priceMin,
++ *   priceMax, photo (data URI), bbox, missing, ... }], actions }
++ *
++ * One photo of a shelf or table becomes several priced draft listings. The
++ * server never publishes; it returns drafts and the app opens Create Ad.
++ * `item.fields` is the same shape as a fill_ad action, so it goes through
++ * sanitizeAdPatch like every other assistant draft.
++ */
++export async function assistantShelfScan({ image, text = '', location = '' } = {}) {
++  const form = new FormData();
++  form.append('image', { uri: image.uri, name: image.fileName || `shelf_${Date.now()}.jpg`, type: image.mimeType || 'image/jpeg' });
++  if (text) form.append('text', text);
++  if (location) form.append('location', location);
++  return apiUpload('/api/assistant/scan-shop', form);
++}
++
++/**
++ * GET /api/assistant/status → { success, mode, brainModel, visionModel, ... }
++ * Public. The assistant screen uses it only to label which brain is live.
++ * Older backends have no such route, so callers treat failure as "unknown".
++ */
++export async function assistantStatus(opts) {
++  return apiGet('/api/assistant/status', { retries: 0, ...opts });
++}
++
+ /**
+  * POST /api/assistant/transcribe (multipart, field `audio`) → { success, text }
+  * Groq Whisper on the server. Failures come back as HTTP 200 with
+diff --git a/src/assistant/dialog.js b/src/assistant/dialog.js
+index 6609214..49a4600 100644
+--- a/src/assistant/dialog.js
++++ b/src/assistant/dialog.js
+@@ -374,6 +374,7 @@ export function composeResults({ slots, posts, error }) {
+ 
+ export function starterChips() {
+   return [
++    { label: 'Scan my shelf', action: 'shelf:scan' },
+     { label: 'Phone under 20k', action: 'ask:phone under 20k' },
+     { label: 'Fairly used sofa', action: 'ask:fairly used sofa in Lagos' },
+     { label: 'Deals today', action: 'ask:show me deals' },
+diff --git a/src/screens/AssistantScreen.js b/src/screens/AssistantScreen.js
+index 8cb8221..cea7e8b 100644
+--- a/src/screens/AssistantScreen.js
++++ b/src/screens/AssistantScreen.js
+@@ -5,7 +5,7 @@
+  */
+ import React, { useCallback, useEffect, useRef, useState } from 'react';
+ import {
+-  Animated, FlatList, Image, Keyboard, Pressable, ScrollView, StyleSheet, Switch,
++  Alert, Animated, FlatList, Image, Keyboard, Pressable, ScrollView, StyleSheet, Switch,
+   Text, View,
+ } from 'react-native';
+ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+@@ -26,7 +26,7 @@ import { ProductRailCard } from '../ui/cards';
+ import { useKeyboardOverlap } from '../ui/useKeyboardHeight';
+ 
+ import {
+-  addToCart, apiGet, search, getCart, shapeListing,
++  addToCart, apiGet, assistantStatus, search, getCart, shapeListing,
+ } from '../api/endpoints';
+ 
+ import {
+@@ -298,6 +298,55 @@ function ProductRow({ item, styles, T, tapListing, openCheckout, chatSeller, onC
+   );
+ }
+ 
++function ShelfRow({ item, styles, T, onOpen, showAvatar }) {
++  const items = item.items || [];
++  return (
++    <BotShell styles={styles} showAvatar={showAvatar}>
++      <View style={styles.shelfCard}>
++        <View style={styles.shelfHead}>
++          <Ionicons name="scan-outline" size={13} color={T.emerald} />
++          <Tiny style={{ color: T.inkMuted, marginLeft: 6 }}>
++            {items.length} draft{items.length === 1 ? '' : 's'} from one photo · tap to review
++          </Tiny>
++        </View>
++        <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingVertical: 2 }}>
++          {items.map((it, i) => (
++            <StaggerView key={it.id || `shelf-item-${i}`} index={i}>
++              <Pressable
++                onPress={() => onOpen(it)}
++                style={({ pressed }) => [styles.shelfItem, pressed && { opacity: 0.75 }]}
++                accessibilityRole="button"
++                accessibilityLabel={`Review ${it.title}`}
++              >
++                {it.photo ? (
++                  <Image source={{ uri: it.photo }} style={styles.shelfThumb} resizeMode="cover" />
++                ) : (
++                  <View style={[styles.shelfThumb, styles.shelfThumbEmpty]}>
++                    <Ionicons name="image-outline" size={22} color={T.inkMuted} />
++                  </View>
++                )}
++                <Small numberOfLines={2} style={styles.shelfTitle}>{it.title}</Small>
++                <Tiny style={styles.shelfPrice}>
++                  {it.price != null ? `₦${Number(it.price).toLocaleString()}` : 'Price needed'}
++                </Tiny>
++                <Tiny numberOfLines={1} style={{ color: T.inkMuted, marginHorizontal: 8, marginTop: 1 }}>
++                  {it.priceMin != null && it.priceMax != null
++                    ? `₦${Number(it.priceMin).toLocaleString()}–₦${Number(it.priceMax).toLocaleString()}`
++                    : (it.categoryLabel || '')}
++                </Tiny>
++                <View style={styles.shelfCta}>
++                  <Tiny style={styles.shelfCtaText}>Review</Tiny>
++                  <Ionicons name="chevron-forward" size={12} color={T.emerald} />
++                </View>
++              </Pressable>
++            </StaggerView>
++          ))}
++        </ScrollView>
++      </View>
++    </BotShell>
++  );
++}
++
+ function CartRow({ item, styles, T, onViewCart, showAvatar }) {
+   const ok = !!item.verified;
+   const price = item.price != null && item.price !== '' ? `₦${Number(item.price).toLocaleString()}${item.quantity > 1 ? ` × ${item.quantity}` : ''}` : '';
+@@ -345,6 +394,7 @@ export default function AssistantScreen() {
+   // ── GLOBAL STATE ──
+   const {
+     messages, setMessages, isBusy: busy, isReady, setIsReady, processMessage,
++    scanShelfPhoto, openShelfItem,
+     recording, transcribing, toggleMic,
+     attachedImage, setAttachedImage,
+   } = useAssistant();
+@@ -358,6 +408,9 @@ export default function AssistantScreen() {
+   const [menuOpen, setMenuOpen] = useState(false);
+   const [scanChats, setScanChats] = useState(false);
+   const [scanning, setScanning] = useState(false);
++  // Which brain the backend is using (Meta Model API model id, or the demo
++  // brain). Purely informational; the chat still works if this never loads.
++  const [brain, setBrain] = useState(null);
+ 
+   const profileRef = useRef(null);
+   const slotsRef = useRef(slots);
+@@ -395,6 +448,14 @@ export default function AssistantScreen() {
+ 
+   useEffect(() => { apiGet('/api/assistant/ping', { retries: 0 }).catch(() => {}); }, []);
+ 
++  useEffect(() => {
++    let live = true;
++    assistantStatus()
++      .then((s) => { if (live && s && s.success) setBrain(s); })
++      .catch(() => {});
++    return () => { live = false; };
++  }, []);
++
+   useEffect(() => {
+     if (!isReady || !messages.length) return;
+     saveThread({ messages: messages.slice(-60), slots });
+@@ -441,6 +502,46 @@ export default function AssistantScreen() {
+     } catch (_e) {}
+   }, [push, setAttachedImage]);
+ 
++  // ── Shelfie entry point ───────────────────────────────────────────────────
++  // One photo of a table or shelf. The assistant drafts every item it finds and
++  // keeps the cards in this thread; tapping one opens the normal Create Ad form.
++  const pickShelfPhoto = useCallback(async (source = 'library') => {
++    if (busy || recording || transcribing) return;
++    try {
++      if (source === 'camera') {
++        const perm = await ImagePicker.requestCameraPermissionsAsync();
++        if (!perm.granted) {
++          push(botText('Allow camera access so I can scan your shelf.', undefined, { animate: false }));
++          return;
++        }
++        const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.85 });
++        if (!res.canceled && res.assets?.[0]) await scanShelfPhoto(res.assets[0]);
++        return;
++      }
++
++      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
++      if (!perm.granted) {
++        push(botText('Allow photo access so I can scan your shelf.', undefined, { animate: false }));
++        return;
++      }
++      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.85 });
++      if (!res.canceled && res.assets?.[0]) await scanShelfPhoto(res.assets[0]);
++    } catch (_e) {}
++  }, [busy, recording, transcribing, push, scanShelfPhoto]);
++
++  const scanShelfPrompt = useCallback(() => {
++    if (busy || recording || transcribing) return;
++    Alert.alert(
++      'Scan a shelf',
++      'One photo of your table, shelf or stall. I go find every item and draft each one for you to review.',
++      [
++        { text: 'Take photo', onPress: () => pickShelfPhoto('camera') },
++        { text: 'Choose from gallery', onPress: () => pickShelfPhoto('library') },
++        { text: 'Cancel', style: 'cancel' },
++      ],
++    );
++  }, [busy, recording, transcribing, pickShelfPhoto]);
++
+   const runSearch = useCallback(async nextSlots => {
+     const params = buildSearchParams(nextSlots);
+     const loadingKey = nextKey();
+@@ -526,6 +627,7 @@ export default function AssistantScreen() {
+     }
+     if (action.startsWith('ask:')) { handleSend(action.slice(4)); return; }
+     if (action.startsWith('cat:')) { handleSend(`show me ${action.slice(4)}`); return; }
++    if (action === 'shelf:scan') { scanShelfPrompt(); return; }
+ 
+     if (action === 'clear') {
+       setSlots(emptySlots());
+@@ -556,7 +658,7 @@ export default function AssistantScreen() {
+ 
+     setSlots(next);
+     await runSearch(next);
+-  }, [busy, handleSend, runSearch, push, nav]);
++  }, [busy, handleSend, runSearch, push, nav, scanShelfPrompt]);
+ 
+   const openCheckout = useCallback(async (listing) => {
+     if (!listing?._id) return;
+@@ -606,6 +708,7 @@ export default function AssistantScreen() {
+ 
+     if (item.kind === 'loading') return <LoadingRow styles={styles} T={T} showAvatar={showAvatar} />;
+     if (item.kind === 'products') return <ProductRow item={item} styles={styles} T={T} tapListing={tapListing} openCheckout={openCheckout} chatSeller={chatSeller} onChip={onChip} showAvatar={showAvatar} isLast={isLast} />;
++    if (item.kind === 'shelf') return <ShelfRow item={item} styles={styles} T={T} onOpen={openShelfItem} showAvatar={showAvatar} />;
+     if (item.kind === 'cart') return <CartRow item={item} styles={styles} T={T} onViewCart={viewCart} showAvatar={showAvatar} />;
+     if (item.role === 'bot') return <BotTextRow item={item} styles={styles} onChip={onChip} showAvatar={showAvatar} isLast={isLast} />;
+ 
+@@ -617,10 +720,16 @@ export default function AssistantScreen() {
+         </View>
+       </View>
+     );
+-  }, [messages, styles, T, tapListing, openCheckout, chatSeller, onChip, viewCart]);
++  }, [messages, styles, T, tapListing, openCheckout, chatSeller, onChip, viewCart, openShelfItem]);
+ 
+   const bottomPad = keyboardOpen ? overlap : insets.bottom;
+ 
++  const idleSubtitle = brain
++    ? brain.mode === 'live'
++      ? `${brain.brainModel || 'Meta Model API'} · live`
++      : 'Demo brain · no API key'
++    : 'AI assistant · finds products for you';
++
+   const subtitle = recording
+     ? 'listening… tap the mic to stop'
+     : transcribing
+@@ -629,7 +738,7 @@ export default function AssistantScreen() {
+         ? 'thinking…'
+         : offlineRef.current
+           ? 'Offline mode · basic search'
+-          : 'AI assistant · finds products for you';
++          : idleSubtitle;
+ 
+   const micDisabled = busy || transcribing;
+   const micColor = recording ? (T.danger || '#ef4444') : T.emerald;
+@@ -686,6 +795,10 @@ export default function AssistantScreen() {
+             <ChatComposer value={text} onChangeText={setText} onSend={() => handleSend()} disabled={busy || recording || transcribing} placeholder={recording ? 'Listening…' : transcribing ? 'Transcribing…' : attachedImage ? 'Price, condition, where…' : 'Ask for any product…'} />
+           </View>
+ 
++          <Pressable onPress={scanShelfPrompt} disabled={micDisabled || recording} style={({ pressed }) => [styles.attachBtn, { opacity: micDisabled || recording ? 0.5 : pressed ? 0.8 : 1 }]} accessibilityRole="button" accessibilityLabel="Scan a shelf or table and draft every item">
++            <Ionicons name="scan-outline" size={20} color={T.emerald} />
++          </Pressable>
++
+           <Pressable onPress={attachPhoto} disabled={micDisabled || recording} style={({ pressed }) => [styles.attachBtn, { opacity: micDisabled || recording ? 0.5 : pressed ? 0.8 : 1 }]} accessibilityRole="button" accessibilityLabel="Attach a photo of an item to sell">
+             <Ionicons name="image-outline" size={20} color={T.emerald} />
+           </Pressable>
+@@ -732,6 +845,15 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+   bubbleMine: { backgroundColor: T.emerald, borderTopRightRadius: 6 },
+   userImg: { width: 190, height: 190, borderRadius: 12, marginBottom: 6, backgroundColor: 'rgba(255,255,255,0.15)' },
+   productsCard: { backgroundColor: T.card, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: T.border, padding: T.space.sm, alignSelf: 'stretch', maxWidth: '100%', overflow: 'hidden', ...shadow(1) },
++  shelfCard: { backgroundColor: T.card, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: T.border, padding: T.space.sm, alignSelf: 'stretch', maxWidth: '100%', overflow: 'hidden', ...shadow(1) },
++  shelfHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 6, marginLeft: 2 },
++  shelfItem: { width: 150, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: T.border, backgroundColor: T.bgSoft || T.bg, overflow: 'hidden', paddingBottom: 8 },
++  shelfThumb: { width: '100%', height: 104, backgroundColor: T.border },
++  shelfThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
++  shelfTitle: { color: T.ink, fontWeight: '700', marginTop: 7, marginHorizontal: 8, minHeight: 34 },
++  shelfPrice: { color: T.emerald, fontWeight: '800', marginTop: 2, marginHorizontal: 8 },
++  shelfCta: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 6, marginHorizontal: 8 },
++  shelfCtaText: { color: T.emerald, fontWeight: '700' },
+   chipRow: { flexDirection: 'row', gap: 6, paddingVertical: 2 },
+   chip: { backgroundColor: T.bgSoft || T.bg, borderWidth: StyleSheet.hairlineWidth, borderColor: T.border, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
+   chipText: { color: T.emerald, fontWeight: '700' },
+diff --git a/src/state/AssistantContext.js b/src/state/AssistantContext.js
+index eff30a0..5af651c 100644
+--- a/src/state/AssistantContext.js
++++ b/src/state/AssistantContext.js
+@@ -4,12 +4,15 @@ import { Audio } from 'expo-av';
+ import * as Speech from 'expo-speech';
+ import { Ionicons } from '@expo/vector-icons';
+ import { useNav, useNavSelector } from './Navigation';
+-import { assistantChat, assistantAdFromImage, transcribeAudio } from '../api/endpoints';
++import { useCart } from './CartContext';
++import { useAuth } from './AuthContext';
++import { assistantChat, assistantAdFromImage, assistantShelfScan, transcribeAudio, shapeListing } from '../api/endpoints';
+ import { useTheme } from '../theme/theme';
+ import { sanitizeAdPatch } from '../assistant/adDraft';
+ import { toHistory } from '../assistant/history';
+ import { scanGallery, prepareFull } from '../assistant/gallery';
+ import GalleryPickerModal from '../ui/GalleryPickerModal';
++import * as FileSystem from 'expo-file-system';
+ 
+ const AssistantContext = createContext(null);
+ 
+@@ -17,8 +20,32 @@ const AssistantContext = createContext(null);
+ const SCREEN_ROUTE = {
+   cart: 'cart', checkout: 'checkout', deals: 'deals', profile: 'profile',
+   referral: 'referral', market: 'market', search: 'search', create_ad: 'createAd',
++  // "Message the seller" returns a chat navigation with the seller's userId.
++  messages: 'messages', chat: 'chat',
+ };
+ 
++/**
++ * The server sends compact catalogue rows ({ postId, sellerId, ... }). The
++ * assistant's ProductRow expects the app's listing shape ({ _id, seller }), so
++ * normalise once here instead of letting taps silently do nothing.
++ */
++const toListing = p => shapeListing({
++  _id: p?.postId || p?._id || p?.id,
++  postId: p?.postId,
++  title: p?.title,
++  description: p?.description,
++  price: p?.price,
++  category: p?.category,
++  location: p?.location,
++  condition: p?.condition,
++  postType: p?.postType,
++  photo: p?.photo,
++  photos: p?.photos,
++  seller: p?.sellerId
++    ? { _id: p.sellerId, name: p.sellerName || 'Seller', profilePicture: p.sellerPicture || null }
++    : undefined,
++});
++
+ // Route name of the full assistant screen. The floating mic hides there because
+ // that screen has its own mic.
+ const ASSISTANT_ROUTE = 'assistant';
+@@ -50,6 +77,8 @@ const MAX_RECORD_MS = 60 * 1000;
+ 
+ export function AssistantProvider({ children }) {
+   const nav = useNav();
++  const cart = useCart();
++  const { userId } = useAuth();
+   const screen = useNavSelector(s => s.current.name);
+   const screenRef = useRef(screen);
+   screenRef.current = screen;
+@@ -156,6 +185,7 @@ export function AssistantProvider({ children }) {
+         : assistantChat({
+           messages: [{ role: 'user', content: clean }],
+           history,
++          sessionId: userId || undefined,
+           // Use the server's vocabulary so form-edit mode switches on there.
+           context: {
+             screen: onForm ? SERVER_AD_SCREEN : screenRef.current,
+@@ -223,7 +253,45 @@ export function AssistantProvider({ children }) {
+         return true;
+       }
+ 
+-      // 4. Perform Navigation
++      // 4. Shopping results stay in the assistant thread, exactly like a
++      //    typed search. Tapping a card opens checkout / the seller chat.
++      if (Array.isArray(res.products) && res.products.length) {
++        const listings = res.products.map(toListing).filter(Boolean);
++        setMessages(prev => [
++          ...prev,
++          {
++            key: `products-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
++            role: 'bot', kind: 'products', products: listings, at: Date.now(),
++          },
++        ]);
++        // A voice search from the market must open the thread, or the buyer
++        // never sees the cards Aya just found.
++        if (screenRef.current !== ASSISTANT_ROUTE) {
++          lastNavRef.current = Date.now();
++          nav.push(ASSISTANT_ROUTE);
++        }
++        if (opts.speak) speak(reply);
++        return true;
++      }
++
++      // 5. Cart and seller actions the phone has to perform itself.
++      for (const action of actions) {
++        if (action?.type === 'add_to_cart' && action.postId) {
++          try {
++            await cart.add({
++              postId: action.postId,
++              quantity: Math.max(1, parseInt(action.quantity, 10) || 1),
++              // /api/cart only distinguishes showroom from post. Digital/service
++              // are post types, and the server reads them from the document.
++              itemType: action.product?.postType === 'showroom' ? 'showroom' : 'post',
++            });
++          } catch (_e) {
++            botNote("I couldn't add that to your cart. Check your connection and try again.");
++          }
++        }
++      }
++
++      // 6. Perform Navigation
+       if (navs.length && Date.now() - lastNavRef.current > 800) {
+         lastNavRef.current = Date.now();
+         for (const n of navs) {
+@@ -252,7 +320,7 @@ export function AssistantProvider({ children }) {
+     } finally {
+       setIsBusy(false);
+     }
+-  }, [nav]);
++  }, [nav, cart, userId]);
+ 
+   // ── Gallery choose: tap or voice -> full-size photo -> ad-from-image ──────
+   const chooseCandidate = useCallback(async (cand) => {
+@@ -274,6 +342,96 @@ export function AssistantProvider({ children }) {
+     if (c) chooseCandidate(c);
+   };
+ 
++  // ── Shelfie: one photo of a shelf -> several draft listings ───────────────
++  // The server finds the items and prices them from real listings. This keeps
++  // the result in the assistant thread, exactly like shopping results; tapping
++  // a card opens the existing Create Ad form. Nothing is posted here.
++  const scanShelfPhoto = useCallback(async (asset, note = '', opts = {}) => {
++    if (!asset?.uri || busyRef.current || recordingRef.current || transcribingRef.current) return false;
++
++    const clean = String(note || '').trim();
++    setIsBusy(true);
++    setAttachedImage(null);
++
++    const stamp = Date.now();
++    const loadingKey = `loading-${stamp}`;
++    setMessages(prev => [
++      ...prev,
++      { key: `user-${stamp}`, role: 'user', kind: 'text', text: clean || 'Scan this shelf', imageUri: asset.uri, at: stamp },
++      { key: loadingKey, role: 'bot', kind: 'loading', at: stamp },
++    ]);
++
++    try {
++      const res = await assistantShelfScan({ image: asset, text: clean, location: opts.location || '' });
++      const reply = cleanText(res?.message) || 'Done.';
++      const items = Array.isArray(res?.items) ? res.items : [];
++
++      if (!res?.success || !items.length) {
++        setMessages(prev => [
++          ...prev.filter(m => m.key !== loadingKey),
++          { key: `bot-${Date.now()}`, role: 'bot', kind: 'text', text: reply, at: Date.now() },
++        ]);
++        if (opts.speak) speak(reply);
++        return true;
++      }
++
++      setMessages(prev => {
++        const withoutLoading = prev.filter(m => m.key !== loadingKey);
++        const now = Date.now();
++        return [
++          ...withoutLoading,
++          { key: `bot-${now}`, role: 'bot', kind: 'text', text: reply, at: now },
++          { key: `shelf-${now}`, role: 'bot', kind: 'shelf', items, at: now },
++        ];
++      });
++      if (opts.speak) speak(reply);
++      return true;
++    } catch (e) {
++      console.log('[Assistant] shelf scan failed:', e?.message);
++      setMessages(prev => [
++        ...prev.filter(m => m.key !== loadingKey),
++        { key: `err-${Date.now()}`, role: 'bot', kind: 'text', text: "I couldn't scan that photo. Check your connection and try again.", at: Date.now() },
++      ]);
++      return false;
++    } finally {
++      setIsBusy(false);
++    }
++  }, [setAttachedImage, setMessages]);
++
++  /**
++   * Open one Shelfie draft in the normal Create Ad form. The server sends the
++   * crop as a data URI; it has to become a real file first or the publish
++   * upload sends nothing on Android.
++   */
++  const openShelfItem = useCallback(async (item) => {
++    if (!item) return;
++
++    let photo = null;
++    if (item.photo && String(item.photo).startsWith('data:')) {
++      try {
++        const base64 = String(item.photo).replace(/^data:image\/[a-z0-9+.-]+;base64,/i, '');
++        const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
++        if (dir && base64) {
++          const uri = `${dir}shelf-${item.id || Date.now()}.jpg`;
++          await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
++          photo = { uri, fileName: `shelf_${item.index || 1}.jpg`, mimeType: 'image/jpeg' };
++        }
++      } catch (e) {
++        console.log('[Assistant] shelf crop could not be saved:', e?.message);
++      }
++    }
++
++    setAdPatch({
++      id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
++      fields: sanitizeAdPatch(item.fields || {}, 'regular'),
++      photo,
++      say: item.price != null
++        ? `${item.title} · ₦${Number(item.price).toLocaleString()} suggested. Check am.`
++        : `${item.title}. Add the price.`,
++    });
++    if (screenRef.current !== AD_FORM_ROUTE) nav.push(AD_FORM_ROUTE);
++  }, [nav]);
++
+   // ── Global Voice Logic ────────────────────────────────────────────────────
+   const stopAndTranscribe = useCallback(async (history) => {
+     if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
+@@ -351,6 +509,7 @@ export function AssistantProvider({ children }) {
+   return (
+     <AssistantContext.Provider value={{
+       messages, setMessages, isBusy, isReady, setIsReady, processMessage,
++      scanShelfPhoto, openShelfItem,
+       recording, transcribing, toggleMic,
+       attachedImage, setAttachedImage,
+       adPatch, ackAdPatch, reportAdSnapshot,

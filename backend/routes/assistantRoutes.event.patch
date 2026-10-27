@@ -1,0 +1,250 @@
+diff --git a/routes/assistantRoutes.js b/routes/assistantRoutes.js
+index eb30b5582..5a0bb2b48 100644
+--- a/routes/assistantRoutes.js
++++ b/routes/assistantRoutes.js
+@@ -9,6 +9,18 @@ const multer = require('multer');
+ const { GoogleGenAI } = require('@google/genai');
+ const Groq = require('groq-sdk');
+ const mongoose = require('mongoose');
++const { config: metaConfig, providerStatus: metaProviderStatus, shouldUseMock, setRecoveryProbe } = require('../lib/assistant/config.js');
++const { chatCompletion: metaChat, visionJSON: metaVisionJSON, transcribeAudio: metaTranscribe } = require('../lib/assistant/llama.js');
++const { scanShelfImage } = require('../lib/assistant/shelfie.js');
++
++// If Meta is paused after a network/auth failure, keep probing it in the
++// background. The standalone demo server already does this; without it the
++// main backend would stay on a fallback provider until a restart.
++setRecoveryProbe(() => metaChat({
++  messages: [{ role: 'user', content: 'Reply with OK.' }],
++  maxTokens: 16,
++  reasoningEffort: 'minimal',
++}));
+ 
+ const verifyToken = require('../middleware/auths.js');
+ const Post = require('../models/postSchema.js');
+@@ -86,6 +98,30 @@ const matchList = (arr, v) => {
+   return arr.find(x => x.toLowerCase() === s) || '';
+ };
+ 
++/** Normalise a state, or find one in the seller's sentence (Ikeja -> Lagos). */
++function normalizeShelfLocation(value) {
++  const raw = String(value == null ? '' : value).trim();
++  if (!raw) return '';
++  return matchList(NIGERIAN_STATES, raw) || LOCATION_ALIASES[raw.toLowerCase()] || '';
++}
++
++function findShelfLocation(text) {
++  const s = ` ${String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()} `;
++  const aliases = Object.keys(LOCATION_ALIASES).sort((a, b) => b.length - a.length);
++  for (const alias of aliases) {
++    if (s.includes(` ${alias} `)) return LOCATION_ALIASES[alias];
++  }
++  for (const state of NIGERIAN_STATES) {
++    if (s.includes(` ${state.toLowerCase()} `)) return state;
++  }
++  return '';
++}
++
++/** Shelfie's canned shelf is opt-in on the real app: SHELFIE_FALLBACK=true. */
++function shelfFallbackEnabled() {
++  return String(process.env.SHELFIE_FALLBACK || '').toLowerCase() === 'true';
++}
++
+ function cleanStr(v, n = 200) {
+   return String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim().slice(0, n);
+ }
+@@ -667,7 +703,7 @@ function classifyError(e) {
+   };
+ }
+ 
+-const cooldownUntil = { gemini: 0, groq: 0 };
++const cooldownUntil = { meta: 0, gemini: 0, groq: 0 };
+ 
+ function markCooldown(name, e) {
+   const { quota, auth, transient, gone } = classifyError(e);
+@@ -817,10 +853,43 @@ async function runGroqAgent(convo, userId, toolResults) {
+   return 'Sorry, I got a bit tangled there. Could you say that another way?';
+ }
+ 
++/* ------------------------------------------------------------------ */
++/* Provider 3: Meta Model API (Muse Spark / Muse Wonder)              */
++/* Same OpenAI-style tool loop as Groq, so tools and app actions are  */
++/* identical. Meta is tried first when a key is configured.           */
++/* ------------------------------------------------------------------ */
++async function runMetaAgent(convo, userId, toolResults) {
++  const messages = [{ role: 'system', content: buildSystemPrompt(userId, toolResults.ctx) }, ...convo];
++  for (let step = 0; step < MAX_STEPS; step++) {
++    const { raw } = await metaChat({
++      messages,
++      tools: GROQ_TOOLS,
++      toolChoice: 'auto',
++      temperature: 0.3,
++      maxTokens: 2400,
++    });
++    const msg = raw?.choices?.[0]?.message || {};
++    const calls = msg.tool_calls || [];
++    if (!calls.length) return (msg.content || '').trim() || 'Done.';
++    messages.push({ role: 'assistant', content: msg.content || null, tool_calls: calls });
++    for (const tc of calls) {
++      let args = {};
++      try { args = JSON.parse(tc.function?.arguments || '{}'); } catch (_) {}
++      const out = await runTool(tc.function?.name, args, userId, toolResults);
++      messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(out) });
++    }
++    const quick = quickAdReply(toolResults);
++    if (quick) return quick;
++    messages[0].content = buildSystemPrompt(userId, toolResults.ctx);
++  }
++  return 'Sorry, I got a bit tangled there. Could you say that another way?';
++}
++
+ /* ------------------------------------------------------------------ */
+ /* Orchestrator                                                       */
+ /* ------------------------------------------------------------------ */
+ const PROVIDERS = [
++  { name: 'meta', enabled: () => !!metaConfig.meta.apiKey && !shouldUseMock(), run: runMetaAgent },
+   { name: 'groq', enabled: () => !!groq, run: runGroqAgent },
+   { name: 'gemini', enabled: () => !!genAI, run: runGeminiAgent }
+ ];
+@@ -925,8 +994,20 @@ async function groqVision({ buffer, mime, text, ctx }) {
+   throw lastErr;
+ }
+ 
++async function metaVision({ buffer, mime, text, ctx }) {
++  const note = text ? `User note: ${text}` : 'No note from the user.';
++  const { data } = await metaVisionJSON({
++    prompt: `${buildVisionSystemPrompt(ctx)}\n\n${note}`,
++    images: [{ base64: buffer.toString('base64'), mime }],
++    maxTokens: 2000,
++    reasoningEffort: 'minimal',
++  });
++  return data;
++}
++
+ async function runAdVision(input) {
+   const vision = [
++    { name: 'meta', enabled: () => !!metaConfig.meta.apiKey && !shouldUseMock(), run: metaVision },
+     { name: 'gemini', enabled: () => !!genAI, run: geminiVision },
+     { name: 'groq', enabled: () => !!groq, run: groqVision }
+   ].filter(p => p.enabled());
+@@ -989,6 +1070,23 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+   const file = req.file;
+   if (!file) return res.status(200).json({ success: false, code: 'NO_AUDIO', message: 'No audio received.' });
+   try {
++    const buffer = await fs.promises.readFile(file.path);
++
++    // Muse Voice Transcribe first. The client sends m4a; lib/assistant/llama.js
++    // converts it to the mono 16 kHz WAV that Meta requires.
++    if (metaConfig.stt.configured && !shouldUseMock()) {
++      try {
++        const text = await metaTranscribe({
++          buffer,
++          mimetype: file.mimetype || 'audio/m4a',
++          filename: file.originalname || 'voice.m4a',
++        });
++        if (text) return res.json({ success: true, text, provider: 'meta', model: metaConfig.stt.model });
++      } catch (e) {
++        console.error('Meta transcribe error:', e.message);
++      }
++    }
++
+     if (!groq) throw new Error('groq_not_configured');
+     const out = await withTimeout(groq.audio.transcriptions.create({
+       file: fs.createReadStream(file.path),
+@@ -998,7 +1096,7 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+       prompt: STT_PROMPT,
+       ...(process.env.STT_LANGUAGE && { language: process.env.STT_LANGUAGE })
+     }), STT_TIMEOUT_MS, 'Groq transcribe');
+-    return res.json({ success: true, text: String(out?.text || '').trim() });
++    return res.json({ success: true, text: String(out?.text || '').trim(), provider: 'groq', model: STT_MODEL });
+   } catch (e) {
+     return res.status(200).json({ success: false, code: 'TRANSCRIBE_FAILED', message: "Couldn't catch that. Please try again." });
+   } finally {
+@@ -1011,6 +1109,10 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+ /* ------------------------------------------------------------------ */
+ router.get('/ping', (req, res) => res.json({ ok: true }));
+ 
++// Which brain will answer, and whether the Meta key is live. Used by the
++// mobile settings/diagnostics screen and by the demo health check.
++router.get('/status', (req, res) => res.json({ success: true, ...metaProviderStatus() }));
++
+ const toActions = toolResults =>
+   toolResults.flatMap(t => {
+     if (!t.result || !t.result.success) return [];
+@@ -1033,7 +1135,13 @@ router.post('/chat', verifyToken, async (req, res) => {
+     const navigations = toolResults.filter(t => t.tool === 'navigate' && t.result?.success).map(t => t.result);
+     const actions = toActions(toolResults);
+ 
+-    return res.json({ success: true, message: text, products, toolResults, navigations, actions, provider });
++    const model = provider === 'meta'
++      ? metaConfig.meta.brainModel
++      : provider === 'groq'
++        ? GROQ_MODELS[0]
++        : GEMINI_MODELS[0];
++
++    return res.json({ success: true, message: text, products, toolResults, navigations, actions, provider, model });
+   } catch (err) {
+     console.error('Assistant error:', err?.cause || err);
+     return res.status(200).json({ success: false, code: 'ASSISTANT_UNAVAILABLE', message: "I'm a bit overloaded right now. Please try again in a minute." });
+@@ -1079,6 +1187,61 @@ router.post('/ad-from-image', verifyToken, receiveImage, async (req, res) => {
+   }
+ });
+ 
++/* ------------------------------------------------------------------ */
++/* Aya Shelfie: one photo of a shelf -> several priced drafts         */
++/* ------------------------------------------------------------------ */
++/**
++ * POST /scan-shop (multipart: image, text?, location?)
++ *
++ * The seller photographs a table or shelf; the vision model finds the distinct
++ * items and this route returns one draft per item. Prices come from the real
++ * Post collection via searchProducts(), never from the model, and the same
++ * comparables always produce the same band. Nothing is published here: the app
++ * opens the normal Create Ad form for each card and the seller taps Post.
++ *
++ * The canned shelf is OFF by default on the real app. Set
++ * SHELFIE_FALLBACK=true only when demoing without a working model.
++ */
++router.post('/scan-shop', verifyToken, receiveImage, async (req, res) => {
++  const file = req.file;
++  if (!file) {
++    return res.status(200).json({
++      success: false, code: 'NO_IMAGE', message: "I didn't get the photo. Try again.",
++      items: [], actions: [], navigations: []
++    });
++  }
++
++  const mime = String(file.mimetype || '').toLowerCase();
++  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) {
++    return res.status(200).json({
++      success: false, code: 'BAD_IMAGE', message: 'Please use a JPEG or PNG photo.',
++      items: [], actions: [], navigations: []
++    });
++  }
++
++  try {
++    const result = await scanShelfImage({
++      buffer: file.buffer,
++      mime,
++      text: cleanStr(req.body?.text, 500),
++      location: cleanStr(req.body?.location, 80),
++      fallback: shelfFallbackEnabled(),
++      search: searchProducts,
++      normalizeFields: normalizeAdFields,
++      normalizeLocation: normalizeShelfLocation,
++      findLocation: findShelfLocation
++    });
++    return res.status(200).json(result);
++  } catch (err) {
++    console.error('Shelfie error:', err?.cause || err);
++    return res.status(200).json({
++      success: false, code: 'SCAN_FAILED',
++      message: "I couldn't finish scanning that photo. Try again, or add the items one by one.",
++      items: [], actions: [], navigations: []
++    });
++  }
++});
++
+ router.use('/', require('./assistantGallery'));
+ 
+ module.exports = router;
+\ No newline at end of file

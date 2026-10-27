@@ -26,9 +26,12 @@ byte-identical to the live sources (verified by hash).
 | `backend/lib/assistant/mongoSearch.js` | 3233 | catalogue search over the host Post model |
 | `backend/lib/assistant/shelfie.js` | 27044 | **Aya Shelfie**: vision boxes, crops, deterministic price bands |
 | `backend/lib/assistant/tasks.js` | new | **Task planner**: scope-change detection, draft merge, price-gate proposal, per-user task store (dependency-free, unit-tested) |
+| `backend/lib/assistant/glimmer.js` | new | **Muse Glimmer client** (Together-hosted, OpenAI-compatible; Meta best practices: temp 1.0, top_p 0.95) |
+| `backend/lib/assistant/clean.js` | new | **Background cleanup**: contract-first matting client + sharp composite to white 1080px JPEG; never fakes a result |
 | `backend/routes/visionRoutes.js` | 11642 | standalone vision routes, written during the event (reference — not mounted in `app.js`; the mounted equivalents are `/api/assistant/rank-photos` and `/api/assistant/ad-from-image`) |
 | `backend/routes/voiceRoutes.js` | 2402 | standalone transcribe route, written during the event (reference — not mounted; the mounted equivalent is `/api/assistant/transcribe`) |
 | `backend/tests/agent-tasks.test.js` | new | **Eval suite**: 8/8 passing (`node --test tests/assistant-tasks.test.js`) |
+| `backend/tests/assistant-glimmer-clean.test.js` | new | **Eval suite**: 6/6 passing (stubbed fetch, zero deps) |
 | `backend/package.json` | new | fresh manifest for the extract |
 | `backend/.env.example` | new | fresh template, blank values |
 
@@ -36,8 +39,8 @@ byte-identical to the live sources (verified by hash).
 
 | Patch | Base (pre-kickoff) | Change |
 | --- | --- | --- |
-| `backend/routes/assistantRoutes.event.patch` | server `routes/assistantRoutes.js` at `8c5bef3e2` (Oct 26, pre-kickoff) | +374/−9: Meta imports, recovery probe, Shelfie helpers, `runMetaAgent`, Meta-first `PROVIDERS` order, `metaVision`, Meta transcription, `provider`/`model` fields, `GET /status`, `POST /scan-shop`, Gemini TTS (`POST /speak`), `get_my_listings`, `update_listing_price` + confirm gate, task-state wiring, new navigable screens |
-| `mobile/salmart-mobile.event.patch` | app at `5ce993f` (Oct 26, pre-kickoff) | +670/−53 across 14 files: `sessionId`, product cards, `add_to_cart`, brain label, Shelfie UI, `assistantStatus`, `assistantShelfScan`, `assistantSpeak` + server-voice playback, 5 new navigable screens, `showroomCreate`/`vtu` loader fixes, mic FAB allowlist (+ads/alerts), cart-screen mic, panel-header cart badge, keyboard-safe `Sheet`, slide transitions with parallax underlay + stable route ids, cold-start fade, mount-on-tap panels, cover-photo scan pipeline, LAN override, one starter chip |
+| `backend/routes/assistantRoutes.event.patch` | server `routes/assistantRoutes.js` at `8c5bef3e2` (Oct 26, pre-kickoff) | +470/−13: Meta imports, recovery probe, Shelfie helpers, `runMetaAgent`, Meta-first `PROVIDERS` order, `metaVision`, Meta transcription, `provider`/`model` fields, `GET /status` (+glimmer/bgClean flags), `POST /scan-shop`, Gemini TTS (`POST /speak`), `POST /photo-clean`, `get_my_listings`, `update_listing_price` + confirm gate, task-state wiring, Glimmer 4th provider + `GLIMMER_FIRST`, new navigable screens |
+| `mobile/salmart-mobile.event.patch` | app at `5ce993f` (Oct 26, pre-kickoff) | +709/−53 across 14 files: `sessionId`, product cards, `add_to_cart`, brain label, Shelfie UI, `assistantStatus`, `assistantShelfScan`, `assistantSpeak` + server-voice playback, `assistantPhotoClean` + cover-photo clean/read pipeline, 5 new navigable screens, `showroomCreate`/`vtu` loader fixes, mic FAB allowlist (+ads/alerts), cart-screen mic, panel-header cart badge, keyboard-safe `Sheet`, slide transitions with parallax underlay + stable route ids, cold-start fade, mount-on-tap panels, LAN override, one starter chip |
 
 Both patches were verified with `git apply --check --reverse` against the live
 worktrees. No other files in either source repo were touched by the event work.

@@ -17,7 +17,7 @@ this repo.
 | `src/ui/Shell.js` | cart shortcut with live count badge in every panel header |
 | `src/screens/CartScreen.js` | assistant mic button in the cart header (the FAB does not render here) |
 | `src/screens/AssistantScreen.js` | brain label from `/status`, shelf scan button, `Scan my shelf` chip, inline draft row |
-| `src/api/endpoints.js` | `assistantStatus()`, `assistantShelfScan()`, `assistantSpeak()`, `sessionId` on `/chat` |
+| `src/api/endpoints.js` | `assistantStatus()`, `assistantShelfScan()`, `assistantSpeak()`, `assistantPhotoClean()`, `sessionId` on `/chat` |
 | `src/api/client.js` | full-origin `EXPO_PUBLIC_API_URL` override, no production failover for it |
 | `src/assistant/dialog.js` | one `Scan my shelf` starter chip |
 | `config.js` | exposes `EXPO_PUBLIC_API_URL` (`API_URL` build-time fallback) |

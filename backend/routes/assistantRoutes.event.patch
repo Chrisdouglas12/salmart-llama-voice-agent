@@ -1,8 +1,8 @@
 diff --git a/routes/assistantRoutes.js b/routes/assistantRoutes.js
-index eb30b5582..c5384dade 100644
+index eb30b5582..b5f4cdc4c 100644
 --- a/routes/assistantRoutes.js
 +++ b/routes/assistantRoutes.js
-@@ -9,6 +9,19 @@ const multer = require('multer');
+@@ -9,6 +9,21 @@ const multer = require('multer');
  const { GoogleGenAI } = require('@google/genai');
  const Groq = require('groq-sdk');
  const mongoose = require('mongoose');
@@ -10,6 +10,8 @@ index eb30b5582..c5384dade 100644
 +const { chatCompletion: metaChat, visionJSON: metaVisionJSON, transcribeAudio: metaTranscribe } = require('../lib/assistant/llama.js');
 +const { scanShelfImage } = require('../lib/assistant/shelfie.js');
 +const { TaskStore, scopeResetDetected, mergeTaskDraft, proposePriceChange, formatTaskBlock } = require('../lib/assistant/tasks.js');
++const { glimmerConfigured, glimmerChat } = require('../lib/assistant/glimmer.js');
++const { bgConfigured, cleanBackground } = require('../lib/assistant/clean.js');
 +
 +// If Meta is paused after a network/auth failure, keep probing it in the
 +// background. The standalone demo server already does this; without it the
@@ -22,7 +24,7 @@ index eb30b5582..c5384dade 100644
  
  const verifyToken = require('../middleware/auths.js');
  const Post = require('../models/postSchema.js');
-@@ -35,6 +48,13 @@ const STT_TIMEOUT_MS = Number(process.env.STT_TIMEOUT_MS) || 20000;
+@@ -35,6 +50,13 @@ const STT_TIMEOUT_MS = Number(process.env.STT_TIMEOUT_MS) || 20000;
  const STT_PROMPT =
    'Shopping on Salmart, a Nigerian marketplace: iPhone, Samsung, laptop, Toyota, Camry, naira, Lagos, Abuja.';
  
@@ -36,7 +38,7 @@ index eb30b5582..c5384dade 100644
  /* ------------------------------------------------------------------ */
  /* Memory of what the assistant last showed                           */
  /* ------------------------------------------------------------------ */
-@@ -47,10 +67,35 @@ function getLastShown(userId) {
+@@ -47,10 +69,35 @@ function getLastShown(userId) {
    return e.products;
  }
  
@@ -73,7 +75,7 @@ index eb30b5582..c5384dade 100644
  
  /* ------------------------------------------------------------------ */
  /* Create-ad form vocabulary. MUST mirror the native CreateAdScreen.  */
-@@ -86,6 +131,30 @@ const matchList = (arr, v) => {
+@@ -86,6 +133,30 @@ const matchList = (arr, v) => {
    return arr.find(x => x.toLowerCase() === s) || '';
  };
  
@@ -104,7 +106,7 @@ index eb30b5582..c5384dade 100644
  function cleanStr(v, n = 200) {
    return String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim().slice(0, n);
  }
-@@ -210,12 +279,19 @@ HOW TO BEHAVE
+@@ -210,12 +281,19 @@ HOW TO BEHAVE
  
  NAVIGATION & ACTIONS
  - Use the navigate tool when the user asks to open or go to a screen.
@@ -126,7 +128,7 @@ index eb30b5582..c5384dade 100644
  CREATE AD (fill_ad_form)
  - To fill the ad form, ALWAYS call fill_ad_form. It opens the form if needed and fills it live. Do NOT use navigate for this.
  - If the user only says they want to sell something and gave no details, call navigate with screen "create_ad".
-@@ -243,7 +319,10 @@ FIND PHOTO IN GALLERY
+@@ -243,7 +321,10 @@ FIND PHOTO IN GALLERY
  ${ctx && ctx.gallery && ctx.gallery.open ? `A photo picker is OPEN with ${ctx.gallery.count} photos numbered 1 to ${ctx.gallery.count} (1 = best match). When the user picks one ("the second one", "the best one", "that one", "number 3") call choose_photo with that number. "best" and "first" mean 1.` : ''}
  
  LAST SHOWN PRODUCTS:
@@ -138,7 +140,7 @@ index eb30b5582..c5384dade 100644
  }
  
  /* ------------------------------------------------------------------ */
-@@ -345,6 +424,30 @@ const FUNCTION_DECLARATIONS = [
+@@ -345,6 +426,30 @@ const FUNCTION_DECLARATIONS = [
        properties: { index: { type: 'number' } },
        required: ['index']
      }
@@ -169,7 +171,7 @@ index eb30b5582..c5384dade 100644
    }
  ];
  
-@@ -400,6 +503,59 @@ async function searchProducts({ query, category, minPrice, maxPrice, location, l
+@@ -400,6 +505,59 @@ async function searchProducts({ query, category, minPrice, maxPrice, location, l
    };
  }
  
@@ -229,7 +231,7 @@ index eb30b5582..c5384dade 100644
  async function getCartForUser(userId) {
    let cart = await Cart.findOne({ buyerId: userId });
    if (!cart) cart = await Cart.create({ buyerId: userId, items: [] });
-@@ -504,6 +660,8 @@ async function executeTool(name, args, userId, toolResults) {
+@@ -504,6 +662,8 @@ async function executeTool(name, args, userId, toolResults) {
      case 'start_chat_with_seller':
        if (!toolResults?.sellerContactOk) throw new Error('The user has not asked to contact the seller.');
        return startChatWithSeller({ userId, ...a });
@@ -238,16 +240,16 @@ index eb30b5582..c5384dade 100644
      default: throw new Error(`Unknown tool: ${name}`);
    }
  }
-@@ -667,7 +825,7 @@ function classifyError(e) {
+@@ -667,7 +827,7 @@ function classifyError(e) {
    };
  }
  
 -const cooldownUntil = { gemini: 0, groq: 0 };
-+const cooldownUntil = { meta: 0, gemini: 0, groq: 0 };
++const cooldownUntil = { meta: 0, gemini: 0, groq: 0, glimmer: 0 };
  
  function markCooldown(name, e) {
    const { quota, auth, transient, gone } = classifyError(e);
-@@ -701,7 +859,7 @@ async function runTool(name, args, userId, toolResults) {
+@@ -701,7 +861,7 @@ async function runTool(name, args, userId, toolResults) {
    let out;
    try {
      out = await executeTool(name, args, userId, toolResults);
@@ -256,7 +258,7 @@ index eb30b5582..c5384dade 100644
        lastShown.set(String(userId), { products: out.products, at: Date.now() });
      }
      toolResults.push({ tool: name, result: out });
-@@ -817,10 +975,43 @@ async function runGroqAgent(convo, userId, toolResults) {
+@@ -817,13 +977,85 @@ async function runGroqAgent(convo, userId, toolResults) {
    return 'Sorry, I got a bit tangled there. Could you say that another way?';
  }
  
@@ -292,15 +294,61 @@ index eb30b5582..c5384dade 100644
 +  return 'Sorry, I got a bit tangled there. Could you say that another way?';
 +}
 +
++/* ------------------------------------------------------------------ */
++/* Provider 4: Muse Glimmer (hosted, Together AI)                      */
++/* Same OpenAI-style tool loop as Meta/Groq: Glimmer was trained for    */
++/* reliable tool use and failure recovery, so it slots into the same    */
++/* scaffold. GLIMMER_FIRST=true puts it first (demo the Meta brains    */
++/* side by side); otherwise it is the last fallback that keeps sellers */
++/* unblocked when everything else is down.                              */
++/* ------------------------------------------------------------------ */
++async function runGlimmerAgent(convo, userId, toolResults) {
++  const base = buildSystemPrompt(userId, toolResults.ctx);
++  const messages = [{ role: 'system', content: `${base}\n\nReasoning strength: high` }, ...convo];
++  for (let step = 0; step < MAX_STEPS; step++) {
++    const { raw } = await glimmerChat({ messages, tools: GROQ_TOOLS, toolChoice: 'auto', maxTokens: 2400 });
++    const msg = raw?.choices?.[0]?.message || {};
++    const calls = msg.tool_calls || [];
++    if (!calls.length) return (msg.content || '').trim() || 'Done.';
++    messages.push({ role: 'assistant', content: msg.content || null, tool_calls: calls });
++    for (const tc of calls) {
++      let args = {};
++      try { args = JSON.parse(tc.function?.arguments || '{}'); } catch (_) {}
++      const out = await runTool(tc.function?.name, args, userId, toolResults);
++      messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(out) });
++    }
++    const quick = quickAdReply(toolResults);
++    if (quick) return quick;
++    messages[0].content = `${buildSystemPrompt(userId, toolResults.ctx)}\n\nReasoning strength: high`;
++  }
++  return 'Sorry, I got a bit tangled there. Could you say that another way?';
++}
++
  /* ------------------------------------------------------------------ */
  /* Orchestrator                                                       */
  /* ------------------------------------------------------------------ */
- const PROVIDERS = [
-+  { name: 'meta', enabled: () => !!metaConfig.meta.apiKey && !shouldUseMock(), run: runMetaAgent },
-   { name: 'groq', enabled: () => !!groq, run: runGroqAgent },
-   { name: 'gemini', enabled: () => !!genAI, run: runGeminiAgent }
- ];
-@@ -847,6 +1038,7 @@ async function runAgent(rawConvo, userId, ctx) {
+-const PROVIDERS = [
+-  { name: 'groq', enabled: () => !!groq, run: runGroqAgent },
+-  { name: 'gemini', enabled: () => !!genAI, run: runGeminiAgent }
+-];
++const glimmerProvider = { name: 'glimmer', enabled: () => glimmerConfigured() && !shouldUseMock(), run: runGlimmerAgent };
++const PROVIDERS = process.env.GLIMMER_FIRST === 'true'
++  ? [
++    glimmerProvider,
++    { name: 'meta', enabled: () => !!metaConfig.meta.apiKey && !shouldUseMock(), run: runMetaAgent },
++    { name: 'groq', enabled: () => !!groq, run: runGroqAgent },
++    { name: 'gemini', enabled: () => !!genAI, run: runGeminiAgent }
++  ]
++  : [
++    { name: 'meta', enabled: () => !!metaConfig.meta.apiKey && !shouldUseMock(), run: runMetaAgent },
++    { name: 'groq', enabled: () => !!groq, run: runGroqAgent },
++    { name: 'gemini', enabled: () => !!genAI, run: runGeminiAgent },
++    glimmerProvider
++  ];
+ 
+ async function runAgent(rawConvo, userId, ctx) {
+   const toolResults = [];
+@@ -847,6 +1079,7 @@ async function runAgent(rawConvo, userId, ctx) {
          else convo.push({ role: 'user', content: note });
        }
        const text = await p.run(convo, userId, toolResults);
@@ -308,7 +356,7 @@ index eb30b5582..c5384dade 100644
        return { text, toolResults, provider: p.name };
      } catch (e) {
        lastErr = e;
-@@ -925,8 +1117,70 @@ async function groqVision({ buffer, mime, text, ctx }) {
+@@ -925,8 +1158,70 @@ async function groqVision({ buffer, mime, text, ctx }) {
    throw lastErr;
  }
  
@@ -379,7 +427,7 @@ index eb30b5582..c5384dade 100644
      { name: 'gemini', enabled: () => !!genAI, run: geminiVision },
      { name: 'groq', enabled: () => !!groq, run: groqVision }
    ].filter(p => p.enabled());
-@@ -989,6 +1243,23 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+@@ -989,6 +1284,23 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
    const file = req.file;
    if (!file) return res.status(200).json({ success: false, code: 'NO_AUDIO', message: 'No audio received.' });
    try {
@@ -403,7 +451,7 @@ index eb30b5582..c5384dade 100644
      if (!groq) throw new Error('groq_not_configured');
      const out = await withTimeout(groq.audio.transcriptions.create({
        file: fs.createReadStream(file.path),
-@@ -998,7 +1269,7 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+@@ -998,7 +1310,7 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
        prompt: STT_PROMPT,
        ...(process.env.STT_LANGUAGE && { language: process.env.STT_LANGUAGE })
      }), STT_TIMEOUT_MS, 'Groq transcribe');
@@ -412,7 +460,7 @@ index eb30b5582..c5384dade 100644
    } catch (e) {
      return res.status(200).json({ success: false, code: 'TRANSCRIBE_FAILED', message: "Couldn't catch that. Please try again." });
    } finally {
-@@ -1006,11 +1277,44 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+@@ -1006,11 +1318,93 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
    }
  });
  
@@ -445,6 +493,46 @@ index eb30b5582..c5384dade 100644
 +  }
 +});
 +
++/* ------------------------------------------------------------------ */
++/* Background cleanup (matting service -> ecommerce cover)            */
++/* ------------------------------------------------------------------ */
++/**
++ * POST /photo-clean (multipart: image) -> { success, photo (data URI),
++ *   mimeType, provider }.
++ *
++ * Sends the photo to the configured commercial matting endpoint, flattens
++ * the transparent result onto white at 1080px. Unconfigured or failed:
++ * HTTP 200 { success:false, code } and the app keeps the original photo.
++ * See lib/assistant/clean.js for the contract + license diligence.
++ */
++router.post('/photo-clean', verifyToken, receiveImage, async (req, res) => {
++  const file = req.file;
++  if (!file) {
++    return res.status(200).json({ success: false, code: 'NO_IMAGE', message: 'No photo received.' });
++  }
++  const mime = String(file.mimetype || '').toLowerCase();
++  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) {
++    return res.status(200).json({ success: false, code: 'BAD_IMAGE', message: 'Please use a JPEG or PNG photo.' });
++  }
++  try {
++    const out = await cleanBackground({ buffer: file.buffer, mime });
++    return res.json({
++      success: true,
++      photo: `data:${out.mimeType};base64,${out.buffer.toString('base64')}`,
++      mimeType: out.mimeType,
++      provider: out.label,
++    });
++  } catch (e) {
++    console.error('Photo-clean error:', e?.message || e);
++    const code = String(e?.message || '');
++    return res.status(200).json({
++      success: false,
++      code: code === 'bgclean_not_configured' ? 'CLEAN_UNAVAILABLE' : 'CLEAN_FAILED',
++      message: "I couldn't clean that background. The original photo still works.",
++    });
++  }
++});
++
  /* ------------------------------------------------------------------ */
  /* Routes                                                             */
  /* ------------------------------------------------------------------ */
@@ -452,12 +540,21 @@ index eb30b5582..c5384dade 100644
  
 +// Which brain will answer, and whether the Meta key is live. Used by the
 +// mobile settings/diagnostics screen and by the demo health check.
-+router.get('/status', (req, res) => res.json({ success: true, ...metaProviderStatus() }));
++router.get('/status', (req, res) => res.json({
++  success: true,
++  ...metaProviderStatus(),
++  glimmer: {
++    configured: glimmerConfigured(),
++    model: String(process.env.GLIMMER_MODEL || 'meta-models/Muse-Glimmer-30B'),
++    first: process.env.GLIMMER_FIRST === 'true',
++  },
++  bgClean: { configured: bgConfigured() },
++}));
 +
  const toActions = toolResults =>
    toolResults.flatMap(t => {
      if (!t.result || !t.result.success) return [];
-@@ -1028,12 +1332,18 @@ router.post('/chat', verifyToken, async (req, res) => {
+@@ -1028,12 +1422,20 @@ router.post('/chat', verifyToken, async (req, res) => {
  
      const { text, toolResults, provider } = await runAgent(convo, userId, context);
  
@@ -472,13 +569,15 @@ index eb30b5582..c5384dade 100644
 +      ? metaConfig.meta.brainModel
 +      : provider === 'groq'
 +        ? GROQ_MODELS[0]
-+        : GEMINI_MODELS[0];
++        : provider === 'glimmer'
++          ? String(process.env.GLIMMER_MODEL || 'meta-models/Muse-Glimmer-30B')
++          : GEMINI_MODELS[0];
 +
 +    return res.json({ success: true, message: text, products, toolResults, navigations, actions, provider, model });
    } catch (err) {
      console.error('Assistant error:', err?.cause || err);
      return res.status(200).json({ success: false, code: 'ASSISTANT_UNAVAILABLE', message: "I'm a bit overloaded right now. Please try again in a minute." });
-@@ -1079,6 +1389,61 @@ router.post('/ad-from-image', verifyToken, receiveImage, async (req, res) => {
+@@ -1079,6 +1481,61 @@ router.post('/ad-from-image', verifyToken, receiveImage, async (req, res) => {
    }
  });
  

@@ -167,7 +167,7 @@ index 12f7767..ee64f88 100644
  const DEFAULT_TIMEOUT = 15000;
  const GET_RETRIES = 2;
 diff --git a/src/api/endpoints.js b/src/api/endpoints.js
-index 76cbcf4..1371035 100644
+index 76cbcf4..c63a8d9 100644
 --- a/src/api/endpoints.js
 +++ b/src/api/endpoints.js
 @@ -21,8 +21,8 @@ import {
@@ -181,7 +181,7 @@ index 76cbcf4..1371035 100644
  }
  
  export async function assistantAdFromImage({ image, text = '', draft = null } = {}) {
-@@ -42,6 +42,44 @@ export async function assistantRankPhotos({ photos = [], query = '' } = {}) {
+@@ -42,6 +42,57 @@ export async function assistantRankPhotos({ photos = [], query = '' } = {}) {
    return apiUpload('/api/assistant/rank-photos', form);
  }
  
@@ -210,6 +210,19 @@ index 76cbcf4..1371035 100644
 + */
 +export async function assistantStatus(opts) {
 +  return apiGet('/api/assistant/status', { retries: 0, ...opts });
++}
++
++/**
++ * POST /api/assistant/photo-clean (multipart, field `image`) → { success,
++ * photo (data URI), mimeType, provider }
++ * Server background cleanup (commercial matting endpoint → white 1080px
++ * cover). Unconfigured or failed: HTTP 200 { success:false, code } and the
++ * caller keeps the original photo. Never blocks the form.
++ */
++export async function assistantPhotoClean({ image } = {}) {
++  const form = new FormData();
++  form.append('image', { uri: image.uri, name: image.fileName || `clean_${Date.now()}.jpg`, type: image.mimeType || 'image/jpeg' });
++  return apiUpload('/api/assistant/photo-clean', form, { retries: 0 });
 +}
 +
 +/**
@@ -587,7 +600,7 @@ index 24385d5..81c06ab 100644
    const pickDigitalFile = useCallback(async () => {
      const res = await DocumentPicker.getDocumentAsync({
 diff --git a/src/state/AssistantContext.js b/src/state/AssistantContext.js
-index eff30a0..4e3c982 100644
+index eff30a0..fb80f25 100644
 --- a/src/state/AssistantContext.js
 +++ b/src/state/AssistantContext.js
 @@ -4,12 +4,16 @@ import { Audio } from 'expo-av';
@@ -597,7 +610,7 @@ index eff30a0..4e3c982 100644
 -import { assistantChat, assistantAdFromImage, transcribeAudio } from '../api/endpoints';
 +import { useCart } from './CartContext';
 +import { useAuth } from './AuthContext';
-+import { assistantChat, assistantAdFromImage, assistantShelfScan, assistantSpeak, transcribeAudio, shapeListing } from '../api/endpoints';
++import { assistantChat, assistantAdFromImage, assistantShelfScan, assistantSpeak, assistantPhotoClean, transcribeAudio, shapeListing } from '../api/endpoints';
  import { useTheme } from '../theme/theme';
  import { sanitizeAdPatch } from '../assistant/adDraft';
  import { toHistory } from '../assistant/history';
@@ -779,7 +792,7 @@ index eff30a0..4e3c982 100644
  
    // ── Gallery choose: tap or voice -> full-size photo -> ad-from-image ──────
    const chooseCandidate = useCallback(async (cand) => {
-@@ -274,6 +389,142 @@ export function AssistantProvider({ children }) {
+@@ -274,6 +389,168 @@ export function AssistantProvider({ children }) {
      if (c) chooseCandidate(c);
    };
  
@@ -874,12 +887,11 @@ index eff30a0..4e3c982 100644
 +  }, [nav]);
 +
 +  // ── Create-ad photo pipeline ────────────────────────────────────────────
-+  // When the seller picks a cover photo, standardize it (1080px JPEG: fast
-+  // upload, consistent display, under the 6MB cap) and ask vision to read it.
-+  // Fields flow through the normal adPatch channel, so the description types
-+  // into the form live and stays fully editable. Honest limit: this resizes,
-+  // it does NOT remove backgrounds — that needs a segmentation model, which
-+  // is not in the stack. Never claim a "cleaned" background.
++  // Picked photo -> standardize (1080px JPEG) -> server background cleanup
++  // (when configured) -> vision read. Fields flow through the normal adPatch
++  // channel, so the description types into the form live and stays fully
++  // editable. Every step degrades to the previous photo: a failure never
++  // blocks the form and a "cleaned" photo is never faked.
 +  const scanPickedPhoto = useCallback(async (asset) => {
 +    if (!asset?.uri) return;
 +    let photo = asset;
@@ -899,7 +911,34 @@ index eff30a0..4e3c982 100644
 +      id: `photo-${Date.now()}`,
 +      fields: {},
 +      photo,
-+      say: 'Photo ready. Reading it now…',
++      say: 'Photo ready. Cleaning the background…',
++    });
++    try {
++      const cleaned = await assistantPhotoClean({ image: photo });
++      const dataUri = cleaned?.success ? cleaned.photo : null;
++      if (dataUri && dataUri.startsWith('data:')) {
++        const base64 = dataUri.slice(dataUri.indexOf(',') + 1);
++        const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
++        if (dir && base64) {
++          const uri = `${dir}clean-${Date.now()}.jpg`;
++          await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
++          photo = { uri, fileName: `clean_${Date.now()}.jpg`, mimeType: 'image/jpeg' };
++          setAdPatch({
++            id: `photo-clean-${Date.now()}`,
++            fields: {},
++            photo,
++            say: 'Background cleaned. Reading it now…',
++          });
++        }
++      }
++    } catch (e) {
++      console.log('[Assistant] background clean skipped:', e?.message);
++    }
++    setAdPatch({
++      id: `photo-read-${Date.now()}`,
++      fields: {},
++      photo,
++      say: 'Reading it now…',
 +    });
 +    try {
 +      const res = await assistantAdFromImage({ image: photo, text: '' });
@@ -922,7 +961,7 @@ index eff30a0..4e3c982 100644
    // ── Global Voice Logic ────────────────────────────────────────────────────
    const stopAndTranscribe = useCallback(async (history) => {
      if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
-@@ -320,6 +571,7 @@ export function AssistantProvider({ children }) {
+@@ -320,6 +597,7 @@ export function AssistantProvider({ children }) {
      try {
        Keyboard.dismiss();
        try { Speech.stop(); } catch (_e) { /* ignore */ }
@@ -930,7 +969,7 @@ index eff30a0..4e3c982 100644
        const perm = await Audio.requestPermissionsAsync();
        if (!perm?.granted) {
          setMessages(prev => [...prev, { key: `err-${Date.now()}`, role: 'bot', kind: 'text', text: 'Please allow microphone access.', at: Date.now() }]);
-@@ -343,6 +595,7 @@ export function AssistantProvider({ children }) {
+@@ -343,6 +621,7 @@ export function AssistantProvider({ children }) {
    useEffect(() => () => {
      if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
      try { Speech.stop(); } catch (_e) { /* ignore */ }
@@ -938,7 +977,7 @@ index eff30a0..4e3c982 100644
      const rec = recorderRef.current;
      recorderRef.current = null;
      if (rec) rec.stopAndUnloadAsync().catch(() => {});
-@@ -351,6 +604,7 @@ export function AssistantProvider({ children }) {
+@@ -351,6 +630,7 @@ export function AssistantProvider({ children }) {
    return (
      <AssistantContext.Provider value={{
        messages, setMessages, isBusy, isReady, setIsReady, processMessage,
@@ -946,7 +985,7 @@ index eff30a0..4e3c982 100644
        recording, transcribing, toggleMic,
        attachedImage, setAttachedImage,
        adPatch, ackAdPatch, reportAdSnapshot,
-@@ -358,12 +612,11 @@ export function AssistantProvider({ children }) {
+@@ -358,12 +638,11 @@ export function AssistantProvider({ children }) {
      }}>
        {children}
  
@@ -961,7 +1000,7 @@ index eff30a0..4e3c982 100644
            onPress={() => toggleMic(toHistory(messages))}
          />
        )}
-@@ -382,7 +635,7 @@ export function AssistantProvider({ children }) {
+@@ -382,7 +661,7 @@ export function AssistantProvider({ children }) {
  }
  
  // ─── Global Floating Mic ──────────────────────────────────────────────────────
@@ -970,7 +1009,7 @@ index eff30a0..4e3c982 100644
    const { T } = useTheme();
  
    const bg = recording ? (T.danger || '#ef4444') : transcribing ? T.inkMuted : T.emerald;
-@@ -395,8 +648,6 @@ function FloatingAssistant({ recording, transcribing, lifted, onPress }) {
+@@ -395,8 +674,6 @@ function FloatingAssistant({ recording, transcribing, lifted, onPress }) {
        accessibilityLabel={recording ? 'Stop recording' : 'Talk to the assistant'}
        style={({ pressed }) => [
          floatStyles.fab,

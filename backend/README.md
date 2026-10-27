@@ -20,6 +20,7 @@ app.use('/api/assistant', assistantRoutes);
 | `POST` | `/api/assistant/transcribe` | JWT | voice → text (multipart field `audio`, ≤10 MB) |
 | `POST` | `/api/assistant/speak` | JWT | text → spoken WAV (Gemini TTS; JSON `{ text }`) |
 | `POST` | `/api/assistant/ad-from-image` | JWT | photo → `fill_ad` draft (field `image`, JPEG/PNG/WebP ≤8 MB) |
+| `POST` | `/api/assistant/photo-clean` | JWT | background cleanup → white 1080px cover (field `image`); `CLEAN_UNAVAILABLE` when no matting endpoint is configured |
 | `POST` | `/api/assistant/scan-shop` | JWT | Shelfie: shelf photo → priced drafts (field `image`) |
 | `POST` | `/api/assistant/rank-photos` | JWT | gallery ranking (pre-existing route file, Groq/Gemini) |
 | `GET` | `/api/assistant/status` | public | provider + model state |
@@ -36,6 +37,8 @@ screens), `fill_ad_form` (validates only — the user taps Post),
 `remove_from_cart` (upsert semantics), `start_chat_with_seller` (intent gate),
 `update_listing_price` (two-call confirm gate + DB re-read; rejects non-owned
 and sold listings; clears an active discount like `PATCH /post/:id`).
+Provider order: Meta → Groq → Gemini → Glimmer (`GLIMMER_FIRST=true` puts
+Glimmer first to demo the Meta brains side by side).
 
 No publish, price-guess, profile-write, showroom-write, or payment tool
 exists — by product rule, not omission. Multi-turn memory is the per-user task

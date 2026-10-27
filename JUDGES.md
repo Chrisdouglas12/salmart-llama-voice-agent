@@ -20,6 +20,13 @@ in this repo. You only need the URL and the test account below.
   4. Scene 5 shows refusal + recovery (try pricing another seller's listing).
 - Sign-in is required for everything except `/status` and `/ping`; the account
   above is a sandbox seller with sample listings, not production data.
+- Server env needed for the full demo (keys never in the repo): `META_API_KEY`
+  (chat/vision/STT), `GEMINI_API_KEY` (TTS fallback + `/speak`),
+  `TOGETHER_API_KEY` (Glimmer brain — confirm the model slug as
+  `GLIMMER_MODEL` on the Together dashboard), `BG_API_URL` + `BG_API_KEY`
+  (commercial matting endpoint for `/photo-clean`; without them the app
+  honestly keeps original photos). Run `npm install` on the server for
+  `sharp` (photo compositing).
 
 ## Option B — verify from this repo alone (no server, no keys)
 

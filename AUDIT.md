@@ -70,3 +70,17 @@ image selection always user-controlled via the native picker.
    depends on it.
 2. **No payment/promotion execution.** Agent opens the promote screen and
    explains; it never calls `/initiate*`.
+
+## 8. License diligence (Oct 28)
+
+- **Muse Glimmer 30B is Apache-2.0** — safe to use commercially via hosted
+  inference (Together AI). It cannot run on phones (17GB+ quantized); the
+  integration is honest about that: same tool loop, server-side.
+- **BRIA RMBG v1.4/v2.0 weights are CC BY-NC** — checked the model card before
+  integrating, and deliberately NOT used. Salmart is commercial; background
+  cleanup targets a commercially-licensed pay-per-call matting endpoint
+  instead (provider holds the license, repo holds no weights). `BG_MODEL`
+  records which service ran.
+- **Raw SAM checkpoints need box/point prompts plus GPU self-hosting**, with no
+  hosted promptable API — wrong tool for one-tap bg cleanup, so the contract
+  accepts any RGBA-matte provider and `BG_MODEL` is swappable later.

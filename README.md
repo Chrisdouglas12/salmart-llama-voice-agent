@@ -155,6 +155,11 @@ curl -X POST $BASE/api/assistant/ad-from-image \
 # Shelfie → priced drafts (multipart field `image`)
 curl -X POST $BASE/api/assistant/scan-shop \
   -H "Authorization: Bearer $JWT" -F "image=@shelf.jpg"
+
+# background cleanup → white 1080px cover (multipart field `image`;
+# CLEAN_UNAVAILABLE when no matting endpoint is configured — by design)
+curl -X POST $BASE/api/assistant/photo-clean \
+  -H "Authorization: Bearer $JWT" -F "image=@photo.jpg"
 ```
 
 Recoverable failures return HTTP 200 with `{ success: false, code, message }`
@@ -185,6 +190,8 @@ All model access goes through the **Meta Model API** at
 | Chat, tool calling, image understanding | `muse-spark-1.3` |
 | Speech to text | `muse-voice-transcribe-1.0` |
 | Spoken replies (voice output) | Gemini TTS (Meta and Groq are STT-only; key already configured) |
+| Agentic fallback + side-by-side brain | Muse Glimmer 30B (open weights, Apache-2.0), hosted via Together AI — 30B needs 17GB+ VRAM, so on-phone inference is impossible; same tool loop as Spark |
+| Background cleanup | Commercial pay-per-call matting endpoint (env-configured). NOT BRIA RMBG weights: they are CC BY-NC, unusable in a commercial marketplace. NOT raw SAM: needs prompts + GPU self-hosting with no hosted API |
 | Deeper planning (configured, not on the critical path) | `muse-wonder-1.0` |
 | Image generation (configured, not on the critical path) | `muse-image-1.0` |
 

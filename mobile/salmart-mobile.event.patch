@@ -375,8 +375,62 @@ index 8cb8221..345bb32 100644
    chipRow: { flexDirection: 'row', gap: 6, paddingVertical: 2 },
    chip: { backgroundColor: T.bgSoft || T.bg, borderWidth: StyleSheet.hairlineWidth, borderColor: T.border, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
    chipText: { color: T.emerald, fontWeight: '700' },
+diff --git a/src/screens/CartScreen.js b/src/screens/CartScreen.js
+index 973ab2d..fe31da6 100644
+--- a/src/screens/CartScreen.js
++++ b/src/screens/CartScreen.js
+@@ -24,6 +24,7 @@ import { Ionicons } from '@expo/vector-icons';
+ import { createThemed, useTheme } from '../theme/theme';
+ import { useAuth } from '../state/AuthContext';
+ import { useCart } from '../state/CartContext';
++import { useAssistant } from '../state/AssistantContext';
+ import { useNavActions } from '../state/Navigation';
+ import { useCachedQuery } from '../offline/useCachedQuery';
+ import { K, TTL, invalidate } from '../offline/cache';
+@@ -43,6 +44,9 @@ export default function CartScreen() {
+   const insets = useSafeAreaInsets();
+   const { userId, token, email: sessionEmail, isAuthenticated, signOut } = useAuth();
+   const cart = useCart();
++  // The global mic FAB does not render on this screen (see MIC_SCREENS), so
++  // the header carries its own assistant mic instead.
++  const { toggleMic, recording: assistantRecording } = useAssistant();
+ 
+   const [busy, setBusy] = useState(false);
+   const [payUrl, setPayUrl] = useState(null);
+@@ -206,6 +210,20 @@ export default function CartScreen() {
+           )}
+         </View>
+ 
++        <Pressable
++          onPress={() => toggleMic([])}
++          accessibilityRole="button"
++          accessibilityLabel={assistantRecording ? 'Stop recording' : 'Talk to the assistant'}
++          hitSlop={8}
++          style={({ pressed }) => [
++            styles.micBtn,
++            { backgroundColor: assistantRecording ? (T.danger || '#ef4444') : T.emerald },
++            pressed && styles.pressed,
++          ]}
++        >
++          <Ionicons name={assistantRecording ? 'stop' : 'mic'} size={16} color="#fff" />
++        </Pressable>
++
+         {itemCount > 0 && (
+           <Pressable
+             onPress={clearAll}
+@@ -442,6 +460,10 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+     alignItems: 'center', justifyContent: 'center',
+     backgroundColor: T.card, borderWidth: 1, borderColor: T.border,
+   },
++  micBtn: {
++    width: 38, height: 38, borderRadius: 19,
++    alignItems: 'center', justifyContent: 'center',
++  },
+   clearBtn: {
+     flexDirection: 'row', alignItems: 'center', gap: 4,
+     paddingVertical: 7, paddingHorizontal: 12, borderRadius: 999,
 diff --git a/src/state/AssistantContext.js b/src/state/AssistantContext.js
-index eff30a0..222a89f 100644
+index eff30a0..72eb3e9 100644
 --- a/src/state/AssistantContext.js
 +++ b/src/state/AssistantContext.js
 @@ -4,12 +4,15 @@ import { Audio } from 'expo-av';
@@ -396,7 +450,7 @@ index eff30a0..222a89f 100644
  
  const AssistantContext = createContext(null);
  
-@@ -17,8 +20,35 @@ const AssistantContext = createContext(null);
+@@ -17,11 +20,45 @@ const AssistantContext = createContext(null);
  const SCREEN_ROUTE = {
    cart: 'cart', checkout: 'checkout', deals: 'deals', profile: 'profile',
    referral: 'referral', market: 'market', search: 'search', create_ad: 'createAd',
@@ -432,7 +486,17 @@ index eff30a0..222a89f 100644
  // Route name of the full assistant screen. The floating mic hides there because
  // that screen has its own mic.
  const ASSISTANT_ROUTE = 'assistant';
-@@ -33,11 +63,45 @@ const CHAT_TIMEOUT_MS = 65000;
++// Screens where the global mic FAB may appear. Everywhere else (chat,
++// assistant thread itself, create-ad, cart, …) it stays out of the way —
++// the cart has its own mic button in its header instead.
++const MIC_SCREENS = new Set([
++  'market', 'profile', 'requests', 'deals',
++  'checkout', 'editProfile', 'search', 'referral',
++]);
+ // The create-ad form route. NOTE: 'ads' is the My Ads list, not the form.
+ const AD_FORM_ROUTE = 'createAd';
+ // What the server calls the create-ad screen in its prompt/context.
+@@ -33,11 +70,45 @@ const CHAT_TIMEOUT_MS = 65000;
  // An unconsumed patch (form never opened) must not leak into a later session.
  const AD_PATCH_TTL_MS = 2 * 60 * 1000;
  
@@ -482,7 +546,7 @@ index eff30a0..222a89f 100644
  };
  
  const VOICE_OPTIONS = {
-@@ -50,6 +114,8 @@ const MAX_RECORD_MS = 60 * 1000;
+@@ -50,6 +121,8 @@ const MAX_RECORD_MS = 60 * 1000;
  
  export function AssistantProvider({ children }) {
    const nav = useNav();
@@ -491,7 +555,7 @@ index eff30a0..222a89f 100644
    const screen = useNavSelector(s => s.current.name);
    const screenRef = useRef(screen);
    screenRef.current = screen;
-@@ -156,6 +222,7 @@ export function AssistantProvider({ children }) {
+@@ -156,6 +229,7 @@ export function AssistantProvider({ children }) {
          : assistantChat({
            messages: [{ role: 'user', content: clean }],
            history,
@@ -499,7 +563,7 @@ index eff30a0..222a89f 100644
            // Use the server's vocabulary so form-edit mode switches on there.
            context: {
              screen: onForm ? SERVER_AD_SCREEN : screenRef.current,
-@@ -223,7 +290,45 @@ export function AssistantProvider({ children }) {
+@@ -223,7 +297,45 @@ export function AssistantProvider({ children }) {
          return true;
        }
  
@@ -546,7 +610,7 @@ index eff30a0..222a89f 100644
        if (navs.length && Date.now() - lastNavRef.current > 800) {
          lastNavRef.current = Date.now();
          for (const n of navs) {
-@@ -252,7 +357,7 @@ export function AssistantProvider({ children }) {
+@@ -252,7 +364,7 @@ export function AssistantProvider({ children }) {
      } finally {
        setIsBusy(false);
      }
@@ -555,7 +619,7 @@ index eff30a0..222a89f 100644
  
    // ── Gallery choose: tap or voice -> full-size photo -> ad-from-image ──────
    const chooseCandidate = useCallback(async (cand) => {
-@@ -274,6 +379,96 @@ export function AssistantProvider({ children }) {
+@@ -274,6 +386,96 @@ export function AssistantProvider({ children }) {
      if (c) chooseCandidate(c);
    };
  
@@ -652,7 +716,7 @@ index eff30a0..222a89f 100644
    // ── Global Voice Logic ────────────────────────────────────────────────────
    const stopAndTranscribe = useCallback(async (history) => {
      if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
-@@ -320,6 +515,7 @@ export function AssistantProvider({ children }) {
+@@ -320,6 +522,7 @@ export function AssistantProvider({ children }) {
      try {
        Keyboard.dismiss();
        try { Speech.stop(); } catch (_e) { /* ignore */ }
@@ -660,7 +724,7 @@ index eff30a0..222a89f 100644
        const perm = await Audio.requestPermissionsAsync();
        if (!perm?.granted) {
          setMessages(prev => [...prev, { key: `err-${Date.now()}`, role: 'bot', kind: 'text', text: 'Please allow microphone access.', at: Date.now() }]);
-@@ -343,6 +539,7 @@ export function AssistantProvider({ children }) {
+@@ -343,6 +546,7 @@ export function AssistantProvider({ children }) {
    useEffect(() => () => {
      if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
      try { Speech.stop(); } catch (_e) { /* ignore */ }
@@ -668,7 +732,7 @@ index eff30a0..222a89f 100644
      const rec = recorderRef.current;
      recorderRef.current = null;
      if (rec) rec.stopAndUnloadAsync().catch(() => {});
-@@ -351,6 +548,7 @@ export function AssistantProvider({ children }) {
+@@ -351,6 +555,7 @@ export function AssistantProvider({ children }) {
    return (
      <AssistantContext.Provider value={{
        messages, setMessages, isBusy, isReady, setIsReady, processMessage,
@@ -676,6 +740,39 @@ index eff30a0..222a89f 100644
        recording, transcribing, toggleMic,
        attachedImage, setAttachedImage,
        adPatch, ackAdPatch, reportAdSnapshot,
+@@ -358,12 +563,11 @@ export function AssistantProvider({ children }) {
+     }}>
+       {children}
+ 
+-      {/* Global floating mic: talk to the assistant from any screen. */}
+-      {screen !== ASSISTANT_ROUTE && (
++      {/* Global floating mic, only on the allowed screens (see MIC_SCREENS). */}
++      {MIC_SCREENS.has(screen) && (
+         <FloatingAssistant
+           recording={recording}
+           transcribing={transcribing}
+-          lifted={screen === AD_FORM_ROUTE}
+           onPress={() => toggleMic(toHistory(messages))}
+         />
+       )}
+@@ -382,7 +586,7 @@ export function AssistantProvider({ children }) {
+ }
+ 
+ // ─── Global Floating Mic ──────────────────────────────────────────────────────
+-function FloatingAssistant({ recording, transcribing, lifted, onPress }) {
++function FloatingAssistant({ recording, transcribing, onPress }) {
+   const { T } = useTheme();
+ 
+   const bg = recording ? (T.danger || '#ef4444') : transcribing ? T.inkMuted : T.emerald;
+@@ -395,8 +599,6 @@ function FloatingAssistant({ recording, transcribing, lifted, onPress }) {
+       accessibilityLabel={recording ? 'Stop recording' : 'Talk to the assistant'}
+       style={({ pressed }) => [
+         floatStyles.fab,
+-        // On the ad form the Publish bar sits at the bottom, so float above it.
+-        lifted && { bottom: 150 },
+         { backgroundColor: bg, opacity: pressed ? 0.8 : 1 },
+       ]}
+     >
 diff --git a/src/state/Navigation.js b/src/state/Navigation.js
 index 7aabd34..2be6ae0 100644
 --- a/src/state/Navigation.js
@@ -689,3 +786,135 @@ index 7aabd34..2be6ae0 100644
  };
  
  const SCREEN_CACHE = Object.create(null);
+diff --git a/src/ui/Shell.js b/src/ui/Shell.js
+index a50ed43..32883db 100644
+--- a/src/ui/Shell.js
++++ b/src/ui/Shell.js
+@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
+ import { shadow, useTheme, createThemed } from '../theme/theme';
+ import { useNav } from '../state/Navigation';
+ import { useAuth } from '../state/AuthContext';
++import { useCart } from '../state/CartContext';
+ import { PANEL_ORDER } from '../state/routes';
+ import { tap } from './kit';
+ 
+@@ -144,6 +145,8 @@ export function PanelHeader({ title, onBack, right, style }) {
+   const styles = useStyles();
+   const S = SHELL[isDark ? 'dark' : 'light'];
+   const { openMenu } = useShell();
++  const nav = useNav();
++  const { count: cartCount } = useCart();
+   const showBack = typeof onBack === 'function';
+ 
+   return (
+@@ -153,6 +156,26 @@ export function PanelHeader({ title, onBack, right, style }) {
+       <View style={styles.headerRight}>
+         {right}
+ 
++        {/* Cart shortcut with live count badge. */}
++        <Pressable
++          onPress={() => { tap(); nav.push('cart'); }}
++          hitSlop={10}
++          style={styles.menuBtn}
++          accessibilityRole="button"
++          accessibilityLabel={cartCount > 0 ? `Open cart, ${cartCount} items` : 'Open cart'}
++        >
++          <View>
++            <Ionicons name="cart-outline" size={23} color={S.ink} />
++            {cartCount > 0 && (
++              <View style={styles.cartBadge}>
++                <Text style={styles.cartBadgeText}>
++                  {cartCount > 99 ? '99+' : String(cartCount)}
++                </Text>
++              </View>
++            )}
++          </View>
++        </Pressable>
++
+         <Pressable
+           onPress={() => { tap(); showBack ? onBack() : openMenu(); }}
+           hitSlop={10}
+@@ -346,6 +369,12 @@ const useStyles = createThemed(({ T, isDark }) => {
+       borderBottomColor: S.headerBorder,
+     },
+     menuBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
++    cartBadge: {
++      position: 'absolute', top: -5, right: -7, minWidth: 16, height: 16,
++      borderRadius: 8, backgroundColor: S.badge, alignItems: 'center',
++      justifyContent: 'center', paddingHorizontal: 3,
++    },
++    cartBadgeText: { color: '#fff', fontSize: 9, fontWeight: '800' },
+     bars: { width: 20, alignItems: 'center', justifyContent: 'center' },
+     bar: { width: 20, height: 2, borderRadius: 1, backgroundColor: S.ink, marginVertical: 2.25 },
+     title: {
+diff --git a/src/ui/kit.js b/src/ui/kit.js
+index 4d1abd4..6b39768 100644
+--- a/src/ui/kit.js
++++ b/src/ui/kit.js
+@@ -8,7 +8,7 @@
+ 
+ import React, { useRef } from 'react';
+ import {
+-  ActivityIndicator, Animated, Easing, Modal, Platform, Pressable, ScrollView,
++  ActivityIndicator, Animated, Easing, Keyboard, Modal, Platform, Pressable, ScrollView,
+   StyleSheet, Text, TextInput, useWindowDimensions, View,
+ } from 'react-native';
+ import { useSafeAreaInsets } from 'react-native-safe-area-context';
+@@ -553,6 +553,27 @@ export function Sheet({ visible, onClose, title, children, footer, header, maxHe
+     });
+   }, [visible, slide]);
+ 
++  // ── Keyboard overlap ────────────────────────────────────────────────────
++  // Measures how much of this bottom-anchored sheet the IME actually covers
++  // and pads exactly that much. Works whether or not the window resized for
++  // the keyboard (Android edge-to-edge vs legacy), on both platforms.
++  const boxRef = useRef(null);
++  const [kbPad, setKbPad] = React.useState(0);
++  React.useEffect(() => {
++    const ios = Platform.OS === 'ios';
++    const show = Keyboard.addListener(ios ? 'keyboardWillShow' : 'keyboardDidShow', e => {
++      const top = e?.endCoordinates?.screenY;
++      if (typeof top !== 'number') return;
++      requestAnimationFrame(() => {
++        boxRef.current?.measureInWindow((x, y, w, h) => {
++          setKbPad(Math.max(0, Math.round(y + h - top)));
++        });
++      });
++    });
++    const hide = Keyboard.addListener(ios ? 'keyboardWillHide' : 'keyboardDidHide', () => setKbPad(0));
++    return () => { show.remove(); hide.remove(); };
++  }, []);
++
+   if (!mounted) return null;
+ 
+   const overlayOpacity = slide.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
+@@ -562,13 +583,22 @@ export function Sheet({ visible, onClose, title, children, footer, header, maxHe
+       <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.45)', opacity: overlayOpacity }]}>
+         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close" />
+       </Animated.View>
+-      <Animated.View style={[
+-        styles.sheet,
+-        {
+-          maxHeight: `${maxHeightRatio * 100}%`,
+-          transform: [{ translateY: slide.interpolate({ inputRange: [0, 1], outputRange: [600, 0] }) }],
+-        },
+-      ]}>
++      <Animated.View
++        ref={boxRef}
++        style={[
++          styles.sheet,
++          {
++            maxHeight: `${maxHeightRatio * 100}%`,
++            // Keyboard overlap: the sheet is bottom-anchored, so growing its
++            // bottom padding lifts the whole panel (inputs + footer) above
++            // the IME. Zero when the keyboard is closed — no visual change.
++            // Same measured-overlap technique as ChatScreen/CommentChat, not
++            // a guessed keyboard height and not KeyboardAvoidingView.
++            paddingBottom: kbPad,
++            transform: [{ translateY: slide.interpolate({ inputRange: [0, 1], outputRange: [600, 0] }) }],
++          },
++        ]}
++      >
+         <View style={styles.grabber} />
+         <View style={styles.sheetHead}>
+           <T3 style={{ flex: 1 }}>{title}</T3>

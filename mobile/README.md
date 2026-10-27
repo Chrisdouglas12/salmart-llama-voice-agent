@@ -1,6 +1,6 @@
 # Mobile — event diff extract
 
-`salmart-mobile.event.patch` (+404/−16, base: pre-kickoff app commit `5ce993f`)
+`salmart-mobile.event.patch` (+503/−30, base: pre-kickoff app commit `5ce993f`)
 is the complete event frontend work. No pre-hackathon app code is copied into
 this repo.
 
@@ -8,7 +8,10 @@ this repo.
 
 | File | Event change |
 | --- | --- |
-| `src/state/AssistantContext.js` | `sessionId`, product-card shaping, `add_to_cart`, gallery ranking, server-voice replies (`/speak` + expo-speech fallback), Shelfie scan → inline cards → cache crop → Create Ad, navigation |
+| `src/state/AssistantContext.js` | `sessionId`, product-card shaping, `add_to_cart`, gallery ranking, server-voice replies (`/speak` + expo-speech fallback), Shelfie scan → inline cards → cache crop → Create Ad, mic FAB allowlist, navigation |
+| `src/ui/kit.js` | `Sheet` lifts above the keyboard by measured overlap (all bottom sheets with inputs) |
+| `src/ui/Shell.js` | cart shortcut with live count badge in every panel header |
+| `src/screens/CartScreen.js` | assistant mic button in the cart header (the FAB does not render here) |
 | `src/screens/AssistantScreen.js` | brain label from `/status`, shelf scan button, `Scan my shelf` chip, inline draft row |
 | `src/api/endpoints.js` | `assistantStatus()`, `assistantShelfScan()`, `assistantSpeak()`, `sessionId` on `/chat` |
 | `src/api/client.js` | full-origin `EXPO_PUBLIC_API_URL` override, no production failover for it |

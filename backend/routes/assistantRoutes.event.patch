@@ -1,14 +1,15 @@
 diff --git a/routes/assistantRoutes.js b/routes/assistantRoutes.js
-index eb30b5582..0f1d36b83 100644
+index eb30b5582..c5384dade 100644
 --- a/routes/assistantRoutes.js
 +++ b/routes/assistantRoutes.js
-@@ -9,6 +9,18 @@ const multer = require('multer');
+@@ -9,6 +9,19 @@ const multer = require('multer');
  const { GoogleGenAI } = require('@google/genai');
  const Groq = require('groq-sdk');
  const mongoose = require('mongoose');
 +const { config: metaConfig, providerStatus: metaProviderStatus, shouldUseMock, setRecoveryProbe } = require('../lib/assistant/config.js');
 +const { chatCompletion: metaChat, visionJSON: metaVisionJSON, transcribeAudio: metaTranscribe } = require('../lib/assistant/llama.js');
 +const { scanShelfImage } = require('../lib/assistant/shelfie.js');
++const { TaskStore, scopeResetDetected, mergeTaskDraft, proposePriceChange, formatTaskBlock } = require('../lib/assistant/tasks.js');
 +
 +// If Meta is paused after a network/auth failure, keep probing it in the
 +// background. The standalone demo server already does this; without it the
@@ -21,7 +22,7 @@ index eb30b5582..0f1d36b83 100644
  
  const verifyToken = require('../middleware/auths.js');
  const Post = require('../models/postSchema.js');
-@@ -35,6 +47,13 @@ const STT_TIMEOUT_MS = Number(process.env.STT_TIMEOUT_MS) || 20000;
+@@ -35,6 +48,13 @@ const STT_TIMEOUT_MS = Number(process.env.STT_TIMEOUT_MS) || 20000;
  const STT_PROMPT =
    'Shopping on Salmart, a Nigerian marketplace: iPhone, Samsung, laptop, Toyota, Camry, naira, Lagos, Abuja.';
  
@@ -35,7 +36,44 @@ index eb30b5582..0f1d36b83 100644
  /* ------------------------------------------------------------------ */
  /* Memory of what the assistant last showed                           */
  /* ------------------------------------------------------------------ */
-@@ -86,6 +105,30 @@ const matchList = (arr, v) => {
+@@ -47,10 +67,35 @@ function getLastShown(userId) {
+   return e.products;
+ }
+ 
++/* ------------------------------------------------------------------ */
++/* Multi-turn task state (Phase 3). Drafts and goals survive across    */
++/* turns; a scope change ("forget the shoes, sell a blender instead")  */
++/* resets the task and clears lastShown so old ids cannot leak in.     */
++/* ------------------------------------------------------------------ */
++const TASKS = new TaskStore();
++
++function updateTaskState(userId, convo, toolResults) {
++  const lastUser = [...(convo || [])].reverse().find(m => m.role === 'user');
++  const said = lastUser && typeof lastUser.content === 'string' ? lastUser.content : '';
++  if (scopeResetDetected(said)) {
++    TASKS.reset(userId, said);
++    lastShown.delete(String(userId));
++    return;
++  }
++  const task = TASKS.getOrCreate(userId, said);
++  for (const t of toolResults || []) {
++    if (t.tool === 'fill_ad_form' && t.result && t.result.fields) mergeTaskDraft(task, t.result.fields);
++    if ((t.tool === 'search_products' || t.tool === 'get_my_listings') && t.result && t.result.products && t.result.products.length) {
++      task.lastSearch = { tool: t.tool, count: t.result.products.length };
++    }
++  }
++  TASKS.touch(userId);
++}
++
+ /* ------------------------------------------------------------------ */
+ /* Screens the assistant is allowed to open                           */
+ /* ------------------------------------------------------------------ */
+-const NAV_SCREENS = ['cart', 'checkout', 'deals', 'profile', 'referral', 'market', 'search', 'create_ad'];
++const NAV_SCREENS = ['cart', 'checkout', 'deals', 'profile', 'referral', 'market', 'search', 'create_ad', 'ads', 'editProfile', 'showrooms', 'showroom', 'promote', 'messages', 'chat'];
+ 
+ /* ------------------------------------------------------------------ */
+ /* Create-ad form vocabulary. MUST mirror the native CreateAdScreen.  */
+@@ -86,6 +131,30 @@ const matchList = (arr, v) => {
    return arr.find(x => x.toLowerCase() === s) || '';
  };
  
@@ -66,7 +104,141 @@ index eb30b5582..0f1d36b83 100644
  function cleanStr(v, n = 200) {
    return String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim().slice(0, n);
  }
-@@ -667,7 +710,7 @@ function classifyError(e) {
+@@ -210,12 +279,19 @@ HOW TO BEHAVE
+ 
+ NAVIGATION & ACTIONS
+ - Use the navigate tool when the user asks to open or go to a screen.
+-- Available screens: cart, checkout, deals, profile, referral, market, search, create_ad.
+-- Map natural language to the closest screen ("my basket" -> cart, "invite a friend" -> referral).
++- Available screens: cart, checkout, deals, profile, referral, market, search, create_ad, ads, editProfile, showrooms, showroom, promote, messages, chat.
++- Map natural language to the closest screen ("my basket" -> cart, "invite a friend" -> referral, "my ads" -> ads, "my shop" -> showrooms, "boost my listing" -> promote).
+ - After a successful add_to_cart, do NOT navigate automatically unless explicitly asked.
+ - For checkout, you MUST pass the postId of the item.
+ - NEVER invent a screen name that is not in the list above.
+ 
++MY LISTINGS & PRICE CHANGES
++- "my ads", "what did I list", "find my shoes" -> call get_my_listings (optional query keyword). Results land in LAST SHOWN PRODUCTS with real postIds.
++- "change the price to X" about YOUR listing -> call update_listing_price with the postId from LAST SHOWN, first WITHOUT confirm. It tells you the exact change: ask the user to confirm in ONE short sentence. Only call again with confirm:true after they say yes.
++- A confirmed price change applies immediately and is re-read from the database. Say the old and new price; never claim more.
++- update_listing_price rejects listings that are not theirs. Never work around that.
++- You can NOT publish. New listings still need the user to tap Post no matter what.
++
+ CREATE AD (fill_ad_form)
+ - To fill the ad form, ALWAYS call fill_ad_form. It opens the form if needed and fills it live. Do NOT use navigate for this.
+ - If the user only says they want to sell something and gave no details, call navigate with screen "create_ad".
+@@ -243,7 +319,10 @@ FIND PHOTO IN GALLERY
+ ${ctx && ctx.gallery && ctx.gallery.open ? `A photo picker is OPEN with ${ctx.gallery.count} photos numbered 1 to ${ctx.gallery.count} (1 = best match). When the user picks one ("the second one", "the best one", "that one", "number 3") call choose_photo with that number. "best" and "first" mean 1.` : ''}
+ 
+ LAST SHOWN PRODUCTS:
+-${shownList}`;
++${shownList}
++
++CURRENT TASK (persists across turns — trust it over guesses; if the user changed objective, the old draft is already cleared):
++${formatTaskBlock(TASKS.get(userId))}`;
+ }
+ 
+ /* ------------------------------------------------------------------ */
+@@ -345,6 +424,30 @@ const FUNCTION_DECLARATIONS = [
+       properties: { index: { type: 'number' } },
+       required: ['index']
+     }
++  },
++  {
++    name: 'get_my_listings',
++    description: 'List the authenticated seller\'s own active listings. Use when they ask about their ads ("my shoes", "what did I list", "find my blender"). Returns real postIds so later turns can act on them.',
++    parametersJsonSchema: {
++      type: 'object',
++      properties: {
++        query: { type: 'string', description: 'Optional keyword to filter by, e.g. "shoes".' },
++        limit: { type: 'number', description: 'Max listings. Default 6.' }
++      }
++    }
++  },
++  {
++    name: 'update_listing_price',
++    description: 'Change the price of the seller\'s OWN listing. Two calls. First call WITHOUT confirm: returns what would change and you MUST ask the user to confirm. Second call WITH confirm:true only after they say yes. Rejects listings that are not theirs.',
++    parametersJsonSchema: {
++      type: 'object',
++      properties: {
++        postId: { type: 'string', description: 'postId from LAST SHOWN PRODUCTS. Never invent one.' },
++        price: { type: 'number', description: 'New price in Naira.' },
++        confirm: { type: 'boolean', description: 'Set true only after the user confirmed this exact change.' }
++      },
++      required: ['postId', 'price']
++    }
+   }
+ ];
+ 
+@@ -400,6 +503,59 @@ async function searchProducts({ query, category, minPrice, maxPrice, location, l
+   };
+ }
+ 
++/* The seller's own listings. Owner-scoped by the JWT userId — never trust an
++ * id from the model. Results feed lastShown like search does, so follow-ups
++ * ("change their price", "promote the first one") resolve to real postIds. */
++async function getMyListings({ userId, query, limit = 6 } = {}) {
++  const posts = await Post.find({ 'createdBy.userId': userId, status: 'active', isSold: { $ne: true } })
++    .select('_id title description price photo photos category location productCondition postType createdAt')
++    .sort({ createdAt: -1 })
++    .limit(50)
++    .lean();
++  const tokens = String(query || '').toLowerCase().split(/[\s,]+/).filter(t => t.length > 1 && !STOP.has(t));
++  const mine = tokens.length
++    ? posts.filter(p => tokens.every(t => `${p.title || ''} ${p.description || ''} ${p.category || ''}`.toLowerCase().includes(t)))
++    : posts;
++  const products = mine.slice(0, Math.min(Number(limit) || 6, 10)).map(p => ({
++    postId: String(p._id),
++    title: p.title,
++    price: p.price,
++    photo: p.photo || (p.photos && p.photos[0]) || null,
++    photos: p.photos && p.photos.length ? p.photos : (p.photo ? [p.photo] : []),
++    condition: p.productCondition || null,
++    category: p.category,
++    location: p.location,
++    sellerId: String(userId),
++    postType: p.postType,
++    mine: true
++  }));
++  return {
++    products,
++    ...(!products.length && { hint: tokens.length ? 'No matching listing. Try fewer words.' : 'No active listings yet. Offer to create one.' })
++  };
++}
++
++/* Change the price of the seller's own listing. The pure proposal
++ * (lib/assistant/tasks.js) decides confirm-vs-execute; this function only
++ * runs reads and the single verified write. A manual price change clears an
++ * active discount, mirroring PATCH /post/:id. */
++async function updateListingPrice({ userId, postId, price, confirm = false } = {}) {
++  if (!mongoose.isValidObjectId(postId)) throw new Error('Invalid postId');
++  const post = await Post.findById(postId).lean();
++  if (!post) throw new Error('Listing not found');
++  if (String(post.createdBy?.userId) !== String(userId)) throw new Error('That listing is not yours.');
++  if (post.isSold) throw new Error('That listing is already sold.');
++  const proposal = proposePriceChange({ postId: String(postId), title: post.title, currentPrice: post.price }, price);
++  if (!proposal.success || proposal.unchanged || !confirm) return proposal;
++  const updated = await Post.findByIdAndUpdate(
++    postId,
++    { $set: { price: proposal.newPrice }, $unset: { discount: '' } },
++    { new: true }
++  ).lean();
++  if (!updated || Number(updated.price) !== proposal.newPrice) throw new Error('Price update did not stick. Try again.');
++  return { success: true, postId: String(postId), title: updated.title, oldPrice: Number(post.price), newPrice: proposal.newPrice };
++}
++
+ async function getCartForUser(userId) {
+   let cart = await Cart.findOne({ buyerId: userId });
+   if (!cart) cart = await Cart.create({ buyerId: userId, items: [] });
+@@ -504,6 +660,8 @@ async function executeTool(name, args, userId, toolResults) {
+     case 'start_chat_with_seller':
+       if (!toolResults?.sellerContactOk) throw new Error('The user has not asked to contact the seller.');
+       return startChatWithSeller({ userId, ...a });
++    case 'get_my_listings': return getMyListings({ userId, ...a });
++    case 'update_listing_price': return updateListingPrice({ userId, ...a });
+     default: throw new Error(`Unknown tool: ${name}`);
+   }
+ }
+@@ -667,7 +825,7 @@ function classifyError(e) {
    };
  }
  
@@ -75,7 +247,16 @@ index eb30b5582..0f1d36b83 100644
  
  function markCooldown(name, e) {
    const { quota, auth, transient, gone } = classifyError(e);
-@@ -817,10 +860,43 @@ async function runGroqAgent(convo, userId, toolResults) {
+@@ -701,7 +859,7 @@ async function runTool(name, args, userId, toolResults) {
+   let out;
+   try {
+     out = await executeTool(name, args, userId, toolResults);
+-    if (name === 'search_products' && out.products?.length) {
++    if ((name === 'search_products' || name === 'get_my_listings') && out.products?.length) {
+       lastShown.set(String(userId), { products: out.products, at: Date.now() });
+     }
+     toolResults.push({ tool: name, result: out });
+@@ -817,10 +975,43 @@ async function runGroqAgent(convo, userId, toolResults) {
    return 'Sorry, I got a bit tangled there. Could you say that another way?';
  }
  
@@ -119,7 +300,15 @@ index eb30b5582..0f1d36b83 100644
    { name: 'groq', enabled: () => !!groq, run: runGroqAgent },
    { name: 'gemini', enabled: () => !!genAI, run: runGeminiAgent }
  ];
-@@ -925,8 +1001,70 @@ async function groqVision({ buffer, mime, text, ctx }) {
+@@ -847,6 +1038,7 @@ async function runAgent(rawConvo, userId, ctx) {
+         else convo.push({ role: 'user', content: note });
+       }
+       const text = await p.run(convo, userId, toolResults);
++      updateTaskState(userId, convo, toolResults);
+       return { text, toolResults, provider: p.name };
+     } catch (e) {
+       lastErr = e;
+@@ -925,8 +1117,70 @@ async function groqVision({ buffer, mime, text, ctx }) {
    throw lastErr;
  }
  
@@ -190,7 +379,7 @@ index eb30b5582..0f1d36b83 100644
      { name: 'gemini', enabled: () => !!genAI, run: geminiVision },
      { name: 'groq', enabled: () => !!groq, run: groqVision }
    ].filter(p => p.enabled());
-@@ -989,6 +1127,23 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+@@ -989,6 +1243,23 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
    const file = req.file;
    if (!file) return res.status(200).json({ success: false, code: 'NO_AUDIO', message: 'No audio received.' });
    try {
@@ -214,7 +403,7 @@ index eb30b5582..0f1d36b83 100644
      if (!groq) throw new Error('groq_not_configured');
      const out = await withTimeout(groq.audio.transcriptions.create({
        file: fs.createReadStream(file.path),
-@@ -998,7 +1153,7 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+@@ -998,7 +1269,7 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
        prompt: STT_PROMPT,
        ...(process.env.STT_LANGUAGE && { language: process.env.STT_LANGUAGE })
      }), STT_TIMEOUT_MS, 'Groq transcribe');
@@ -223,7 +412,7 @@ index eb30b5582..0f1d36b83 100644
    } catch (e) {
      return res.status(200).json({ success: false, code: 'TRANSCRIBE_FAILED', message: "Couldn't catch that. Please try again." });
    } finally {
-@@ -1006,11 +1161,44 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+@@ -1006,11 +1277,44 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
    }
  });
  
@@ -268,7 +457,13 @@ index eb30b5582..0f1d36b83 100644
  const toActions = toolResults =>
    toolResults.flatMap(t => {
      if (!t.result || !t.result.success) return [];
-@@ -1033,7 +1221,13 @@ router.post('/chat', verifyToken, async (req, res) => {
+@@ -1028,12 +1332,18 @@ router.post('/chat', verifyToken, async (req, res) => {
+ 
+     const { text, toolResults, provider } = await runAgent(convo, userId, context);
+ 
+-    const searches = toolResults.filter(t => t.tool === 'search_products' && t.result?.products?.length);
++    const searches = toolResults.filter(t => (t.tool === 'search_products' || t.tool === 'get_my_listings') && t.result?.products?.length);
+     const products = searches.length ? searches[searches.length - 1].result.products : [];
      const navigations = toolResults.filter(t => t.tool === 'navigate' && t.result?.success).map(t => t.result);
      const actions = toActions(toolResults);
  
@@ -283,7 +478,7 @@ index eb30b5582..0f1d36b83 100644
    } catch (err) {
      console.error('Assistant error:', err?.cause || err);
      return res.status(200).json({ success: false, code: 'ASSISTANT_UNAVAILABLE', message: "I'm a bit overloaded right now. Please try again in a minute." });
-@@ -1079,6 +1273,61 @@ router.post('/ad-from-image', verifyToken, receiveImage, async (req, res) => {
+@@ -1079,6 +1389,61 @@ router.post('/ad-from-image', verifyToken, receiveImage, async (req, res) => {
    }
  });
  

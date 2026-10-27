@@ -41,6 +41,9 @@ autofill, and one-photo shelf scanning — and wired it into the live app."*
 | "Pick the second one" | Selects that photo and reads it |
 | "Two bedroom flat, 50k, Abuja, brand new" | Fills title, price, location and condition as they speak |
 | "Find me iPhone under 200k" | Searches the catalogue and shows matching listings |
+| "Find the shoes I listed" | Lists the seller's own active ads (real postIds) |
+| "Change their price to 70,000" | Asks for confirmation, then updates the price (verified re-read) |
+| "Forget the shoes, sell a blender" | Resets the task; stale ids never leak |
 | "Add it to cart" | Adds the listing the buyer just saw |
 | "Take me to checkout" | Opens checkout with that item |
 
@@ -75,6 +78,7 @@ backend/
     mockAgent.js               NEW: deterministic fallback brain (no-key / offline)
     mongoSearch.js             NEW: catalogue search over the host Post model
     shelfie.js                 NEW: Aya Shelfie — boxes, crops, deterministic price bands
+    tasks.js                   NEW: task planner — scope reset, draft merge, price gate, task store
   routes/
     visionRoutes.js            NEW: standalone voice/vision route modules written
     voiceRoutes.js             during the event (reference — NOT mounted; the
@@ -83,7 +87,12 @@ backend/
     assistantRoutes.event.patch  EVENT DIFF to the pre-existing live route file:
                                Meta-first orchestrator, runMetaAgent, metaVision,
                                Meta transcription, /status, /ping reply fields,
-                               POST /scan-shop, Shelfie wiring, provider/model
+                               POST /scan-shop, Shelfie wiring, provider/model,
+                               /speak (Gemini TTS), get_my_listings,
+                               update_listing_price + confirm gate, task state,
+                               extended navigable screens
+  tests/
+    agent-tasks.test.js        NEW: eval suite, 8/8 passing
 mobile/
   salmart-mobile.event.patch   EVENT DIFF to the pre-existing React Native app
                                (7 files, +343/−12): sessionId, product cards,

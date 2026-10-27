@@ -1,6 +1,6 @@
 # Mobile — event diff extract
 
-`salmart-mobile.event.patch` (+394/−16, base: pre-kickoff app commit `5ce993f`)
+`salmart-mobile.event.patch` (+404/−16, base: pre-kickoff app commit `5ce993f`)
 is the complete event frontend work. No pre-hackathon app code is copied into
 this repo.
 

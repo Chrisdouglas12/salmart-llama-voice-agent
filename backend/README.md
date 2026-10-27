@@ -27,6 +27,21 @@ app.use('/api/assistant', assistantRoutes);
 
 See the top-level README for curl examples against these routes.
 
+## Agent tools (11, Phase 1–3)
+
+Read-only and client-directed: `search_products`, `get_my_listings`
+(owner-scoped, feeds last-shown resolution), `get_cart`, `navigate` (15
+screens), `fill_ad_form` (validates only — the user taps Post),
+`find_photo_in_gallery`, `choose_photo`. Verified writes: `add_to_cart`,
+`remove_from_cart` (upsert semantics), `start_chat_with_seller` (intent gate),
+`update_listing_price` (two-call confirm gate + DB re-read; rejects non-owned
+and sold listings; clears an active discount like `PATCH /post/:id`).
+
+No publish, price-guess, profile-write, showroom-write, or payment tool
+exists — by product rule, not omission. Multi-turn memory is the per-user task
+store (`lib/assistant/tasks.js`): goal, merged draft, last results, 30-min
+TTL; scope changes reset it and clear last-shown ids.
+
 ## New modules
 
 ```

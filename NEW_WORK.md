@@ -25,8 +25,10 @@ byte-identical to the live sources (verified by hash).
 | `backend/lib/assistant/mockAgent.js` | 15535 | deterministic fallback brain |
 | `backend/lib/assistant/mongoSearch.js` | 3233 | catalogue search over the host Post model |
 | `backend/lib/assistant/shelfie.js` | 27044 | **Aya Shelfie**: vision boxes, crops, deterministic price bands |
+| `backend/lib/assistant/tasks.js` | new | **Task planner**: scope-change detection, draft merge, price-gate proposal, per-user task store (dependency-free, unit-tested) |
 | `backend/routes/visionRoutes.js` | 11642 | standalone vision routes, written during the event (reference — not mounted in `app.js`; the mounted equivalents are `/api/assistant/rank-photos` and `/api/assistant/ad-from-image`) |
 | `backend/routes/voiceRoutes.js` | 2402 | standalone transcribe route, written during the event (reference — not mounted; the mounted equivalent is `/api/assistant/transcribe`) |
+| `backend/tests/agent-tasks.test.js` | new | **Eval suite**: 8/8 passing (`node --test tests/assistant-tasks.test.js`) |
 | `backend/package.json` | new | fresh manifest for the extract |
 | `backend/.env.example` | new | fresh template, blank values |
 
@@ -34,8 +36,8 @@ byte-identical to the live sources (verified by hash).
 
 | Patch | Base (pre-kickoff) | Change |
 | --- | --- | --- |
-| `backend/routes/assistantRoutes.event.patch` | server `routes/assistantRoutes.js` at `8c5bef3e2` (Oct 26, pre-kickoff) | +252/−3: Meta imports, recovery probe, Shelfie helpers, `runMetaAgent`, Meta-first `PROVIDERS` order, `metaVision`, Meta transcription, `provider`/`model` fields, `GET /status`, `POST /scan-shop`, Gemini TTS (`POST /speak`) |
-| `mobile/salmart-mobile.event.patch` | app at `5ce993f` (Oct 26, pre-kickoff) | +394/−16 across 7 files: `sessionId`, product cards, `add_to_cart`, brain label, Shelfie UI, `assistantStatus`, `assistantShelfScan`, `assistantSpeak` + server-voice playback, LAN override, one starter chip |
+| `backend/routes/assistantRoutes.event.patch` | server `routes/assistantRoutes.js` at `8c5bef3e2` (Oct 26, pre-kickoff) | +374/−9: Meta imports, recovery probe, Shelfie helpers, `runMetaAgent`, Meta-first `PROVIDERS` order, `metaVision`, Meta transcription, `provider`/`model` fields, `GET /status`, `POST /scan-shop`, Gemini TTS (`POST /speak`), `get_my_listings`, `update_listing_price` + confirm gate, task-state wiring, new navigable screens |
+| `mobile/salmart-mobile.event.patch` | app at `5ce993f` (Oct 26, pre-kickoff) | +404/−16 across 8 files: `sessionId`, product cards, `add_to_cart`, brain label, Shelfie UI, `assistantStatus`, `assistantShelfScan`, `assistantSpeak` + server-voice playback, 5 new navigable screens, `showroomCreate`/`vtu` loader fixes, LAN override, one starter chip |
 
 Both patches were verified with `git apply --check --reverse` against the live
 worktrees. No other files in either source repo were touched by the event work.

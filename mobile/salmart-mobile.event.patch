@@ -541,11 +541,56 @@ index 973ab2d..fe31da6 100644
    clearBtn: {
      flexDirection: 'row', alignItems: 'center', gap: 4,
      paddingVertical: 7, paddingHorizontal: 12, borderRadius: 999,
+diff --git a/src/screens/CreateAdScreen.js b/src/screens/CreateAdScreen.js
+index 24385d5..81c06ab 100644
+--- a/src/screens/CreateAdScreen.js
++++ b/src/screens/CreateAdScreen.js
+@@ -143,7 +143,7 @@ export default function CreateAdScreen({ route }) {
+   const nav = useNav();
+   const insets = useSafeAreaInsets();
+   const { firstName, lastName } = useAuth();
+-  const { adPatch, ackAdPatch, reportAdSnapshot } = useAssistant();
++  const { adPatch, ackAdPatch, reportAdSnapshot, scanPickedPhoto } = useAssistant();
+ 
+   const editingId = route?.params?.postId || null;
+   const isEdit = !!editingId;
+@@ -328,8 +328,14 @@ export default function CreateAdScreen({ route }) {
+       allowsEditing: false,
+       quality: 0.85,
+     });
+-    if (!res.canceled && res.assets?.[0]) setPhoto(res.assets[0]);
+-  }, []);
++    if (!res.canceled && res.assets?.[0]) {
++      const asset = res.assets[0];
++      setPhoto(asset);
++      // Standardize + vision-read the cover: description fills live below,
++      // fully editable. Never blocks the form — failures only log.
++      scanPickedPhoto(asset).catch(() => {});
++    }
++  }, [scanPickedPhoto]);
+ 
+   const snapCover = useCallback(async () => {
+     const perm = await ImagePicker.requestCameraPermissionsAsync();
+@@ -342,8 +348,12 @@ export default function CreateAdScreen({ route }) {
+       allowsEditing: false,
+       quality: 0.85,
+     });
+-    if (!res.canceled && res.assets?.[0]) setPhoto(res.assets[0]);
+-  }, []);
++    if (!res.canceled && res.assets?.[0]) {
++      const asset = res.assets[0];
++      setPhoto(asset);
++      scanPickedPhoto(asset).catch(() => {});
++    }
++  }, [scanPickedPhoto]);
+ 
+   const pickDigitalFile = useCallback(async () => {
+     const res = await DocumentPicker.getDocumentAsync({
 diff --git a/src/state/AssistantContext.js b/src/state/AssistantContext.js
-index eff30a0..72eb3e9 100644
+index eff30a0..4e3c982 100644
 --- a/src/state/AssistantContext.js
 +++ b/src/state/AssistantContext.js
-@@ -4,12 +4,15 @@ import { Audio } from 'expo-av';
+@@ -4,12 +4,16 @@ import { Audio } from 'expo-av';
  import * as Speech from 'expo-speech';
  import { Ionicons } from '@expo/vector-icons';
  import { useNav, useNavSelector } from './Navigation';
@@ -559,10 +604,11 @@ index eff30a0..72eb3e9 100644
  import { scanGallery, prepareFull } from '../assistant/gallery';
  import GalleryPickerModal from '../ui/GalleryPickerModal';
 +import * as FileSystem from 'expo-file-system';
++import * as ImageManipulator from 'expo-image-manipulator';
  
  const AssistantContext = createContext(null);
  
-@@ -17,11 +20,45 @@ const AssistantContext = createContext(null);
+@@ -17,11 +21,47 @@ const AssistantContext = createContext(null);
  const SCREEN_ROUTE = {
    cart: 'cart', checkout: 'checkout', deals: 'deals', profile: 'profile',
    referral: 'referral', market: 'market', search: 'search', create_ad: 'createAd',
@@ -604,11 +650,13 @@ index eff30a0..72eb3e9 100644
 +const MIC_SCREENS = new Set([
 +  'market', 'profile', 'requests', 'deals',
 +  'checkout', 'editProfile', 'search', 'referral',
++  // My Ads + notifications: sellers talk about their listings here.
++  'ads', 'alerts',
 +]);
  // The create-ad form route. NOTE: 'ads' is the My Ads list, not the form.
  const AD_FORM_ROUTE = 'createAd';
  // What the server calls the create-ad screen in its prompt/context.
-@@ -33,11 +70,45 @@ const CHAT_TIMEOUT_MS = 65000;
+@@ -33,11 +73,45 @@ const CHAT_TIMEOUT_MS = 65000;
  // An unconsumed patch (form never opened) must not leak into a later session.
  const AD_PATCH_TTL_MS = 2 * 60 * 1000;
  
@@ -658,7 +706,7 @@ index eff30a0..72eb3e9 100644
  };
  
  const VOICE_OPTIONS = {
-@@ -50,6 +121,8 @@ const MAX_RECORD_MS = 60 * 1000;
+@@ -50,6 +124,8 @@ const MAX_RECORD_MS = 60 * 1000;
  
  export function AssistantProvider({ children }) {
    const nav = useNav();
@@ -667,7 +715,7 @@ index eff30a0..72eb3e9 100644
    const screen = useNavSelector(s => s.current.name);
    const screenRef = useRef(screen);
    screenRef.current = screen;
-@@ -156,6 +229,7 @@ export function AssistantProvider({ children }) {
+@@ -156,6 +232,7 @@ export function AssistantProvider({ children }) {
          : assistantChat({
            messages: [{ role: 'user', content: clean }],
            history,
@@ -675,7 +723,7 @@ index eff30a0..72eb3e9 100644
            // Use the server's vocabulary so form-edit mode switches on there.
            context: {
              screen: onForm ? SERVER_AD_SCREEN : screenRef.current,
-@@ -223,7 +297,45 @@ export function AssistantProvider({ children }) {
+@@ -223,7 +300,45 @@ export function AssistantProvider({ children }) {
          return true;
        }
  
@@ -722,7 +770,7 @@ index eff30a0..72eb3e9 100644
        if (navs.length && Date.now() - lastNavRef.current > 800) {
          lastNavRef.current = Date.now();
          for (const n of navs) {
-@@ -252,7 +364,7 @@ export function AssistantProvider({ children }) {
+@@ -252,7 +367,7 @@ export function AssistantProvider({ children }) {
      } finally {
        setIsBusy(false);
      }
@@ -731,7 +779,7 @@ index eff30a0..72eb3e9 100644
  
    // ── Gallery choose: tap or voice -> full-size photo -> ad-from-image ──────
    const chooseCandidate = useCallback(async (cand) => {
-@@ -274,6 +386,96 @@ export function AssistantProvider({ children }) {
+@@ -274,6 +389,142 @@ export function AssistantProvider({ children }) {
      if (c) chooseCandidate(c);
    };
  
@@ -825,10 +873,56 @@ index eff30a0..72eb3e9 100644
 +    if (screenRef.current !== AD_FORM_ROUTE) nav.push(AD_FORM_ROUTE);
 +  }, [nav]);
 +
++  // ── Create-ad photo pipeline ────────────────────────────────────────────
++  // When the seller picks a cover photo, standardize it (1080px JPEG: fast
++  // upload, consistent display, under the 6MB cap) and ask vision to read it.
++  // Fields flow through the normal adPatch channel, so the description types
++  // into the form live and stays fully editable. Honest limit: this resizes,
++  // it does NOT remove backgrounds — that needs a segmentation model, which
++  // is not in the stack. Never claim a "cleaned" background.
++  const scanPickedPhoto = useCallback(async (asset) => {
++    if (!asset?.uri) return;
++    let photo = asset;
++    try {
++      const done = await ImageManipulator.manipulateAsync(
++        asset.uri,
++        [{ resize: { width: 1080 } }],
++        { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG },
++      );
++      photo = {
++        uri: done.uri,
++        fileName: asset.fileName || `ad_${Date.now()}.jpg`,
++        mimeType: 'image/jpeg',
++      };
++    } catch (_e) { /* keep the original asset */ }
++    setAdPatch({
++      id: `photo-${Date.now()}`,
++      fields: {},
++      photo,
++      say: 'Photo ready. Reading it now…',
++    });
++    try {
++      const res = await assistantAdFromImage({ image: photo, text: '' });
++      const raw = res?.actions?.find(a => a.type === 'fill_ad')?.fields;
++      const fields = raw && Object.keys(raw).length
++        ? sanitizeAdPatch(raw, raw.postType || 'regular')
++        : null;
++      if (fields && Object.keys(fields).length) {
++        setAdPatch({
++          id: `scan-${Date.now()}`,
++          fields,
++          say: 'I read your photo — check the description, edit anything.',
++        });
++      }
++    } catch (e) {
++      console.log('[Assistant] picked-photo scan failed:', e?.message);
++    }
++  }, []);
++
    // ── Global Voice Logic ────────────────────────────────────────────────────
    const stopAndTranscribe = useCallback(async (history) => {
      if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
-@@ -320,6 +522,7 @@ export function AssistantProvider({ children }) {
+@@ -320,6 +571,7 @@ export function AssistantProvider({ children }) {
      try {
        Keyboard.dismiss();
        try { Speech.stop(); } catch (_e) { /* ignore */ }
@@ -836,7 +930,7 @@ index eff30a0..72eb3e9 100644
        const perm = await Audio.requestPermissionsAsync();
        if (!perm?.granted) {
          setMessages(prev => [...prev, { key: `err-${Date.now()}`, role: 'bot', kind: 'text', text: 'Please allow microphone access.', at: Date.now() }]);
-@@ -343,6 +546,7 @@ export function AssistantProvider({ children }) {
+@@ -343,6 +595,7 @@ export function AssistantProvider({ children }) {
    useEffect(() => () => {
      if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
      try { Speech.stop(); } catch (_e) { /* ignore */ }
@@ -844,15 +938,15 @@ index eff30a0..72eb3e9 100644
      const rec = recorderRef.current;
      recorderRef.current = null;
      if (rec) rec.stopAndUnloadAsync().catch(() => {});
-@@ -351,6 +555,7 @@ export function AssistantProvider({ children }) {
+@@ -351,6 +604,7 @@ export function AssistantProvider({ children }) {
    return (
      <AssistantContext.Provider value={{
        messages, setMessages, isBusy, isReady, setIsReady, processMessage,
-+      scanShelfPhoto, openShelfItem,
++      scanShelfPhoto, openShelfItem, scanPickedPhoto,
        recording, transcribing, toggleMic,
        attachedImage, setAttachedImage,
        adPatch, ackAdPatch, reportAdSnapshot,
-@@ -358,12 +563,11 @@ export function AssistantProvider({ children }) {
+@@ -358,12 +612,11 @@ export function AssistantProvider({ children }) {
      }}>
        {children}
  
@@ -867,7 +961,7 @@ index eff30a0..72eb3e9 100644
            onPress={() => toggleMic(toHistory(messages))}
          />
        )}
-@@ -382,7 +586,7 @@ export function AssistantProvider({ children }) {
+@@ -382,7 +635,7 @@ export function AssistantProvider({ children }) {
  }
  
  // ─── Global Floating Mic ──────────────────────────────────────────────────────
@@ -876,7 +970,7 @@ index eff30a0..72eb3e9 100644
    const { T } = useTheme();
  
    const bg = recording ? (T.danger || '#ef4444') : transcribing ? T.inkMuted : T.emerald;
-@@ -395,8 +599,6 @@ function FloatingAssistant({ recording, transcribing, lifted, onPress }) {
+@@ -395,8 +648,6 @@ function FloatingAssistant({ recording, transcribing, lifted, onPress }) {
        accessibilityLabel={recording ? 'Stop recording' : 'Talk to the assistant'}
        style={({ pressed }) => [
          floatStyles.fab,
@@ -886,7 +980,7 @@ index eff30a0..72eb3e9 100644
        ]}
      >
 diff --git a/src/state/Navigation.js b/src/state/Navigation.js
-index 7aabd34..f7dfb7b 100644
+index 7aabd34..64abd93 100644
 --- a/src/state/Navigation.js
 +++ b/src/state/Navigation.js
 @@ -3,7 +3,7 @@
@@ -970,7 +1064,7 @@ index 7aabd34..f7dfb7b 100644
      });
    }, []);
  
-@@ -387,20 +396,31 @@ export function NavigationProvider({
+@@ -387,20 +396,47 @@ export function NavigationProvider({
  /* -------------------------------------------------------------------------- */
  
  export function NavigationTransitionView({ renderScreen }) {
@@ -982,17 +1076,33 @@ index 7aabd34..f7dfb7b 100644
 +  // (or incoming) screen renders statically underneath while the top screen
 +  // slides. Idle: single layer, exactly today's cost.
 +  const showUnderlay = isTransitioning && !!previous;
++  // iOS-style coordinated motion: as the top screen travels 0..W, the screen
++  // below parallaxes out to -30% under a fading dim — same visual language
++  // as the side drawer sliding over a dimmed backdrop. One Animated value
++  // drives all three layers, so they can never desync or jank apart.
++  const underShift = translateX.interpolate({
++    inputRange: [0, SCREEN_WIDTH],
++    outputRange: [0, -SCREEN_WIDTH * 0.3],
++  });
++  const underDim = translateX.interpolate({
++    inputRange: [0, SCREEN_WIDTH],
++    outputRange: [0, 0.25],
++  });
  
    return (
 -    <View style={sStyles.container}>
 +    <View style={[sStyles.container, { backgroundColor: T.bg }]}>
 +      {showUnderlay && (
-+        <View
++        <Animated.View
 +          key={`under-${previous.id}`}
-+          style={[sStyles.fill, sStyles.underlay, { backgroundColor: T.bg }]}
++          style={[sStyles.fill, sStyles.underlay, { backgroundColor: T.bg, transform: [{ translateX: underShift }] }]}
 +        >
 +          {renderScreen(previous, displayStack.length - 2)}
-+        </View>
++          <Animated.View
++            pointerEvents="none"
++            style={[sStyles.dim, { opacity: isTransitioning ? underDim : 0 }]}
++          />
++        </Animated.View>
 +      )}
        <Animated.View
 -        key={`${current.name}-${displayStack.length}`}
@@ -1009,7 +1119,7 @@ index 7aabd34..f7dfb7b 100644
          ]}
        >
          {renderScreen(current, displayStack.length - 1)}
-@@ -412,7 +432,6 @@ export function NavigationTransitionView({ renderScreen }) {
+@@ -412,7 +448,6 @@ export function NavigationTransitionView({ renderScreen }) {
  const sStyles = StyleSheet.create({
    container: {
      flex: 1,
@@ -1017,12 +1127,16 @@ index 7aabd34..f7dfb7b 100644
      overflow: 'hidden',
    },
    fill: {
-@@ -420,6 +439,9 @@ const sStyles = StyleSheet.create({
+@@ -420,6 +455,13 @@ const sStyles = StyleSheet.create({
      width: '100%',
      height: '100%',
    },
 +  underlay: {
 +    ...StyleSheet.absoluteFillObject,
++  },
++  dim: {
++    ...StyleSheet.absoluteFillObject,
++    backgroundColor: '#000',
 +  },
  });
  
@@ -1088,6 +1202,21 @@ index a50ed43..32883db 100644
      bars: { width: 20, alignItems: 'center', justifyContent: 'center' },
      bar: { width: 20, height: 2, borderRadius: 1, backgroundColor: S.ink, marginVertical: 2.25 },
      title: {
+diff --git a/src/ui/TabBar.js b/src/ui/TabBar.js
+index 6f75c25..561722a 100644
+--- a/src/ui/TabBar.js
++++ b/src/ui/TabBar.js
+@@ -155,6 +155,10 @@ export default function TabBar({ activeKey, onSelect, badges = {}, collapsed = f
+ const styles = StyleSheet.create({
+   wrap: {
+     flexDirection: 'row',
++    // Never let layout pressure (keyboard resize, foldables, inset flips)
++    // squeeze the bar into the system nav area. Height is measured, bottom
++    // padding always tracks the live safe-area inset (see bottomPad).
++    flexShrink: 0,
+     backgroundColor: 'rgba(255,255,255,0.94)',
+     borderTopWidth: 1,
+     paddingTop: 8,
 diff --git a/src/ui/kit.js b/src/ui/kit.js
 index 4d1abd4..6b39768 100644
 --- a/src/ui/kit.js

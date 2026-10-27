@@ -5,7 +5,14 @@ in this repo. You only need the URL and the test account below.
 
 ## Option A — hosted demo (recommended)
 
-- **API base:** `TODO_USER: paste deployed base URL, e.g. https://aya-demo.onrender.com`
+- **App:** Play Store internal-testing track (NOT the production release):
+  `TODO_USER: paste the internal-track opt-in link from Play Console`
+  Judges join via the link; no public production risk, available within hours.
+- **API base:** staging server running the event code:
+  `TODO_USER: paste deployed base URL, e.g. https://aya-demo.onrender.com`
+  (The staging build must bake in `EXPO_PUBLIC_API_URL=<staging base>` at
+  build time. Production `app.salmartonline.com.ng` does NOT run the event
+  code — do not point judges there.)
 - **Test account:** `TODO_USER: paste judge login (email + password) or a long-lived test JWT`
 - **Steps:**
   1. `GET {BASE}/api/assistant/status` — no auth. Confirms which brain is live

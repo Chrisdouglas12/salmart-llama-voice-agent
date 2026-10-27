@@ -195,6 +195,20 @@ vision model and are cropped server-side with ffmpeg.
 
 ## Verification (during the event)
 
+Runnable from this repo with zero dependencies (no Mongo, no keys, no host
+app) — this is the executable verification judges can run in seconds:
+
+```bash
+cd backend
+node --test tests/assistant-tasks.test.js
+```
+
+Expect **8/8 passing**: scope-change detection, correction-preserving draft
+merges, price-gate validation, confirm-gate shape, task TTL/expiry, and
+prompt-block honesty. `node --check` passes on every backend file.
+
+Also verified live during the event:
+
 - Live Meta chat + tool calling with `muse-spark-1.3`.
 - Photo understanding on a real image (`/ad-from-image` → `fill_ad`).
 - Speech-to-text with `muse-voice-transcribe-1.0`, including `m4a` → WAV.

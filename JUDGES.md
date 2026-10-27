@@ -3,17 +3,14 @@
 No API keys needed: all model keys live in the hosted server environment, never
 in this repo. You only need the URL and the test account below.
 
-## Option A — hosted demo (recommended)
+## Option A — live product (recommended)
 
-- **App:** Play Store internal-testing track (NOT the production release):
-  `TODO_USER: paste the internal-track opt-in link from Play Console`
-  Judges join via the link; no public production risk, available within hours.
-- **API base:** staging server running the event code:
-  `TODO_USER: paste deployed base URL, e.g. https://aya-demo.onrender.com`
-  (The staging build must bake in `EXPO_PUBLIC_API_URL=<staging base>` at
-  build time. Production `app.salmartonline.com.ng` does NOT run the event
-  code — do not point judges there.)
-- **Test account:** `TODO_USER: paste judge login (email + password) or a long-lived test JWT`
+- **App:** production build on the Play Store (includes the event code):
+  `TODO_USER: paste the Play Store listing link`
+- **API base:** production, `https://app.salmartonline.com.ng` (runs the event
+  code after deploy — verify `/api/assistant/status` reports
+  `meta-model-api` before recording).
+- **Test account:** `TODO_USER: paste judge login (email + password) — a sandbox seller with sample listings, not production data`
 - **Steps:**
   1. `GET {BASE}/api/assistant/status` — no auth. Confirms which brain is live
      (`meta-model-api` + `muse-spark-1.3` when the Meta key is healthy).

@@ -1,14 +1,16 @@
 # Mobile — event diff extract
 
-`salmart-mobile.event.patch` (+503/−30, base: pre-kickoff app commit `5ce993f`)
+`salmart-mobile.event.patch` (+582/−48, base: pre-kickoff app commit `5ce993f`)
 is the complete event frontend work. No pre-hackathon app code is copied into
 this repo.
 
-## What the patch adds (7 files)
+## What the patch adds (12 files)
 
 | File | Event change |
 | --- | --- |
 | `src/state/AssistantContext.js` | `sessionId`, product-card shaping, `add_to_cart`, gallery ranking, server-voice replies (`/speak` + expo-speech fallback), Shelfie scan → inline cards → cache crop → Create Ad, mic FAB allowlist, navigation |
+| `src/state/Navigation.js` | stable route ids (no remounts mid-transition), previous screen under slide-in/out, `showroomCreate`/`vtu` loader fixes |
+| `App.js` | cold-start fade (no hard cut), theme-driven system background, mount-on-tap panels |
 | `src/ui/kit.js` | `Sheet` lifts above the keyboard by measured overlap (all bottom sheets with inputs) |
 | `src/ui/Shell.js` | cart shortcut with live count badge in every panel header |
 | `src/screens/CartScreen.js` | assistant mic button in the cart header (the FAB does not render here) |
@@ -37,6 +39,7 @@ Use the laptop's LAN IP, not `localhost`; restart Metro after changing it
 (Expo inlines `EXPO_PUBLIC_*` at build time). Unset, the app uses its existing
 production hosts unchanged.
 
-Pre-existing modules referenced but not copied: `src/theme`,
-`src/state/{Navigation,AuthContext,CartContext}`, `src/ui/{kit,chat,cards}`,
-`src/chat/store`.
+Pre-existing modules referenced but not copied in full: `src/theme`,
+`src/state/{AuthContext,CartContext}`, `src/ui/{chat,cards}`,
+`src/chat/store`. (`src/state/Navigation.js`, `src/ui/kit.js`,
+`src/ui/Shell.js` are pre-existing files carrying event patches above.)

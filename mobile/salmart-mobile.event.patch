@@ -15,6 +15,118 @@ index 7d51f1d..1f6ea31 100644
 +# Use the machine's LAN IP, not localhost: a phone cannot reach your laptop's
 +# loopback address.
 +# EXPO_PUBLIC_API_URL=http://192.168.1.20:3000
+diff --git a/App.js b/App.js
+index 280bc50..567efec 100644
+--- a/App.js
++++ b/App.js
+@@ -27,6 +27,8 @@ import {
+   AppState,
+   useColorScheme,
+   InteractionManager,
++  Animated,
++  Easing,
+ } from 'react-native';
+ import {
+   SafeAreaProvider,
+@@ -58,7 +60,7 @@ import { configureNotificationDisplay, showForegroundNotification, showRichNotif
+ 
+ // ─── Native panel layer ──────────────────────────────────────────────────────
+ import { AuthProvider, useAuth } from './src/state/AuthContext';
+-import NavigationProvider, { useNav, useNavActions, useNavSelector, requireScreen, preloadScreens } from './src/state/Navigation';
++import NavigationProvider, { useNav, useNavActions, useNavSelector, requireScreen, preloadScreens, NavigationTransitionView } from './src/state/Navigation';
+ import { webPathFor, PANEL_ORDER } from './src/state/routes';
+ import { ChatProvider } from './src/state/ChatContext';
+ import { CartProvider } from './src/state/CartContext';
+@@ -1803,6 +1805,15 @@ function NativeHost() {
+     selectTab(key);
+   }, [selectTab]);
+ 
++  // Per-route renderer for the slide transition (non-panel screens). The
++  // full "could not load" fallback stays on the !Screen path above; mid-stack
++  // misses render as plain background so a transition can never crash.
++  const renderNativeRoute = useCallback(route => {
++    const S = requireScreen(route.name);
++    if (!S) return <View style={{ flex: 1, backgroundColor: T.bg }} />;
++    return <S route={{ params: route.params }} />;
++  }, [T.bg]);
++
+   const tabBar = isPanel ? (
+     <TabBar activeKey={visualPanel} onSelect={onSelectTab} badges={badges} collapsed={navbarCollapsed} />
+   ) : null;
+@@ -1866,7 +1877,7 @@ function NativeHost() {
+ 
+           {!isPanel && Screen && (
+             <View style={{ flex: 1 }}>
+-              <Screen route={{ params: currentParams }} />
++              <NavigationTransitionView renderScreen={renderNativeRoute} />
+             </View>
+           )}
+ 
+@@ -1981,6 +1992,13 @@ const PanelPage = React.memo(function PanelPage({ name, width, params, active, o
+ 
+   useEffect(() => {
+     if (ready) return undefined;
++    // The user explicitly asked for this tab: mount now, never make them
++    // stare at a blank page. The stagger below is only for background
++    // preloading the tabs they have NOT opened yet.
++    if (active) {
++      setReady(true);
++      return undefined;
++    }
+     let timer = null;
+     const handle = InteractionManager.runAfterInteractions(() => {
+       timer = setTimeout(() => setReady(true), 600 * order);
+@@ -1989,7 +2007,7 @@ const PanelPage = React.memo(function PanelPage({ name, width, params, active, o
+       handle.cancel();
+       if (timer) clearTimeout(timer);
+     };
+-  }, [ready, order]);
++  }, [ready, order, active]);
+ 
+   if (!ready) {
+     return <View style={{ width, flex: 1 }} />;
+@@ -2067,6 +2085,29 @@ function Root() {
+   const onAuthRoute = SIGNED_OUT_ROUTES.includes(currentName);
+   const showNative = ready && (isAuthenticated || onAuthRoute) && !inWeb;
+ 
++  // Cold start: the native layer used to pop over the boot UI in one frame
++  // (status-bar / system-nav jump on edge-to-edge devices). Fade it in
++  // instead — industry-standard handoff, no layout resize involved.
++  const nativeOpacity = useRef(new Animated.Value(0)).current;
++  useEffect(() => {
++    if (!showNative) return undefined;
++    nativeOpacity.setValue(0);
++    const anim = Animated.timing(nativeOpacity, {
++      toValue: 1,
++      duration: 220,
++      easing: Easing.out(Easing.quad),
++      useNativeDriver: true,
++    });
++    anim.start();
++    return () => anim.stop();
++  }, [showNative, nativeOpacity]);
++
++  // Root window behind the translucent system bars must match the theme.
++  // A hardcoded white here flashes behind the status/nav bars in dark mode.
++  useEffect(() => {
++    SystemUI.setBackgroundColorAsync(T.bg).catch(() => {});
++  }, [T.bg]);
++
+   return (
+     <View style={{ flex: 1 }}>
+       <StatusBar
+@@ -2076,9 +2117,9 @@ function Root() {
+       />
+       <MainApp webPath={webPath} />
+       {showNative && (
+-        <View style={[StyleSheet.absoluteFillObject, { backgroundColor: T.bg }]}>
++        <Animated.View style={[StyleSheet.absoluteFillObject, { backgroundColor: T.bg, opacity: nativeOpacity }]}>
+           <NativeHost />
+-        </View>
++        </Animated.View>
+       )}
+     </View>
+   );
 diff --git a/config.js b/config.js
 index 87bcf4f..1d29d40 100644
 --- a/config.js
@@ -774,10 +886,38 @@ index eff30a0..72eb3e9 100644
        ]}
      >
 diff --git a/src/state/Navigation.js b/src/state/Navigation.js
-index 7aabd34..2be6ae0 100644
+index 7aabd34..f7dfb7b 100644
 --- a/src/state/Navigation.js
 +++ b/src/state/Navigation.js
-@@ -88,6 +88,8 @@ const SCREEN_LOADERS = {
+@@ -3,7 +3,7 @@
+  *
+  * Optimized for:
+  * • permanently mounted panels (instant)
+- * • smooth slide for non-panel screens (only current screen visible)
++ * • smooth slide for non-panel screens (previous screen static underneath)
+  * • minimal rerenders
+  */
+ 
+@@ -38,12 +38,18 @@ import {
+   TAB_ROOTS,
+   WEBVIEW_ROUTES,
+ } from './routes';
++import { useTheme } from '../theme/theme';
+ 
+ /* -------------------------------------------------------------------------- */
+ /* CONSTANT LOOKUPS */
+ /* -------------------------------------------------------------------------- */
+ 
+ const PANEL_SET = new Set(TAB_ROOTS);
++// Stable per-entry ids so push/pop never remounts the screen underneath:
++// the underlay keeps its key across the transition (no refetch, no lost
++// draft text), and the leaving screen unmounts only after sliding out.
++let ROUTE_SEQ = 0;
++const nid = () => ++ROUTE_SEQ;
+ const SCREEN_WIDTH = Dimensions.get('window').width;
+ const ANIM_DURATION = 280;
+ const ANIM_EASING = Easing.out(Easing.cubic);
+@@ -88,6 +94,8 @@ const SCREEN_LOADERS = {
    CreateRequestScreen: () => require('../screens/CreateRequestScreen'),
    ShowroomsScreen: () => require('../screens/ShowroomsScreen'),
    ShowroomViewerScreen: () => require('../screens/ShowroomViewerScreen'),
@@ -786,6 +926,107 @@ index 7aabd34..2be6ae0 100644
  };
  
  const SCREEN_CACHE = Object.create(null);
+@@ -162,7 +170,7 @@ export function NavigationProvider({
+   onExit,
+ }) {
+   const [stack, setStack] = useState(() => [
+-    { name: initialRoute, params: {} },
++    { name: initialRoute, params: {}, id: nid() },
+   ]);
+   const [webPath, setWebPath] = useState(null);
+ 
+@@ -253,7 +261,7 @@ export function NavigationProvider({
+     ) {
+       return;
+     }
+-    const nextStack = [...stackRef.current, { name, params }];
++    const nextStack = [...stackRef.current, { name, params, id: nid() }];
+     animatePush(nextStack);
+   }, [animatePush]);
+ 
+@@ -261,7 +269,7 @@ export function NavigationProvider({
+     setWebPath(null);
+     setIsTransitioning(false);
+     translateX.setValue(0);
+-    setStack([{ name, params }]);
++    setStack([{ name, params, id: nid() }]);
+   }, [translateX]);
+ 
+   const pop = useCallback(() => {
+@@ -288,6 +296,7 @@ export function NavigationProvider({
+       const finalEntry = {
+         name,
+         params: name === 'profile' && bareTap ? {} : params,
++        id: nid(),
+       };
+       const finalEmpty = Object.keys(finalEntry.params).length === 0;
+ 
+@@ -310,7 +319,7 @@ export function NavigationProvider({
+       try { requireScreen(next.name); } catch (_e) {}
+       const after = PANEL_ORDER[index + direction * 2];
+       if (after) { try { requireScreen(after.name); } catch (_e) {} }
+-      return [...prev, { name: next.name, params: {} }];
++      return [...prev, { name: next.name, params: {}, id: nid() }];
+     });
+   }, []);
+ 
+@@ -387,20 +396,31 @@ export function NavigationProvider({
+ /* -------------------------------------------------------------------------- */
+ 
+ export function NavigationTransitionView({ renderScreen }) {
++  const { T } = useTheme();
+   const { displayStack, isTransitioning, translateX } = useNav();
+   const current = displayStack[displayStack.length - 1];
++  const previous = displayStack.length > 1 ? displayStack[displayStack.length - 2] : null;
++  // During push AND pop the stack still holds both screens, so the outgoing
++  // (or incoming) screen renders statically underneath while the top screen
++  // slides. Idle: single layer, exactly today's cost.
++  const showUnderlay = isTransitioning && !!previous;
+ 
+   return (
+-    <View style={sStyles.container}>
++    <View style={[sStyles.container, { backgroundColor: T.bg }]}>
++      {showUnderlay && (
++        <View
++          key={`under-${previous.id}`}
++          style={[sStyles.fill, sStyles.underlay, { backgroundColor: T.bg }]}
++        >
++          {renderScreen(previous, displayStack.length - 2)}
++        </View>
++      )}
+       <Animated.View
+-        key={`${current.name}-${displayStack.length}`}
++        key={`top-${current.id}`}
+         style={[
+           sStyles.fill,
+-          {
+-            // Opaque background prevents seeing market behind
+-            backgroundColor: '#FFFFFF',
+-            transform: [{ translateX: isTransitioning ? translateX : 0 }],
+-          },
++          { backgroundColor: T.bg },
++          { transform: [{ translateX: isTransitioning ? translateX : 0 }] },
+         ]}
+       >
+         {renderScreen(current, displayStack.length - 1)}
+@@ -412,7 +432,6 @@ export function NavigationTransitionView({ renderScreen }) {
+ const sStyles = StyleSheet.create({
+   container: {
+     flex: 1,
+-    backgroundColor: '#FFFFFF',
+     overflow: 'hidden',
+   },
+   fill: {
+@@ -420,6 +439,9 @@ const sStyles = StyleSheet.create({
+     width: '100%',
+     height: '100%',
+   },
++  underlay: {
++    ...StyleSheet.absoluteFillObject,
++  },
+ });
+ 
+ /* -------------------------------------------------------------------------- */
 diff --git a/src/ui/Shell.js b/src/ui/Shell.js
 index a50ed43..32883db 100644
 --- a/src/ui/Shell.js

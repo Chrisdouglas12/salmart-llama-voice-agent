@@ -1,14 +1,14 @@
 # Mobile — event diff extract
 
-`salmart-mobile.event.patch` (+670/−53, base: pre-kickoff app commit `5ce993f`)
+`salmart-mobile.event.patch` (+859/−56, base: pre-kickoff app commit `5ce993f`)
 is the complete event frontend work. No pre-hackathon app code is copied into
 this repo.
 
-## What the patch adds (14 files)
+## What the patch adds (17 files)
 
 | File | Event change |
 | --- | --- |
-| `src/state/AssistantContext.js` | `sessionId`, product-card shaping, `add_to_cart`, gallery ranking, server-voice replies (`/speak` + expo-speech fallback), Shelfie scan → inline cards → cache crop → Create Ad, mic FAB allowlist, navigation |
+| `src/state/AssistantContext.js` | `sessionId`, product-card shaping, `add_to_cart`, gallery ranking, server-voice replies (`/speak` + expo-speech fallback), Shelfie scan → inline cards → cache crop → Create Ad, mic FAB allowlist, profile/request patch channels, search-page preference, all-screen navigation |
 | `src/state/Navigation.js` | stable route ids (no remounts mid-transition), iOS-style parallax + dim underlay, `showroomCreate`/`vtu` loader fixes |
 | `src/ui/TabBar.js` | bar can never be squeezed into the system nav area |
 | `src/screens/CreateAdScreen.js` | cover-photo pipeline: standardize + vision-read, description fills live and editable |
@@ -17,6 +17,9 @@ this repo.
 | `src/ui/Shell.js` | cart shortcut with live count badge in every panel header |
 | `src/screens/CartScreen.js` | assistant mic button in the cart header (the FAB does not render here) |
 | `src/screens/AssistantScreen.js` | brain label from `/status`, shelf scan button, `Scan my shelf` chip, inline draft row |
+| `src/screens/SearchScreen.js` | loads voice queries + price/category filters from route params |
+| `src/screens/EditProfileScreen.js` | voice fill for name/bio/state/city (validated; photo/phone/bank/password stay manual, Save stays manual) |
+| `src/screens/CreateRequestScreen.js` | voice fill for category/text/budget/location (photo stays manual, posting stays manual) |
 | `src/api/endpoints.js` | `assistantStatus()`, `assistantShelfScan()`, `assistantSpeak()`, `assistantPhotoClean()`, `sessionId` on `/chat` |
 | `src/api/client.js` | full-origin `EXPO_PUBLIC_API_URL` override, no production failover for it |
 | `src/assistant/dialog.js` | one `Scan my shelf` starter chip |

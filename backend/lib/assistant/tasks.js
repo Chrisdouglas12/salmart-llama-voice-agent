@@ -46,6 +46,40 @@ function mergeTaskDraft(task, fields) {
  * Returns { ok, unchanged, price } or { ok:false, error }. Whole Naira:
  * fractional input is rounded, never rejected, so the model is not punished
  * for "70000.00". Anything absurd needs a human re-check, not a write. */
+/* Pure field normalizers shared by the profile/request fill tools and tests.
+ * Only safe, non-sensitive fields pass: names, bio, state, city for profiles;
+ * category, text, budget, location for requests. Passwords, phones, bank
+ * details, photos and files are NEVER fillable — those stay manual. */
+function normalizeProfilePatch(raw, validStates) {
+  const out = {};
+  const str = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
+  if (raw.firstName && str(raw.firstName, 40)) out.firstName = str(raw.firstName, 40);
+  if (raw.lastName && str(raw.lastName, 40)) out.lastName = str(raw.lastName, 40);
+  if (raw.bio !== undefined && str(raw.bio, 500)) out.bio = str(raw.bio, 500);
+  const states = Array.isArray(validStates) ? validStates : [];
+  const matchState = v => {
+    const s = String(v == null ? '' : v).trim().toLowerCase();
+    if (!s) return '';
+    return states.find(x => String(x).toLowerCase() === s) || '';
+  };
+  if (raw.state && matchState(raw.state)) out.state = matchState(raw.state);
+  if (raw.city && str(raw.city, 60)) out.city = str(raw.city, 60);
+  return out;
+}
+
+function normalizeRequestPatch(raw) {
+  const out = {};
+  const str = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
+  if (raw.category && str(raw.category, 40)) out.category = str(raw.category, 40);
+  if (raw.text && str(raw.text, 1000)) out.text = str(raw.text, 1000);
+  if (raw.budget !== undefined && raw.budget !== null && raw.budget !== '') {
+    const n = Number(raw.budget);
+    if (Number.isFinite(n) && n >= 0 && n <= 1000000000) out.budget = String(Math.round(n));
+  }
+  if (raw.location && str(raw.location, 80)) out.location = str(raw.location, 80);
+  return out;
+}
+
 function validatePriceChange(currentPrice, newPrice) {
   const next = Number(newPrice);
   if (!Number.isFinite(next)) return { ok: false, error: 'Give a price in Naira, e.g. 70000.' };
@@ -127,6 +161,8 @@ module.exports = {
   createTask,
   mergeTaskDraft,
   validatePriceChange,
+  normalizeProfilePatch,
+  normalizeRequestPatch,
   proposePriceChange,
   formatTaskBlock,
   TaskStore,

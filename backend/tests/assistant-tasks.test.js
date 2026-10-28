@@ -12,6 +12,8 @@ const {
   scopeResetDetected,
   mergeTaskDraft,
   validatePriceChange,
+  normalizeProfilePatch,
+  normalizeRequestPatch,
   proposePriceChange,
   formatTaskBlock,
   TaskStore,
@@ -91,4 +93,26 @@ test('prompt block: reflects goal, draft and last results honestly', () => {
   assert.match(block, /sell shoes/);
   assert.match(block, /price=70000/);
   assert.match(block, /get_my_listings x3/);
+});
+
+test('profile patch: safe fields pass, sensitive keys never do', () => {
+  const states = ['Lagos', 'FCT - Abuja'];
+  const out = normalizeProfilePatch({
+    firstName: ' Ada ', lastName: 'Obi', bio: 'Seller of shoes', state: 'lagos', city: 'Ikeja',
+    password: 'secret', phone: '0803', bankName: 'X', photo: { uri: 'y' },
+  }, states);
+  assert.deepEqual(out, { firstName: 'Ada', lastName: 'Obi', bio: 'Seller of shoes', state: 'Lagos', city: 'Ikeja' });
+  assert.deepEqual(normalizeProfilePatch({ state: 'Narnia', city: 'X' }, states), { city: 'X' });
+  assert.deepEqual(normalizeProfilePatch({ password: 'x' }, states), {});
+  assert.deepEqual(normalizeProfilePatch({}, states), {});
+});
+
+test('request patch: trims, caps and validates budget', () => {
+  assert.deepEqual(
+    normalizeRequestPatch({ category: 'fashion', text: ' need shoes ', budget: 50000, location: 'Lagos' }),
+    { category: 'fashion', text: 'need shoes', budget: '50000', location: 'Lagos' },
+  );
+  assert.deepEqual(normalizeRequestPatch({ budget: -5 }).budget, undefined);
+  assert.deepEqual(normalizeRequestPatch({ budget: 'free' }).budget, undefined);
+  assert.deepEqual(normalizeRequestPatch({}).constructor, Object);
 });

@@ -252,7 +252,7 @@ index 6609214..49a4600 100644
      { label: 'Fairly used sofa', action: 'ask:fairly used sofa in Lagos' },
      { label: 'Deals today', action: 'ask:show me deals' },
 diff --git a/src/screens/AssistantScreen.js b/src/screens/AssistantScreen.js
-index 8cb8221..345bb32 100644
+index 8cb8221..227d72a 100644
 --- a/src/screens/AssistantScreen.js
 +++ b/src/screens/AssistantScreen.js
 @@ -5,7 +5,7 @@
@@ -273,7 +273,7 @@ index 8cb8221..345bb32 100644
  } from '../api/endpoints';
  
  import {
-@@ -56,6 +56,11 @@ const SCREEN_ROUTE = {
+@@ -56,6 +56,17 @@ const SCREEN_ROUTE = {
    market: 'market',
    search: 'search',
    create_ad: 'createAd',
@@ -282,10 +282,16 @@ index 8cb8221..345bb32 100644
 +  showrooms: 'showrooms',
 +  showroom: 'showroom',
 +  promote: 'promote',
++  alerts: 'alerts',
++  group: 'group',
++  assistant: 'assistant',
++  createRequest: 'createRequest',
++  showroomCreate: 'showroomCreate',
++  vtu: 'vtu',
  };
  
  const KEY_SESSION = Math.random().toString(36).slice(2, 8);
-@@ -298,6 +303,55 @@ function ProductRow({ item, styles, T, tapListing, openCheckout, chatSeller, onC
+@@ -298,6 +309,55 @@ function ProductRow({ item, styles, T, tapListing, openCheckout, chatSeller, onC
    );
  }
  
@@ -341,7 +347,7 @@ index 8cb8221..345bb32 100644
  function CartRow({ item, styles, T, onViewCart, showAvatar }) {
    const ok = !!item.verified;
    const price = item.price != null && item.price !== '' ? `₦${Number(item.price).toLocaleString()}${item.quantity > 1 ? ` × ${item.quantity}` : ''}` : '';
-@@ -345,6 +399,7 @@ export default function AssistantScreen() {
+@@ -345,6 +405,7 @@ export default function AssistantScreen() {
    // ── GLOBAL STATE ──
    const {
      messages, setMessages, isBusy: busy, isReady, setIsReady, processMessage,
@@ -349,7 +355,7 @@ index 8cb8221..345bb32 100644
      recording, transcribing, toggleMic,
      attachedImage, setAttachedImage,
    } = useAssistant();
-@@ -358,6 +413,9 @@ export default function AssistantScreen() {
+@@ -358,6 +419,9 @@ export default function AssistantScreen() {
    const [menuOpen, setMenuOpen] = useState(false);
    const [scanChats, setScanChats] = useState(false);
    const [scanning, setScanning] = useState(false);
@@ -359,7 +365,7 @@ index 8cb8221..345bb32 100644
  
    const profileRef = useRef(null);
    const slotsRef = useRef(slots);
-@@ -395,6 +453,14 @@ export default function AssistantScreen() {
+@@ -395,6 +459,14 @@ export default function AssistantScreen() {
  
    useEffect(() => { apiGet('/api/assistant/ping', { retries: 0 }).catch(() => {}); }, []);
  
@@ -374,7 +380,7 @@ index 8cb8221..345bb32 100644
    useEffect(() => {
      if (!isReady || !messages.length) return;
      saveThread({ messages: messages.slice(-60), slots });
-@@ -441,6 +507,46 @@ export default function AssistantScreen() {
+@@ -441,6 +513,46 @@ export default function AssistantScreen() {
      } catch (_e) {}
    }, [push, setAttachedImage]);
  
@@ -421,7 +427,7 @@ index 8cb8221..345bb32 100644
    const runSearch = useCallback(async nextSlots => {
      const params = buildSearchParams(nextSlots);
      const loadingKey = nextKey();
-@@ -526,6 +632,7 @@ export default function AssistantScreen() {
+@@ -526,6 +638,7 @@ export default function AssistantScreen() {
      }
      if (action.startsWith('ask:')) { handleSend(action.slice(4)); return; }
      if (action.startsWith('cat:')) { handleSend(`show me ${action.slice(4)}`); return; }
@@ -429,7 +435,7 @@ index 8cb8221..345bb32 100644
  
      if (action === 'clear') {
        setSlots(emptySlots());
-@@ -556,7 +663,7 @@ export default function AssistantScreen() {
+@@ -556,7 +669,7 @@ export default function AssistantScreen() {
  
      setSlots(next);
      await runSearch(next);
@@ -438,7 +444,7 @@ index 8cb8221..345bb32 100644
  
    const openCheckout = useCallback(async (listing) => {
      if (!listing?._id) return;
-@@ -606,6 +713,7 @@ export default function AssistantScreen() {
+@@ -606,6 +719,7 @@ export default function AssistantScreen() {
  
      if (item.kind === 'loading') return <LoadingRow styles={styles} T={T} showAvatar={showAvatar} />;
      if (item.kind === 'products') return <ProductRow item={item} styles={styles} T={T} tapListing={tapListing} openCheckout={openCheckout} chatSeller={chatSeller} onChip={onChip} showAvatar={showAvatar} isLast={isLast} />;
@@ -446,7 +452,7 @@ index 8cb8221..345bb32 100644
      if (item.kind === 'cart') return <CartRow item={item} styles={styles} T={T} onViewCart={viewCart} showAvatar={showAvatar} />;
      if (item.role === 'bot') return <BotTextRow item={item} styles={styles} onChip={onChip} showAvatar={showAvatar} isLast={isLast} />;
  
-@@ -617,10 +725,16 @@ export default function AssistantScreen() {
+@@ -617,10 +731,16 @@ export default function AssistantScreen() {
          </View>
        </View>
      );
@@ -464,7 +470,7 @@ index 8cb8221..345bb32 100644
    const subtitle = recording
      ? 'listening… tap the mic to stop'
      : transcribing
-@@ -629,7 +743,7 @@ export default function AssistantScreen() {
+@@ -629,7 +749,7 @@ export default function AssistantScreen() {
          ? 'thinking…'
          : offlineRef.current
            ? 'Offline mode · basic search'
@@ -473,7 +479,7 @@ index 8cb8221..345bb32 100644
  
    const micDisabled = busy || transcribing;
    const micColor = recording ? (T.danger || '#ef4444') : T.emerald;
-@@ -686,6 +800,10 @@ export default function AssistantScreen() {
+@@ -686,6 +806,10 @@ export default function AssistantScreen() {
              <ChatComposer value={text} onChangeText={setText} onSend={() => handleSend()} disabled={busy || recording || transcribing} placeholder={recording ? 'Listening…' : transcribing ? 'Transcribing…' : attachedImage ? 'Price, condition, where…' : 'Ask for any product…'} />
            </View>
  
@@ -484,7 +490,7 @@ index 8cb8221..345bb32 100644
            <Pressable onPress={attachPhoto} disabled={micDisabled || recording} style={({ pressed }) => [styles.attachBtn, { opacity: micDisabled || recording ? 0.5 : pressed ? 0.8 : 1 }]} accessibilityRole="button" accessibilityLabel="Attach a photo of an item to sell">
              <Ionicons name="image-outline" size={20} color={T.emerald} />
            </Pressable>
-@@ -732,6 +850,15 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+@@ -732,6 +856,15 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
    bubbleMine: { backgroundColor: T.emerald, borderTopRightRadius: 6 },
    userImg: { width: 190, height: 190, borderRadius: 12, marginBottom: 6, backgroundColor: 'rgba(255,255,255,0.15)' },
    productsCard: { backgroundColor: T.card, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: T.border, padding: T.space.sm, alignSelf: 'stretch', maxWidth: '100%', overflow: 'hidden', ...shadow(1) },
@@ -628,8 +634,151 @@ index 24385d5..9d2ea99 100644
    topCenter: { flex: 1, flexDirection: 'row', alignItems: 'center' },
    publishBtn: {
      backgroundColor: T.emerald, paddingHorizontal: 16, height: 32,
+diff --git a/src/screens/CreateRequestScreen.js b/src/screens/CreateRequestScreen.js
+index 98600e1..c9edae3 100644
+--- a/src/screens/CreateRequestScreen.js
++++ b/src/screens/CreateRequestScreen.js
+@@ -37,7 +37,7 @@
+  * shown verbatim; the client-side checks exist only to make that failure fast.
+  */
+ 
+-import React, { useCallback, useMemo, useState } from 'react';
++import React, { useCallback, useEffect, useMemo, useState } from 'react';
+ import {
+   Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View,
+ } from 'react-native';
+@@ -47,6 +47,7 @@ import * as ImagePicker from 'expo-image-picker';
+ 
+ import { createThemed, useTheme, CATEGORIES, REQUEST_CATEGORIES } from '../theme/theme';
+ import { useNav } from '../state/Navigation';
++import { useAssistant } from '../state/AssistantContext';
+ import { invalidate } from '../offline/cache';
+ import * as api from '../api/requests';
+ import {
+@@ -84,6 +85,24 @@ export default function CreateRequestScreen({ route }) {
+   const [error, setError] = useState('');
+   const [busy, setBusy] = useState(false);
+ 
++  // ─── Assistant fill ───────────────────────────────────────────────────
++  // Voice-driven fill (category, text, budget, location). Category must be
++  // one of the six the endpoint accepts; photo stays manual; the user posts.
++  const { requestPatch, ackRequestPatch } = useAssistant();
++  useEffect(() => {
++    if (!requestPatch) return;
++    const patch = requestPatch;
++    ackRequestPatch(patch.id);
++    const f = patch.fields || {};
++    if (f.category && REQUEST_CATEGORIES.includes(f.category)) setCategory(f.category);
++    if (f.text) setText(String(f.text).slice(0, TEXT_MAX));
++    if (f.budget !== undefined && f.budget !== '') setBudget(String(f.budget));
++    if (f.location) setLocation(String(f.location));
++    setErrs({});
++    setError('');
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [requestPatch]);
++
+   const canSubmit = useMemo(() => !!category && !!text.trim(), [category, text]);
+ 
+   const reset = useCallback(() => {
+diff --git a/src/screens/EditProfileScreen.js b/src/screens/EditProfileScreen.js
+index 3c7b044..4138be1 100644
+--- a/src/screens/EditProfileScreen.js
++++ b/src/screens/EditProfileScreen.js
+@@ -32,6 +32,7 @@ import * as ImagePicker from 'expo-image-picker';
+ import { createThemed, useTheme } from '../theme/theme';
+ import { useAuth } from '../state/AuthContext';
+ import { useNav } from '../state/Navigation';
++import { useAssistant } from '../state/AssistantContext';
+ import {
+   Avatar, Button, Divider, Input, Sheet, Small, T2, T3, Tiny, Toast,
+ } from '../ui/kit';
+@@ -190,6 +191,43 @@ export default function EditProfileScreen() {
+ 
+   useEffect(() => { load(); }, [load]);
+ 
++  // ─── Assistant fill ─────────────────────────────────────────────────────
++  // Voice-driven field fill (firstName, lastName, bio, state, city only).
++  // Runs after the profile + option lists load so state/city can be matched
++  // against real options — anything else (photo, phone, bank, password) is
++  // ignored even if present. Saving stays manual via the Save button.
++  const { profilePatch, ackProfilePatch } = useAssistant();
++  useEffect(() => {
++    if (!profilePatch || loading) return;
++    const patch = profilePatch;
++    ackProfilePatch(patch.id);
++    const f = patch.fields || {};
++    const filled = [];
++    if (f.firstName) { setFirstName(String(f.firstName)); filled.push('name'); }
++    if (f.lastName) { setLastName(String(f.lastName)); if (!filled.includes('name')) filled.push('name'); }
++    if (f.bio !== undefined) { setBio(String(f.bio).slice(0, 500)); filled.push('bio'); }
++    if (f.state) {
++      const hit = states.find(s => stateNameOf(s).toLowerCase() === String(f.state).toLowerCase());
++      if (hit) {
++        const canonical = stateNameOf(hit);
++        setState(canonical);
++        setCity('');
++        filled.push('state');
++        if (f.city) {
++          const lgas = lgasOf(hit);
++          const cityHit = lgas.find(c => String(c).toLowerCase() === String(f.city).toLowerCase());
++          if (cityHit) { setCity(String(cityHit)); filled.push('city'); }
++        }
++      }
++    } else if (f.city) {
++      setCity(String(f.city).slice(0, 60));
++      filled.push('city');
++    }
++    setError('');
++    setToast({ message: filled.length ? `Assistant filled: ${filled.join(', ')}. Review and tap Save.` : 'Nothing to fill — tell me your name, bio or state.' });
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [profilePatch, loading]);
++
+   useEffect(() => {
+     if (!toast) return undefined;
+     const id = setTimeout(() => setToast(null), 2200);
+diff --git a/src/screens/SearchScreen.js b/src/screens/SearchScreen.js
+index f40ae46..0cdee3a 100644
+--- a/src/screens/SearchScreen.js
++++ b/src/screens/SearchScreen.js
+@@ -129,7 +129,7 @@ const buildRows = (items, dealPost) => {
+   return out;
+ };
+ 
+-export default function SearchScreen() {
++export default function SearchScreen({ route }) {
+   const { T } = useTheme();
+   const styles = useStyles();
+   const nav = useNavActions();
+@@ -181,6 +181,27 @@ export default function SearchScreen() {
+     AsyncStorage.setItem(RECENT_KEY, JSON.stringify(next)).catch(() => {});
+   }, [recent]);
+ 
++  // Voice entry: the assistant navigates here with { query, minPrice,
++  // maxPrice, category, condition, location }. Apply them so the page loads
++  // the same results the thread describes — the debounce below runs the
++  // search automatically. Manual typing afterwards works untouched.
++  const agentParams = route?.params || {};
++  useEffect(() => {
++    const q = String(agentParams.query || '').trim();
++    if (q) {
++      setQuery(q);
++      remember(q);
++    }
++    const f = {};
++    if (agentParams.minPrice !== undefined && agentParams.minPrice !== '') f.minPrice = String(agentParams.minPrice);
++    if (agentParams.maxPrice !== undefined && agentParams.maxPrice !== '') f.maxPrice = String(agentParams.maxPrice);
++    if (agentParams.category) f.category = String(agentParams.category);
++    if (agentParams.condition) f.condition = String(agentParams.condition);
++    if (agentParams.location) f.location = String(agentParams.location);
++    if (Object.keys(f).length) setFilters(prev => ({ ...EMPTY_FILTERS, ...prev, ...f }));
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [agentParams.query, agentParams.minPrice, agentParams.maxPrice, agentParams.category, agentParams.condition, agentParams.location]);
++
+   // Debounce the search term for results
+   useEffect(() => {
+     const id = setTimeout(() => {
 diff --git a/src/state/AssistantContext.js b/src/state/AssistantContext.js
-index eff30a0..fb80f25 100644
+index eff30a0..8a2efdd 100644
 --- a/src/state/AssistantContext.js
 +++ b/src/state/AssistantContext.js
 @@ -4,12 +4,16 @@ import { Audio } from 'expo-av';
@@ -650,7 +799,7 @@ index eff30a0..fb80f25 100644
  
  const AssistantContext = createContext(null);
  
-@@ -17,11 +21,47 @@ const AssistantContext = createContext(null);
+@@ -17,11 +21,50 @@ const AssistantContext = createContext(null);
  const SCREEN_ROUTE = {
    cart: 'cart', checkout: 'checkout', deals: 'deals', profile: 'profile',
    referral: 'referral', market: 'market', search: 'search', create_ad: 'createAd',
@@ -659,6 +808,9 @@ index eff30a0..fb80f25 100644
 +  // Agent-reachable management screens (server NAV_SCREENS extended in Phase 3).
 +  ads: 'ads', editProfile: 'editProfile', showrooms: 'showrooms',
 +  showroom: 'showroom', promote: 'promote',
++  // Full intent coverage: every non-auth screen is voice-reachable.
++  alerts: 'alerts', group: 'group', assistant: 'assistant',
++  createRequest: 'createRequest', showroomCreate: 'showroomCreate', vtu: 'vtu',
  };
  
 +/**
@@ -698,7 +850,7 @@ index eff30a0..fb80f25 100644
  // The create-ad form route. NOTE: 'ads' is the My Ads list, not the form.
  const AD_FORM_ROUTE = 'createAd';
  // What the server calls the create-ad screen in its prompt/context.
-@@ -33,11 +73,45 @@ const CHAT_TIMEOUT_MS = 65000;
+@@ -33,11 +76,45 @@ const CHAT_TIMEOUT_MS = 65000;
  // An unconsumed patch (form never opened) must not leak into a later session.
  const AD_PATCH_TTL_MS = 2 * 60 * 1000;
  
@@ -748,7 +900,7 @@ index eff30a0..fb80f25 100644
  };
  
  const VOICE_OPTIONS = {
-@@ -50,6 +124,8 @@ const MAX_RECORD_MS = 60 * 1000;
+@@ -50,6 +127,8 @@ const MAX_RECORD_MS = 60 * 1000;
  
  export function AssistantProvider({ children }) {
    const nav = useNav();
@@ -757,7 +909,42 @@ index eff30a0..fb80f25 100644
    const screen = useNavSelector(s => s.current.name);
    const screenRef = useRef(screen);
    screenRef.current = screen;
-@@ -156,6 +232,7 @@ export function AssistantProvider({ children }) {
+@@ -73,6 +152,15 @@ export function AssistantProvider({ children }) {
+   const reportAdSnapshot = useCallback(s => { adSnapshotRef.current = s; }, []);
+   const ackAdPatch = useCallback(id => setAdPatch(p => (p && p.id === id ? null : p)), []);
+ 
++  // profilePatch / requestPatch: same channel for EditProfileScreen and
++  // CreateRequestScreen. Whitelisted safe fields only (never passwords, bank
++  // details, phones or photos); each screen applies and acks. Saving and
++  // posting stay manual — the user taps Save / Post request.
++  const [profilePatch, setProfilePatch] = useState(null);
++  const [requestPatch, setRequestPatch] = useState(null);
++  const ackProfilePatch = useCallback(id => setProfilePatch(p => (p && p.id === id ? null : p)), []);
++  const ackRequestPatch = useCallback(id => setRequestPatch(p => (p && p.id === id ? null : p)), []);
++
+   // Photo attached in chat. Lives here so voice, text and the floating mic all see it.
+   const [attachedImage, setAttachedImage] = useState(null);
+   const attachedImageRef = useRef(null);
+@@ -107,6 +195,18 @@ export function AssistantProvider({ children }) {
+     return () => clearTimeout(id);
+   }, [adPatch, ackAdPatch]);
+ 
++  useEffect(() => {
++    if (!profilePatch) return undefined;
++    const id = setTimeout(() => ackProfilePatch(profilePatch.id), AD_PATCH_TTL_MS);
++    return () => clearTimeout(id);
++  }, [profilePatch, ackProfilePatch]);
++
++  useEffect(() => {
++    if (!requestPatch) return undefined;
++    const id = setTimeout(() => ackRequestPatch(requestPatch.id), AD_PATCH_TTL_MS);
++    return () => clearTimeout(id);
++  }, [requestPatch, ackRequestPatch]);
++
+   // ── Gallery scan ──────────────────────────────────────────────────────────
+   const startGalleryScan = useCallback(async ({ query, hoursBack, note, history, speakOnReady }) => {
+     const id = `g-${Date.now()}`;
+@@ -156,6 +256,7 @@ export function AssistantProvider({ children }) {
          : assistantChat({
            messages: [{ role: 'user', content: clean }],
            history,
@@ -765,14 +952,35 @@ index eff30a0..fb80f25 100644
            // Use the server's vocabulary so form-edit mode switches on there.
            context: {
              screen: onForm ? SERVER_AD_SCREEN : screenRef.current,
-@@ -223,7 +300,45 @@ export function AssistantProvider({ children }) {
+@@ -223,13 +324,74 @@ export function AssistantProvider({ children }) {
          return true;
        }
  
 -      // 4. Perform Navigation
++      // 3b. Profile + request forms: same patch channel, other screens.
++      // Saving and posting stay manual — the user taps Save / Post request.
++      const prof = actions.find(a => a && a.type === 'fill_profile' && a.fields);
++      if (prof) {
++        setProfilePatch({ id: `${Date.now()}-profile`, fields: prof.fields, say: reply });
++        if (screenRef.current !== 'editProfile') nav.push('editProfile');
++        if (opts.speak) speak(reply);
++        return true;
++      }
++      const freq = actions.find(a => a && a.type === 'fill_request' && a.fields);
++      if (freq) {
++        setRequestPatch({ id: `${Date.now()}-request`, fields: freq.fields, say: reply });
++        if (screenRef.current !== 'createRequest') nav.push('createRequest');
++        if (opts.speak) speak(reply);
++        return true;
++      }
++
 +      // 4. Shopping results stay in the assistant thread, exactly like a
 +      //    typed search. Tapping a card opens checkout / the seller chat.
-+      if (Array.isArray(res.products) && res.products.length) {
++      //    Exception: the model explicitly sent the buyer to the search page
++      //    (navigate search with a query) — then the page loads the results
++      //    and pushing the thread instead would hide them.
++      const wantsSearchPage = (navs || []).some(n => n && n.screen === 'search');
++      if (Array.isArray(res.products) && res.products.length && !wantsSearchPage) {
 +        const listings = res.products.map(toListing).filter(Boolean);
 +        setMessages(prev => [
 +          ...prev,
@@ -812,7 +1020,16 @@ index eff30a0..fb80f25 100644
        if (navs.length && Date.now() - lastNavRef.current > 800) {
          lastNavRef.current = Date.now();
          for (const n of navs) {
-@@ -252,7 +367,7 @@ export function AssistantProvider({ children }) {
+           const route = SCREEN_ROUTE[n.screen];
+           if (!route) continue;
+-          if (route === screenRef.current) break; // already there
++          // Already there — except search with a fresh query, which must
++          // load (the page watches its route params).
++          if (route === screenRef.current && n.screen !== 'search') break;
+           if (n.screen === 'checkout' && n.postId) {
+             nav.push(route, { postId: n.postId, listing: { _id: n.postId, title: n.title, price: n.price, postType: n.productType }, productType: n.productType });
+           } else {
+@@ -252,7 +414,7 @@ export function AssistantProvider({ children }) {
      } finally {
        setIsBusy(false);
      }
@@ -821,7 +1038,7 @@ index eff30a0..fb80f25 100644
  
    // ── Gallery choose: tap or voice -> full-size photo -> ad-from-image ──────
    const chooseCandidate = useCallback(async (cand) => {
-@@ -274,6 +389,168 @@ export function AssistantProvider({ children }) {
+@@ -274,6 +436,168 @@ export function AssistantProvider({ children }) {
      if (c) chooseCandidate(c);
    };
  
@@ -990,7 +1207,7 @@ index eff30a0..fb80f25 100644
    // ── Global Voice Logic ────────────────────────────────────────────────────
    const stopAndTranscribe = useCallback(async (history) => {
      if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
-@@ -320,6 +597,7 @@ export function AssistantProvider({ children }) {
+@@ -320,6 +644,7 @@ export function AssistantProvider({ children }) {
      try {
        Keyboard.dismiss();
        try { Speech.stop(); } catch (_e) { /* ignore */ }
@@ -998,7 +1215,7 @@ index eff30a0..fb80f25 100644
        const perm = await Audio.requestPermissionsAsync();
        if (!perm?.granted) {
          setMessages(prev => [...prev, { key: `err-${Date.now()}`, role: 'bot', kind: 'text', text: 'Please allow microphone access.', at: Date.now() }]);
-@@ -343,6 +621,7 @@ export function AssistantProvider({ children }) {
+@@ -343,6 +668,7 @@ export function AssistantProvider({ children }) {
    useEffect(() => () => {
      if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
      try { Speech.stop(); } catch (_e) { /* ignore */ }
@@ -1006,7 +1223,7 @@ index eff30a0..fb80f25 100644
      const rec = recorderRef.current;
      recorderRef.current = null;
      if (rec) rec.stopAndUnloadAsync().catch(() => {});
-@@ -351,6 +630,7 @@ export function AssistantProvider({ children }) {
+@@ -351,19 +677,20 @@ export function AssistantProvider({ children }) {
    return (
      <AssistantContext.Provider value={{
        messages, setMessages, isBusy, isReady, setIsReady, processMessage,
@@ -1014,7 +1231,8 @@ index eff30a0..fb80f25 100644
        recording, transcribing, toggleMic,
        attachedImage, setAttachedImage,
        adPatch, ackAdPatch, reportAdSnapshot,
-@@ -358,12 +638,11 @@ export function AssistantProvider({ children }) {
++      profilePatch, ackProfilePatch, requestPatch, ackRequestPatch,
+       gallery, closeGallery,
      }}>
        {children}
  
@@ -1029,7 +1247,7 @@ index eff30a0..fb80f25 100644
            onPress={() => toggleMic(toHistory(messages))}
          />
        )}
-@@ -382,7 +661,7 @@ export function AssistantProvider({ children }) {
+@@ -382,7 +709,7 @@ export function AssistantProvider({ children }) {
  }
  
  // ─── Global Floating Mic ──────────────────────────────────────────────────────
@@ -1038,7 +1256,7 @@ index eff30a0..fb80f25 100644
    const { T } = useTheme();
  
    const bg = recording ? (T.danger || '#ef4444') : transcribing ? T.inkMuted : T.emerald;
-@@ -395,8 +674,6 @@ function FloatingAssistant({ recording, transcribing, lifted, onPress }) {
+@@ -395,8 +722,6 @@ function FloatingAssistant({ recording, transcribing, lifted, onPress }) {
        accessibilityLabel={recording ? 'Stop recording' : 'Talk to the assistant'}
        style={({ pressed }) => [
          floatStyles.fab,

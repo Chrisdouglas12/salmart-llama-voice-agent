@@ -1,5 +1,5 @@
 diff --git a/routes/assistantRoutes.js b/routes/assistantRoutes.js
-index eb30b5582..b5f4cdc4c 100644
+index eb30b5582..029e213a9 100644
 --- a/routes/assistantRoutes.js
 +++ b/routes/assistantRoutes.js
 @@ -9,6 +9,21 @@ const multer = require('multer');
@@ -9,7 +9,7 @@ index eb30b5582..b5f4cdc4c 100644
 +const { config: metaConfig, providerStatus: metaProviderStatus, shouldUseMock, setRecoveryProbe } = require('../lib/assistant/config.js');
 +const { chatCompletion: metaChat, visionJSON: metaVisionJSON, transcribeAudio: metaTranscribe } = require('../lib/assistant/llama.js');
 +const { scanShelfImage } = require('../lib/assistant/shelfie.js');
-+const { TaskStore, scopeResetDetected, mergeTaskDraft, proposePriceChange, formatTaskBlock } = require('../lib/assistant/tasks.js');
++const { TaskStore, scopeResetDetected, mergeTaskDraft, proposePriceChange, formatTaskBlock, normalizeProfilePatch, normalizeRequestPatch } = require('../lib/assistant/tasks.js');
 +const { glimmerConfigured, glimmerChat } = require('../lib/assistant/glimmer.js');
 +const { bgConfigured, cleanBackground } = require('../lib/assistant/clean.js');
 +
@@ -71,7 +71,7 @@ index eb30b5582..b5f4cdc4c 100644
  /* Screens the assistant is allowed to open                           */
  /* ------------------------------------------------------------------ */
 -const NAV_SCREENS = ['cart', 'checkout', 'deals', 'profile', 'referral', 'market', 'search', 'create_ad'];
-+const NAV_SCREENS = ['cart', 'checkout', 'deals', 'profile', 'referral', 'market', 'search', 'create_ad', 'ads', 'editProfile', 'showrooms', 'showroom', 'promote', 'messages', 'chat'];
++const NAV_SCREENS = ['cart', 'checkout', 'deals', 'profile', 'referral', 'market', 'search', 'create_ad', 'ads', 'editProfile', 'showrooms', 'showroom', 'promote', 'messages', 'chat', 'alerts', 'group', 'assistant', 'createRequest', 'showroomCreate', 'vtu'];
  
  /* ------------------------------------------------------------------ */
  /* Create-ad form vocabulary. MUST mirror the native CreateAdScreen.  */
@@ -106,18 +106,25 @@ index eb30b5582..b5f4cdc4c 100644
  function cleanStr(v, n = 200) {
    return String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim().slice(0, n);
  }
-@@ -210,12 +281,19 @@ HOW TO BEHAVE
+@@ -210,12 +281,31 @@ HOW TO BEHAVE
  
  NAVIGATION & ACTIONS
  - Use the navigate tool when the user asks to open or go to a screen.
 -- Available screens: cart, checkout, deals, profile, referral, market, search, create_ad.
 -- Map natural language to the closest screen ("my basket" -> cart, "invite a friend" -> referral).
-+- Available screens: cart, checkout, deals, profile, referral, market, search, create_ad, ads, editProfile, showrooms, showroom, promote, messages, chat.
-+- Map natural language to the closest screen ("my basket" -> cart, "invite a friend" -> referral, "my ads" -> ads, "my shop" -> showrooms, "boost my listing" -> promote).
++- Available screens: cart, checkout, deals, profile, referral, market, search, create_ad, ads, editProfile, showrooms, showroom, promote, messages, chat, alerts, group, assistant, createRequest, showroomCreate, vtu.
++- Never touch sign-in, register, password or verification screens. If the user is logged out, say so and point them to sign in.
++- Map natural language to the closest screen ("my basket" -> cart, "invite a friend" -> referral, "my ads" -> ads, "my shop" -> showrooms, "boost my listing" -> promote, "my notifications" -> alerts, "ask for something" -> createRequest, "pay bills" -> vtu).
++- chat needs params.partnerId, showroom needs params.id, group needs params.groupId — ask who/which first instead of guessing.
  - After a successful add_to_cart, do NOT navigate automatically unless explicitly asked.
  - For checkout, you MUST pass the postId of the item.
  - NEVER invent a screen name that is not in the list above.
  
++SHOPPING (buyers)
++- "I want to buy X / find X under N" -> call search_products AND navigate to the search screen with params {query, minPrice, maxPrice} so the page loads the same results. The thread shows the cards too.
++- If nothing matches: say so in ONE short sentence ("I could not find X under N right now.") and offer the closest alternative or a request post. NEVER invent listings, prices or sellers.
++- If the exact item is sold or gone: say so plainly, do not substitute silently.
++
 +MY LISTINGS & PRICE CHANGES
 +- "my ads", "what did I list", "find my shoes" -> call get_my_listings (optional query keyword). Results land in LAST SHOWN PRODUCTS with real postIds.
 +- "change the price to X" about YOUR listing -> call update_listing_price with the postId from LAST SHOWN, first WITHOUT confirm. It tells you the exact change: ask the user to confirm in ONE short sentence. Only call again with confirm:true after they say yes.
@@ -125,10 +132,15 @@ index eb30b5582..b5f4cdc4c 100644
 +- update_listing_price rejects listings that are not theirs. Never work around that.
 +- You can NOT publish. New listings still need the user to tap Post no matter what.
 +
++PROFILE (fill_profile_form) & REQUESTS (fill_request_form)
++- "change my name/bio/state" -> fill_profile_form (firstName, lastName, bio, state, city). It opens Edit Profile and fills live; the user taps Save.
++- Profile photo, phone, password and bank details are NEVER fillable. For a new photo, navigate to editProfile and tell them to tap the camera button themselves.
++- "I need X / help me ask for X" -> fill_request_form (category, text, budget, location). It opens Create Request and fills live; the user posts it. Photos on requests stay manual.
++
  CREATE AD (fill_ad_form)
  - To fill the ad form, ALWAYS call fill_ad_form. It opens the form if needed and fills it live. Do NOT use navigate for this.
  - If the user only says they want to sell something and gave no details, call navigate with screen "create_ad".
-@@ -243,7 +321,10 @@ FIND PHOTO IN GALLERY
+@@ -243,7 +333,10 @@ FIND PHOTO IN GALLERY
  ${ctx && ctx.gallery && ctx.gallery.open ? `A photo picker is OPEN with ${ctx.gallery.count} photos numbered 1 to ${ctx.gallery.count} (1 = best match). When the user picks one ("the second one", "the best one", "that one", "number 3") call choose_photo with that number. "best" and "first" mean 1.` : ''}
  
  LAST SHOWN PRODUCTS:
@@ -140,7 +152,7 @@ index eb30b5582..b5f4cdc4c 100644
  }
  
  /* ------------------------------------------------------------------ */
-@@ -345,6 +426,30 @@ const FUNCTION_DECLARATIONS = [
+@@ -345,6 +438,57 @@ const FUNCTION_DECLARATIONS = [
        properties: { index: { type: 'number' } },
        required: ['index']
      }
@@ -168,10 +180,37 @@ index eb30b5582..b5f4cdc4c 100644
 +      },
 +      required: ['postId', 'price']
 +    }
++  },
++  {
++    name: 'fill_profile_form',
++    description: 'Fill or edit fields on the profile form (firstName, lastName, bio, state, city). Opens Edit Profile if needed. The user taps Save. NEVER ask for or fill passwords, phone numbers, bank details or photos.',
++    parametersJsonSchema: {
++      type: 'object',
++      properties: {
++        firstName: { type: 'string' },
++        lastName: { type: 'string' },
++        bio: { type: 'string', description: 'Short bio, max 500 chars.' },
++        state: { type: 'string', description: 'Nigerian state.' },
++        city: { type: 'string' }
++      }
++    }
++  },
++  {
++    name: 'fill_request_form',
++    description: 'Fill or edit fields on the create-request form (category, text, budget, location). Opens the form if needed. The user posts it. Photo stays manual.',
++    parametersJsonSchema: {
++      type: 'object',
++      properties: {
++        category: { type: 'string' },
++        text: { type: 'string', description: 'What the buyer needs, in their words.' },
++        budget: { type: 'number', description: 'Budget in Naira.' },
++        location: { type: 'string' }
++      }
++    }
    }
  ];
  
-@@ -400,6 +505,59 @@ async function searchProducts({ query, category, minPrice, maxPrice, location, l
+@@ -400,6 +544,59 @@ async function searchProducts({ query, category, minPrice, maxPrice, location, l
    };
  }
  
@@ -231,7 +270,61 @@ index eb30b5582..b5f4cdc4c 100644
  async function getCartForUser(userId) {
    let cart = await Cart.findOne({ buyerId: userId });
    if (!cart) cart = await Cart.create({ buyerId: userId, items: [] });
-@@ -504,6 +662,8 @@ async function executeTool(name, args, userId, toolResults) {
+@@ -466,6 +663,16 @@ async function navigate({ screen, postId, params } = {}) {
+     return { success: true, screen: 'checkout', postId: String(postId), title: post.title, price: post.price, productType: post.postType };
+   }
+ 
++  // Screens that open ON something need its id — never navigate blind, or
++  // the user lands on a broken screen. Say which id is missing instead.
++  const needId = { chat: 'partnerId', showroom: 'id', group: 'groupId' };
++  if (needId[screen]) {
++    const key = needId[screen];
++    const id = params && params[key];
++    if (!id) throw new Error(`Opening ${screen} needs ${key}. Ask who/which one first.`);
++    return { success: true, screen, params: { ...(params || {}), [key]: String(id) } };
++  }
++
+   return { success: true, screen, params: params || {} };
+ }
+ 
+@@ -479,6 +686,27 @@ async function fillAdForm(args, ctx) {
+   return { success: true, fields, note: 'Fields applied to the form. The user still has to review and tap Post.' };
+ }
+ 
++/* Fill the profile form (names, bio, state, city). The client applies them
++ * to the live Edit Profile screen; the user taps Save. Avatar, phone, bank
++ * and password are never fillable — those stay manual, always. */
++async function fillProfileForm(args) {
++  const fields = normalizeProfilePatch(args || {}, NIGERIAN_STATES);
++  if (!Object.keys(fields).length) {
++    throw new Error('No valid profile fields. Ask for a name, bio, state or city.');
++  }
++  return { success: true, fields, note: 'Fields applied to the profile form. The user still has to review and tap Save.' };
++}
++
++/* Fill the request form (category, text, budget, location). The client
++ * applies them to the live Create Request screen; the user posts it. */
++async function fillRequestForm(args) {
++  const fields = normalizeRequestPatch(args || {});
++  if (!Object.keys(fields).length) {
++    throw new Error('No valid request fields. Ask what they need, and the budget if any.');
++  }
++  return { success: true, fields, note: 'Fields applied to the request form. The user still has to review and post it.' };
++}
++
+ async function executeTool(name, args, userId, toolResults) {
+   const a = args || {};
+   switch (name) {
+@@ -488,6 +716,8 @@ async function executeTool(name, args, userId, toolResults) {
+     case 'get_cart': return getCart(userId);
+     case 'navigate': return navigate(a);
+     case 'fill_ad_form': return fillAdForm(a, toolResults?.ctx);
++    case 'fill_profile_form': return fillProfileForm(a);
++    case 'fill_request_form': return fillRequestForm(a);
+     case 'find_photo_in_gallery': {
+       const q = cleanStr(a.query, 60);
+       if (!q) throw new Error('Say what to look for.');
+@@ -504,6 +734,8 @@ async function executeTool(name, args, userId, toolResults) {
      case 'start_chat_with_seller':
        if (!toolResults?.sellerContactOk) throw new Error('The user has not asked to contact the seller.');
        return startChatWithSeller({ userId, ...a });
@@ -240,7 +333,7 @@ index eb30b5582..b5f4cdc4c 100644
      default: throw new Error(`Unknown tool: ${name}`);
    }
  }
-@@ -667,7 +827,7 @@ function classifyError(e) {
+@@ -667,7 +899,7 @@ function classifyError(e) {
    };
  }
  
@@ -249,7 +342,7 @@ index eb30b5582..b5f4cdc4c 100644
  
  function markCooldown(name, e) {
    const { quota, auth, transient, gone } = classifyError(e);
-@@ -701,7 +861,7 @@ async function runTool(name, args, userId, toolResults) {
+@@ -701,7 +933,7 @@ async function runTool(name, args, userId, toolResults) {
    let out;
    try {
      out = await executeTool(name, args, userId, toolResults);
@@ -258,7 +351,7 @@ index eb30b5582..b5f4cdc4c 100644
        lastShown.set(String(userId), { products: out.products, at: Date.now() });
      }
      toolResults.push({ tool: name, result: out });
-@@ -817,13 +977,85 @@ async function runGroqAgent(convo, userId, toolResults) {
+@@ -817,13 +1049,85 @@ async function runGroqAgent(convo, userId, toolResults) {
    return 'Sorry, I got a bit tangled there. Could you say that another way?';
  }
  
@@ -348,7 +441,7 @@ index eb30b5582..b5f4cdc4c 100644
  
  async function runAgent(rawConvo, userId, ctx) {
    const toolResults = [];
-@@ -847,6 +1079,7 @@ async function runAgent(rawConvo, userId, ctx) {
+@@ -847,6 +1151,7 @@ async function runAgent(rawConvo, userId, ctx) {
          else convo.push({ role: 'user', content: note });
        }
        const text = await p.run(convo, userId, toolResults);
@@ -356,7 +449,7 @@ index eb30b5582..b5f4cdc4c 100644
        return { text, toolResults, provider: p.name };
      } catch (e) {
        lastErr = e;
-@@ -925,8 +1158,70 @@ async function groqVision({ buffer, mime, text, ctx }) {
+@@ -925,8 +1230,70 @@ async function groqVision({ buffer, mime, text, ctx }) {
    throw lastErr;
  }
  
@@ -427,7 +520,7 @@ index eb30b5582..b5f4cdc4c 100644
      { name: 'gemini', enabled: () => !!genAI, run: geminiVision },
      { name: 'groq', enabled: () => !!groq, run: groqVision }
    ].filter(p => p.enabled());
-@@ -989,6 +1284,23 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+@@ -989,6 +1356,23 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
    const file = req.file;
    if (!file) return res.status(200).json({ success: false, code: 'NO_AUDIO', message: 'No audio received.' });
    try {
@@ -451,7 +544,7 @@ index eb30b5582..b5f4cdc4c 100644
      if (!groq) throw new Error('groq_not_configured');
      const out = await withTimeout(groq.audio.transcriptions.create({
        file: fs.createReadStream(file.path),
-@@ -998,7 +1310,7 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+@@ -998,7 +1382,7 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
        prompt: STT_PROMPT,
        ...(process.env.STT_LANGUAGE && { language: process.env.STT_LANGUAGE })
      }), STT_TIMEOUT_MS, 'Groq transcribe');
@@ -460,7 +553,7 @@ index eb30b5582..b5f4cdc4c 100644
    } catch (e) {
      return res.status(200).json({ success: false, code: 'TRANSCRIBE_FAILED', message: "Couldn't catch that. Please try again." });
    } finally {
-@@ -1006,11 +1318,93 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+@@ -1006,15 +1390,99 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
    }
  });
  
@@ -554,7 +647,13 @@ index eb30b5582..b5f4cdc4c 100644
  const toActions = toolResults =>
    toolResults.flatMap(t => {
      if (!t.result || !t.result.success) return [];
-@@ -1028,12 +1422,20 @@ router.post('/chat', verifyToken, async (req, res) => {
+     if (t.tool === 'fill_ad_form') return [{ type: 'fill_ad', fields: t.result.fields }];
++    if (t.tool === 'fill_profile_form') return [{ type: 'fill_profile', fields: t.result.fields }];
++    if (t.tool === 'fill_request_form') return [{ type: 'fill_request', fields: t.result.fields }];
+     if (t.tool === 'find_photo_in_gallery') return [{ type: 'pick_photo', query: t.result.query, hoursBack: t.result.hoursBack }];
+     if (t.tool === 'choose_photo') return [{ type: 'choose_photo', index: t.result.index }];
+     return [];
+@@ -1028,12 +1496,20 @@ router.post('/chat', verifyToken, async (req, res) => {
  
      const { text, toolResults, provider } = await runAgent(convo, userId, context);
  
@@ -577,7 +676,7 @@ index eb30b5582..b5f4cdc4c 100644
    } catch (err) {
      console.error('Assistant error:', err?.cause || err);
      return res.status(200).json({ success: false, code: 'ASSISTANT_UNAVAILABLE', message: "I'm a bit overloaded right now. Please try again in a minute." });
-@@ -1079,6 +1481,61 @@ router.post('/ad-from-image', verifyToken, receiveImage, async (req, res) => {
+@@ -1079,6 +1555,61 @@ router.post('/ad-from-image', verifyToken, receiveImage, async (req, res) => {
    }
  });
  

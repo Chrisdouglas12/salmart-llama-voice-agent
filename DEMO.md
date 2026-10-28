@@ -6,10 +6,15 @@ at least one active listing (e.g. shoes).
 
 ## Scene 1 — Natural intent
 
-Say: **"I want to sell my shoes for 75,000."**
-Expect: `fill_ad_form` (title, price 75000) → Create Ad opens, fields fill
-live → *"Done, I filled name and price. Add a photo of it."* Attach a photo or
-say *"open my gallery"*. Nothing is published.
+Say: **"I want to sell something."**
+Expect: the phone's own gallery opens (user-controlled picker — the assistant
+never chooses). Pick a photo: it lands on the single-scroll Create Ad form,
+vision reads it, and the description fills live and editable. Then say:
+
+**"Two bedroom flat, 50k, Abuja, brand new."**
+
+Price, location, condition and category fill step by step, top to bottom.
+The seller reviews and taps **Post**. Nothing is published by the agent.
 
 ## Scene 2 — Live correction (no restart)
 

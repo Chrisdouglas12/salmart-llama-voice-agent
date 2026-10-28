@@ -36,7 +36,7 @@ autofill, and one-photo shelf scanning — and wired it into the live app."*
 
 | Seller says | Aya does |
 | --- | --- |
-| "I want to sell something" | Opens **Create Ad** |
+| "I want to sell something" | Opens the phone gallery; the picked photo lands on the single-scroll **Create Ad** with vision reading it |
 | "Open my gallery, I just snapped one house" | Opens the gallery and keeps the house photos |
 | "Pick the second one" | Selects that photo and reads it |
 | "Two bedroom flat, 50k, Abuja, brand new" | Fills title, price, location and condition as they speak |

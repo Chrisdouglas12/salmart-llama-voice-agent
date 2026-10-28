@@ -222,6 +222,11 @@ async function runTool(name, args = {}, { context = {}, session = {}, collected 
       return { ok: true, index };
     }
 
+    case "request_system_photo": {
+      pushAction({ type: "system_pick_photo" });
+      return { ok: true, note: "The app opens the phone gallery now. The seller picks; the photo lands on the Create Ad form." };
+    }
+
     case "fill_ad": {
       const currentType = normalizePostType(context.adDraft?.postType || "regular");
       const fields = sanitizeAdFields(args, currentType);

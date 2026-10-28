@@ -28,7 +28,7 @@ app.use('/api/assistant', assistantRoutes);
 
 See the top-level README for curl examples against these routes.
 
-## Agent tools (13: 9 original + 4 event)
+## Agent tools (14: 9 original + 5 event)
 
 Read-only and client-directed: `search_products`, `get_my_listings`
 (owner-scoped, feeds last-shown resolution), `get_cart`, `navigate` (21
@@ -36,7 +36,9 @@ screens — every non-auth screen; chat/showroom/group require their id),
 `fill_ad_form` (validates only — the user taps Post), `fill_profile_form`
 (names/bio/state/city — avatar, phone, bank, password never fillable; user
 taps Save), `fill_request_form` (category/text/budget/location — photo stays
-manual; user posts), `find_photo_in_gallery`, `choose_photo`. Verified
+manual; user posts), `find_photo_in_gallery`, `choose_photo`, `request_system_photo` (bare "I want
+to sell" → the phone gallery opens; the seller picks; the photo lands on the
+form). Verified
 writes: `add_to_cart`, `remove_from_cart` (upsert semantics),
 `start_chat_with_seller` (intent gate), `update_listing_price` (two-call
 confirm gate + DB re-read; rejects non-owned and sold listings; clears an

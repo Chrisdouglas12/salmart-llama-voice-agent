@@ -213,8 +213,8 @@ async function runMockAgent({ messages = [], history = [], context = {}, session
   if (selling) {
     const generic = /\b(something|anything|stuff|things|item)\b/i.test(s) && !hasListingDetail(s.replace(/\b(something|anything|stuff|things|item)\b/gi, ""));
     if (generic || !hasListingDetail(s)) {
-      await runTool("navigate", { screen: "create_ad" }, { context, session, collected });
-      return { message: "No wahala. Create Ad don open. Talk the item name, price and place — I go fill am as you dey talk." };
+      await runTool("request_system_photo", {}, { context, session, collected });
+      return { message: "No wahala. Your gallery dey open — pick the photo of wetin you wan sell." };
     }
 
     const fields = parseListing(text, draft);

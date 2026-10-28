@@ -561,10 +561,40 @@ index 973ab2d..fe31da6 100644
      flexDirection: 'row', alignItems: 'center', gap: 4,
      paddingVertical: 7, paddingHorizontal: 12, borderRadius: 999,
 diff --git a/src/screens/CreateAdScreen.js b/src/screens/CreateAdScreen.js
-index 24385d5..9d2ea99 100644
+index 24385d5..ebc55bc 100644
 --- a/src/screens/CreateAdScreen.js
 +++ b/src/screens/CreateAdScreen.js
-@@ -143,7 +143,7 @@ export default function CreateAdScreen({ route }) {
+@@ -1,22 +1,21 @@
+ /**
+- * SALMART — Create Ad (native) · status-style redesign
++ * SALMART — Create Ad (native) · single scrollable form
+  *
+  * Same contract as before — every validation rule, field name, endpoint call
+  * and backend required-set is unchanged. Only the experience is new:
+  *
+- *   Stage 1  "story"    A full-bleed canvas like a WhatsApp status. Pick or
+- *                       snap a photo, type a caption right on top of it, tap a
+- *                       quick-fill chip, choose what you're selling. One thumb.
+- *   Stage 2  "details"  A quick-fill sheet. Your post sits on top as a live
+- *                       preview, price is the big friendly number, and a
+- *                       progress strip shows exactly what is still missing —
+- *                       tap a missing item to jump to it.
++ *   One form      Type chips, photo canvas, caption, then every detail field
++ *                 on one scrollable screen. No Next step. A progress strip
++ *                 shows exactly what is still missing — tap a missing item
++ *                 to jump to it.
+  *
+  * Assistant: the AI assistant can fill this form live (typed, spoken, or from
+  * a photo attached in chat). It writes through `adPatch` from AssistantContext,
+  * every value is pre-checked by sanitizeAdPatch, and it NEVER publishes — the
+  * user always taps Post. The form also reports a snapshot of itself back so the
+  * assistant can answer "what's missing?" and edit instead of overwrite.
++ * Fill order follows the visual order top-to-bottom (photo, caption, title,
++ * price, …); only fields the user gave or changed are touched.
+  *
+  * Required-set per type (postRoutes.js:554/596/643):
+  *   regular  title, productCondition, price, location, category, photo
+@@ -143,12 +142,11 @@ export default function CreateAdScreen({ route }) {
    const nav = useNav();
    const insets = useSafeAreaInsets();
    const { firstName, lastName } = useAuth();
@@ -573,7 +603,32 @@ index 24385d5..9d2ea99 100644
  
    const editingId = route?.params?.postId || null;
    const isEdit = !!editingId;
-@@ -328,8 +328,14 @@ export default function CreateAdScreen({ route }) {
+ 
+-  const [stage, setStage] = useState('story');
+   const [postType, setPostType] = useState('regular');
+   const [sheet, setSheet] = useState(null);
+ 
+@@ -184,11 +182,9 @@ export default function CreateAdScreen({ route }) {
+   const mountedRef = useRef(true);
+   const fillChainRef = useRef(Promise.resolve());
+   const postTypeRef = useRef(postType);
+-  const stageRef = useRef(stage);
+   const isEditRef = useRef(isEdit);
+ 
+   useEffect(() => { postTypeRef.current = postType; }, [postType]);
+-  useEffect(() => { stageRef.current = stage; }, [stage]);
+   useEffect(() => { isEditRef.current = isEdit; }, [isEdit]);
+ 
+   useEffect(() => {
+@@ -229,7 +225,6 @@ export default function CreateAdScreen({ route }) {
+         setServiceLocation(post.serviceLocation || '');
+         setExperience(post.experience || '');
+         setDigitalCategory(post.postType === 'digital' ? (post.category || 'digital') : 'digital');
+-        setStage('details');
+       })
+       .catch(e => { if (alive) setError(e?.message || 'Failed to load ad for editing.'); })
+       .finally(() => { if (alive) setLoadingEdit(false); });
+@@ -328,8 +323,14 @@ export default function CreateAdScreen({ route }) {
        allowsEditing: false,
        quality: 0.85,
      });
@@ -590,7 +645,7 @@ index 24385d5..9d2ea99 100644
  
    const snapCover = useCallback(async () => {
      const perm = await ImagePicker.requestCameraPermissionsAsync();
-@@ -342,8 +348,12 @@ export default function CreateAdScreen({ route }) {
+@@ -342,8 +343,12 @@ export default function CreateAdScreen({ route }) {
        allowsEditing: false,
        quality: 0.85,
      });
@@ -605,8 +660,67 @@ index 24385d5..9d2ea99 100644
  
    const pickDigitalFile = useCallback(async () => {
      const res = await DocumentPicker.getDocumentAsync({
-@@ -718,6 +728,20 @@ export default function CreateAdScreen({ route }) {
-             <Tiny style={{ color: T.muted }}>{loadingEdit ? 'Loading listing…' : (stage === 'story' ? 'Photo & caption' : 'Details')}</Tiny>
+@@ -362,7 +367,6 @@ export default function CreateAdScreen({ route }) {
+     const problem = validate();
+     if (problem) {
+       setError(problem);
+-      if (!photo && !existing?.photo && postType === 'regular') setStage('story');
+       return;
+     }
+     setError('');
+@@ -482,10 +486,6 @@ export default function CreateAdScreen({ route }) {
+         if (!isEditRef.current && f.postType) {
+           await step('postType', async () => setPostType(f.postType), 200);
+         }
+-        if ((patch.photo || f.caption !== undefined) && stageRef.current !== 'story') {
+-          setStage('story');
+-          await sleep(260);
+-        }
+         if (patch.photo) {
+           setActiveField('photo');
+           await sleep(90);
+@@ -495,11 +495,6 @@ export default function CreateAdScreen({ route }) {
+         if (f.caption !== undefined) {
+           await step('caption', () => typeInto(setCaption, f.caption, alive));
+         }
+-        const otherKeys = Object.keys(f).filter(k => k !== 'caption' && k !== 'postType');
+-        if ((otherKeys.length || patch.photo) && stageRef.current !== 'details') {
+-          setStage('details');
+-          await sleep(300);
+-        }
+         if (f.title !== undefined) {
+           await step('title', () => typeInto(setTitle, f.title, alive));
+         }
+@@ -564,12 +559,11 @@ export default function CreateAdScreen({ route }) {
+   const checklist = useMemo(() => {
+     const hasPhoto = !!photo || !!existing?.photo;
+     const priceNum = parsePrice(price);
+-    const goStory = () => setStage('story');
+     const to = key => () => jump(key);
+     if (postType === 'regular') {
+       return [
+-        { key: 'photo', label: 'Photo', done: hasPhoto, go: goStory },
+-        { key: 'caption', label: 'Caption', done: !!caption.trim(), go: goStory },
++        { key: 'photo', label: 'Photo', done: hasPhoto, go: to('photo') },
++        { key: 'caption', label: 'Caption', done: !!caption.trim(), go: to('caption') },
+         { key: 'title', label: 'Item name', done: !!title.trim(), go: to('title') },
+         { key: 'price', label: 'Price', done: !isNaN(priceNum) && priceNum >= MINIMUM_PRICE, go: to('price') },
+         { key: 'condition', label: 'Condition', done: !!productCondition, go: to('condition') },
+@@ -579,7 +573,7 @@ export default function CreateAdScreen({ route }) {
+     }
+     if (postType === 'service') {
+       return [
+-        { key: 'caption', label: 'Caption', done: !!caption.trim(), go: goStory },
++        { key: 'caption', label: 'Caption', done: !!caption.trim(), go: to('caption') },
+         { key: 'title', label: 'Service name', done: !!title.trim(), go: to('title') },
+         { key: 'serviceCategory', label: 'Category', done: !!serviceCategory, go: to('serviceCategory') },
+         { key: 'serviceType', label: 'Delivery', done: !!serviceType, go: to('serviceType') },
+@@ -715,28 +709,49 @@ export default function CreateAdScreen({ route }) {
+           <Avatar uri={null} name={displayName} size={30} />
+           <View style={{ marginLeft: 9 }}>
+             <Tiny style={{ fontWeight: '700', color: T.ink }}>{isEdit ? 'Edit listing' : 'New Product'}</Tiny>
+-            <Tiny style={{ color: T.muted }}>{loadingEdit ? 'Loading listing…' : (stage === 'story' ? 'Photo & caption' : 'Details')}</Tiny>
++            <Tiny style={{ color: T.muted }}>{loadingEdit ? 'Loading listing…' : 'Photo, caption & details'}</Tiny>
            </View>
          </View>
 +        {/* Assistant mic: the global FAB stays off this form (Publish bar
@@ -626,7 +740,136 @@ index 24385d5..9d2ea99 100644
          <Pressable onPress={publish} disabled={busy || filling} hitSlop={10} style={styles.publishBtn} accessibilityRole="button" aria-label="Publish">
            <Tiny style={{ color: '#fff', fontWeight: '800' }}>{busy ? '…' : (isEdit ? 'Save' : 'Post')}</Tiny>
          </Pressable>
-@@ -1059,6 +1083,7 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+       </View>
+ 
+       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+-        {stage === 'story' ? (
+-          <ScrollView
+-            contentContainerStyle={{ padding: T.space.md, paddingBottom: Math.max(insets.bottom, T.space.md) + T.space.md }}
+-            keyboardShouldPersistTaps="handled"
+-            showsVerticalScrollIndicator={false}
+-          >
+-            {alertBox}
+-
+-            {/* What are you selling — sits above the photo, not on it. */}
+-            <View style={styles.storyTypes}>{renderTypeChips(T.space.md)}</View>
++        {/* Single scrollable form: type, photo, caption and every detail on
++            one screen. No Next step — the progress strip jumps to gaps, and
++            the assistant fills top-to-bottom in this same order. */}
++        <ScrollView
++          ref={scrollRef}
++          contentContainerStyle={{ padding: T.space.lg, paddingBottom: T.space.xl }}
++          keyboardShouldPersistTaps="handled"
++          showsVerticalScrollIndicator={false}
++        >
++          {alertBox}
++
++          {renderField(null, 'What are you selling?', (
++            <View style={{ marginHorizontal: -T.space.lg }}>{renderTypeChips(T.space.lg)}</View>
++          ))}
+ 
+             {/* Square preview. The photo is centre-cropped to fit, never edited. */}
+-            <View style={[styles.canvas, activeField === 'photo' && styles.glow]}>
++            <View
++              style={[styles.canvas, activeField === 'photo' && styles.glow]}
++              onLayout={e => { fieldY.current.photo = e.nativeEvent.layout.y; }}
++            >
+               {hasCover && <Image source={{ uri: coverUri }} style={StyleSheet.absoluteFill} resizeMode="cover" />}
+ 
+               {!hasCover && (
+@@ -768,7 +783,10 @@ export default function CreateAdScreen({ route }) {
+             </View>
+ 
+             {/* Caption area — plenty of room below the photo. */}
+-            <View style={styles.captionDock}>
++            <View
++              style={styles.captionDock}
++              onLayout={e => { fieldY.current.caption = e.nativeEvent.layout.y; }}
++            >
+               <ScrollView
+                 horizontal
+                 showsHorizontalScrollIndicator={false}
+@@ -804,48 +822,6 @@ export default function CreateAdScreen({ route }) {
+               </View>
+             </View>
+ 
+-            <View style={styles.storyFooter}>
+-              <Pressable
+-                onPress={() => { setError(''); setStage('details'); }}
+-                style={styles.nextBtn}
+-                accessibilityRole="button"
+-                aria-label="Continue to details"
+-              >
+-                <Tiny style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Next</Tiny>
+-                <Ionicons name="arrow-forward" size={15} color="#fff" />
+-              </Pressable>
+-            </View>
+-          </ScrollView>
+-        ) : (
+-          <View style={{ flex: 1 }}>
+-            <ScrollView
+-              ref={scrollRef}
+-              contentContainerStyle={{ padding: T.space.lg, paddingBottom: T.space.xl }}
+-              keyboardShouldPersistTaps="handled"
+-              showsVerticalScrollIndicator={false}
+-            >
+-              {alertBox}
+-
+-              {/* Live preview of the post — tap to edit photo & caption. */}
+-              <Pressable onPress={() => setStage('story')} style={styles.preview} accessibilityRole="button" aria-label="Edit photo and caption">
+-                <View style={styles.previewThumb}>
+-                  {hasCover ? (
+-                    <Image source={{ uri: coverUri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+-                  ) : (
+-                    <Ionicons name="image-outline" size={22} color={T.muted} />
+-                  )}
+-                </View>
+-                <View style={{ flex: 1 }}>
+-                  <Small style={{ fontWeight: '700', color: T.ink }} numberOfLines={1}>
+-                    {title.trim() || 'Your post'}
+-                  </Small>
+-                  <Tiny style={{ color: T.muted, marginTop: 2 }} numberOfLines={2}>
+-                    {caption.trim() || 'Tap to add a photo and caption'}
+-                  </Tiny>
+-                </View>
+-                <Ionicons name="create-outline" size={18} color={T.emerald} />
+-              </Pressable>
+-
+               {/* Progress */}
+               <View style={styles.progressWrap}>
+                 <View style={styles.progressTrack}>
+@@ -875,10 +851,6 @@ export default function CreateAdScreen({ route }) {
+ 
+               <View style={{ height: T.space.lg }} />
+ 
+-              {renderField(null, 'What are you selling?', (
+-                <View style={{ marginHorizontal: -T.space.lg }}>{renderTypeChips(T.space.lg)}</View>
+-              ))}
+-
+               {renderField('title', postType === 'service' ? 'Service name' : 'Item name', (
+                 <Input
+                   value={title}
+@@ -1008,10 +980,6 @@ export default function CreateAdScreen({ route }) {
+ 
+             {/* Sticky publish bar */}
+             <View style={[styles.dock, { paddingBottom: Math.max(insets.bottom, T.space.md) }]}>
+-              <Pressable onPress={() => setStage('story')} style={styles.backToStory} hitSlop={8}>
+-                <Ionicons name="arrow-back" size={16} color={T.emerald} />
+-                <Tiny style={{ color: T.emerald, fontWeight: '700' }}>Photo & caption</Tiny>
+-              </Pressable>
+               <View style={{ flex: 1 }}>
+                 <Button
+                   title={busy ? 'Publishing…' : (isEdit ? 'Save changes' : 'Publish')}
+@@ -1022,8 +990,6 @@ export default function CreateAdScreen({ route }) {
+                 />
+               </View>
+             </View>
+-          </View>
+-        )}
+       </KeyboardAvoidingView>
+ 
+       <Sheet
+@@ -1059,6 +1025,7 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
      borderBottomColor: T.border, gap: 8,
    },
    iconBtn: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
@@ -808,10 +1051,10 @@ index 15704eb..bd549d2 100644
    // Media tab
    const [images, setImages] = useState([]);
 diff --git a/src/state/AssistantContext.js b/src/state/AssistantContext.js
-index eff30a0..8a2efdd 100644
+index eff30a0..630ebc8 100644
 --- a/src/state/AssistantContext.js
 +++ b/src/state/AssistantContext.js
-@@ -4,12 +4,16 @@ import { Audio } from 'expo-av';
+@@ -4,12 +4,17 @@ import { Audio } from 'expo-av';
  import * as Speech from 'expo-speech';
  import { Ionicons } from '@expo/vector-icons';
  import { useNav, useNavSelector } from './Navigation';
@@ -826,10 +1069,11 @@ index eff30a0..8a2efdd 100644
  import GalleryPickerModal from '../ui/GalleryPickerModal';
 +import * as FileSystem from 'expo-file-system';
 +import * as ImageManipulator from 'expo-image-manipulator';
++import * as ImagePicker from 'expo-image-picker';
  
  const AssistantContext = createContext(null);
  
-@@ -17,11 +21,50 @@ const AssistantContext = createContext(null);
+@@ -17,11 +22,50 @@ const AssistantContext = createContext(null);
  const SCREEN_ROUTE = {
    cart: 'cart', checkout: 'checkout', deals: 'deals', profile: 'profile',
    referral: 'referral', market: 'market', search: 'search', create_ad: 'createAd',
@@ -880,7 +1124,7 @@ index eff30a0..8a2efdd 100644
  // The create-ad form route. NOTE: 'ads' is the My Ads list, not the form.
  const AD_FORM_ROUTE = 'createAd';
  // What the server calls the create-ad screen in its prompt/context.
-@@ -33,11 +76,45 @@ const CHAT_TIMEOUT_MS = 65000;
+@@ -33,11 +77,45 @@ const CHAT_TIMEOUT_MS = 65000;
  // An unconsumed patch (form never opened) must not leak into a later session.
  const AD_PATCH_TTL_MS = 2 * 60 * 1000;
  
@@ -930,7 +1174,7 @@ index eff30a0..8a2efdd 100644
  };
  
  const VOICE_OPTIONS = {
-@@ -50,6 +127,8 @@ const MAX_RECORD_MS = 60 * 1000;
+@@ -50,6 +128,8 @@ const MAX_RECORD_MS = 60 * 1000;
  
  export function AssistantProvider({ children }) {
    const nav = useNav();
@@ -939,7 +1183,7 @@ index eff30a0..8a2efdd 100644
    const screen = useNavSelector(s => s.current.name);
    const screenRef = useRef(screen);
    screenRef.current = screen;
-@@ -73,6 +152,15 @@ export function AssistantProvider({ children }) {
+@@ -73,6 +153,15 @@ export function AssistantProvider({ children }) {
    const reportAdSnapshot = useCallback(s => { adSnapshotRef.current = s; }, []);
    const ackAdPatch = useCallback(id => setAdPatch(p => (p && p.id === id ? null : p)), []);
  
@@ -955,7 +1199,7 @@ index eff30a0..8a2efdd 100644
    // Photo attached in chat. Lives here so voice, text and the floating mic all see it.
    const [attachedImage, setAttachedImage] = useState(null);
    const attachedImageRef = useRef(null);
-@@ -107,6 +195,18 @@ export function AssistantProvider({ children }) {
+@@ -107,6 +196,18 @@ export function AssistantProvider({ children }) {
      return () => clearTimeout(id);
    }, [adPatch, ackAdPatch]);
  
@@ -974,7 +1218,7 @@ index eff30a0..8a2efdd 100644
    // ── Gallery scan ──────────────────────────────────────────────────────────
    const startGalleryScan = useCallback(async ({ query, hoursBack, note, history, speakOnReady }) => {
      const id = `g-${Date.now()}`;
-@@ -156,6 +256,7 @@ export function AssistantProvider({ children }) {
+@@ -156,6 +257,7 @@ export function AssistantProvider({ children }) {
          : assistantChat({
            messages: [{ role: 'user', content: clean }],
            history,
@@ -982,11 +1226,20 @@ index eff30a0..8a2efdd 100644
            // Use the server's vocabulary so form-edit mode switches on there.
            context: {
              screen: onForm ? SERVER_AD_SCREEN : screenRef.current,
-@@ -223,13 +324,74 @@ export function AssistantProvider({ children }) {
+@@ -223,13 +325,83 @@ export function AssistantProvider({ children }) {
          return true;
        }
  
 -      // 4. Perform Navigation
++      // 3a. Bare "I want to sell": open the phone gallery, not an empty
++      // form. Fire-and-forget — the picker is user-paced, so the thread
++      // must not stay busy while they choose.
++      if (actions.some(a => a && a.type === 'system_pick_photo')) {
++        openSystemPickerForAd().catch(() => {});
++        if (opts.speak) speak(reply);
++        return true;
++      }
++
 +      // 3b. Profile + request forms: same patch channel, other screens.
 +      // Saving and posting stay manual — the user taps Save / Post request.
 +      const prof = actions.find(a => a && a.type === 'fill_profile' && a.fields);
@@ -1059,7 +1312,7 @@ index eff30a0..8a2efdd 100644
            if (n.screen === 'checkout' && n.postId) {
              nav.push(route, { postId: n.postId, listing: { _id: n.postId, title: n.title, price: n.price, postType: n.productType }, productType: n.productType });
            } else {
-@@ -252,7 +414,7 @@ export function AssistantProvider({ children }) {
+@@ -252,7 +424,7 @@ export function AssistantProvider({ children }) {
      } finally {
        setIsBusy(false);
      }
@@ -1068,7 +1321,7 @@ index eff30a0..8a2efdd 100644
  
    // ── Gallery choose: tap or voice -> full-size photo -> ad-from-image ──────
    const chooseCandidate = useCallback(async (cand) => {
-@@ -274,6 +436,168 @@ export function AssistantProvider({ children }) {
+@@ -274,6 +446,198 @@ export function AssistantProvider({ children }) {
      if (c) chooseCandidate(c);
    };
  
@@ -1187,7 +1440,7 @@ index eff30a0..8a2efdd 100644
 +      id: `photo-${Date.now()}`,
 +      fields: {},
 +      photo,
-+      say: 'Photo ready. Cleaning the background…',
++      say: 'Photo ready. Reading it now…',
 +    });
 +    try {
 +      const cleaned = await assistantPhotoClean({ image: photo });
@@ -1234,10 +1487,40 @@ index eff30a0..8a2efdd 100644
 +    }
 +  }, []);
 +
++  // ── System gallery for selling ────────────────────────────────────────
++  // "I want to sell" with no details: the PHONE's gallery opens (user-owned
++  // picker, never the assistant choosing), the picked photo lands on Create
++  // Ad and runs the same scan pipeline as a form-picked cover. Cancel or
++  // denied permission: the empty form opens so typing still works.
++  const openSystemPickerForAd = useCallback(async () => {
++    try {
++      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
++      if (!perm.granted) {
++        botNote('Allow photo access so I can open your gallery.');
++        if (screenRef.current !== AD_FORM_ROUTE) nav.push(AD_FORM_ROUTE);
++        return;
++      }
++      const res = await ImagePicker.launchImageLibraryAsync({
++        mediaTypes: ['images'],
++        allowsEditing: false,
++        quality: 0.85,
++      });
++      if (res.canceled || !res.assets?.[0]) {
++        if (screenRef.current !== AD_FORM_ROUTE) nav.push(AD_FORM_ROUTE);
++        return;
++      }
++      if (screenRef.current !== AD_FORM_ROUTE) nav.push(AD_FORM_ROUTE);
++      scanPickedPhoto(res.assets[0]).catch(() => {});
++    } catch (e) {
++      console.log('[Assistant] system picker failed:', e?.message);
++      if (screenRef.current !== AD_FORM_ROUTE) nav.push(AD_FORM_ROUTE);
++    }
++  }, [nav, scanPickedPhoto]);
++
    // ── Global Voice Logic ────────────────────────────────────────────────────
    const stopAndTranscribe = useCallback(async (history) => {
      if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
-@@ -320,6 +644,7 @@ export function AssistantProvider({ children }) {
+@@ -320,6 +684,7 @@ export function AssistantProvider({ children }) {
      try {
        Keyboard.dismiss();
        try { Speech.stop(); } catch (_e) { /* ignore */ }
@@ -1245,7 +1528,7 @@ index eff30a0..8a2efdd 100644
        const perm = await Audio.requestPermissionsAsync();
        if (!perm?.granted) {
          setMessages(prev => [...prev, { key: `err-${Date.now()}`, role: 'bot', kind: 'text', text: 'Please allow microphone access.', at: Date.now() }]);
-@@ -343,6 +668,7 @@ export function AssistantProvider({ children }) {
+@@ -343,6 +708,7 @@ export function AssistantProvider({ children }) {
    useEffect(() => () => {
      if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
      try { Speech.stop(); } catch (_e) { /* ignore */ }
@@ -1253,7 +1536,7 @@ index eff30a0..8a2efdd 100644
      const rec = recorderRef.current;
      recorderRef.current = null;
      if (rec) rec.stopAndUnloadAsync().catch(() => {});
-@@ -351,19 +677,20 @@ export function AssistantProvider({ children }) {
+@@ -351,19 +717,20 @@ export function AssistantProvider({ children }) {
    return (
      <AssistantContext.Provider value={{
        messages, setMessages, isBusy, isReady, setIsReady, processMessage,
@@ -1277,7 +1560,7 @@ index eff30a0..8a2efdd 100644
            onPress={() => toggleMic(toHistory(messages))}
          />
        )}
-@@ -382,7 +709,7 @@ export function AssistantProvider({ children }) {
+@@ -382,7 +749,7 @@ export function AssistantProvider({ children }) {
  }
  
  // ─── Global Floating Mic ──────────────────────────────────────────────────────
@@ -1286,7 +1569,7 @@ index eff30a0..8a2efdd 100644
    const { T } = useTheme();
  
    const bg = recording ? (T.danger || '#ef4444') : transcribing ? T.inkMuted : T.emerald;
-@@ -395,8 +722,6 @@ function FloatingAssistant({ recording, transcribing, lifted, onPress }) {
+@@ -395,8 +762,6 @@ function FloatingAssistant({ recording, transcribing, lifted, onPress }) {
        accessibilityLabel={recording ? 'Stop recording' : 'Talk to the assistant'}
        style={({ pressed }) => [
          floatStyles.fab,

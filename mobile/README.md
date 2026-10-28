@@ -1,6 +1,6 @@
 # Mobile — event diff extract
 
-`salmart-mobile.event.patch` (+870/−58, base: pre-kickoff app commit `5ce993f`)
+`salmart-mobile.event.patch` (+943/−149, base: pre-kickoff app commit `5ce993f`)
 is the complete event frontend work. No pre-hackathon app code is copied into
 this repo.
 
@@ -8,10 +8,10 @@ this repo.
 
 | File | Event change |
 | --- | --- |
-| `src/state/AssistantContext.js` | `sessionId`, product-card shaping, `add_to_cart`, gallery ranking, server-voice replies (`/speak` + expo-speech fallback), Shelfie scan → inline cards → cache crop → Create Ad, mic FAB allowlist, profile/request patch channels, search-page preference, all-screen navigation |
+| `src/state/AssistantContext.js` | `sessionId`, product-card shaping, `add_to_cart`, gallery ranking, server-voice replies (`/speak` + expo-speech fallback), Shelfie scan → inline cards → cache crop → Create Ad, system-gallery sell flow, mic FAB allowlist, profile/request patch channels, search-page preference, all-screen navigation |
 | `src/state/Navigation.js` | stable route ids (no remounts mid-transition), iOS-style parallax + dim underlay, `showroomCreate`/`vtu` loader fixes |
 | `src/ui/TabBar.js` | bar can never be squeezed into the system nav area |
-| `src/screens/CreateAdScreen.js` | cover-photo pipeline: standardize + vision-read, description fills live and editable |
+| `src/screens/CreateAdScreen.js` | single-scroll form (Next step removed), cover-photo pipeline, top-bar mic, top-to-bottom step fill |
 | `App.js` | cold-start fade (no hard cut), theme-driven system background, mount-on-tap panels |
 | `src/ui/kit.js` | `Sheet` lifts above the keyboard by measured overlap (all bottom sheets with inputs) |
 | `src/ui/Shell.js` | cart shortcut with live count badge in every panel header |

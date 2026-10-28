@@ -777,6 +777,36 @@ index f40ae46..0cdee3a 100644
    // Debounce the search term for results
    useEffect(() => {
      const id = setTimeout(() => {
+diff --git a/src/screens/ShowroomCreateScreen.js b/src/screens/ShowroomCreateScreen.js
+index 15704eb..bd549d2 100644
+--- a/src/screens/ShowroomCreateScreen.js
++++ b/src/screens/ShowroomCreateScreen.js
+@@ -203,14 +203,23 @@ function SegmentedTabs({ tabs, value, onChange }) {
+ 
+ const Label = ({ children }) => <Tiny style={styles.label}>{children}</Tiny>;
+ 
+-export default function ShowroomCreateScreen() {
++export default function ShowroomCreateScreen({ route }) {
+   const nav = useNav();
+   const insets = useSafeAreaInsets();
+   const { width: screenW, height: screenH } = useWindowDimensions();
+   const auth = useAuth();
+   const { firstName, lastName } = auth;
+ 
+-  const [tab, setTab] = useState('product');
++  // Voice entry: the assistant navigates here with { tab } —
++  // 'product' (new photos), 'posts' (an existing listing) or 'text'.
++  // Tabs stay fully manual afterwards; an invalid tab is ignored.
++  const agentTab = route?.params?.tab;
++  const validTab = agentTab === 'posts' || agentTab === 'text' ? agentTab : 'product';
++  const [tab, setTab] = useState(validTab);
++  useEffect(() => {
++    if (agentTab === 'posts' || agentTab === 'text' || agentTab === 'product') setTab(agentTab);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [agentTab]);
+ 
+   // Media tab
+   const [images, setImages] = useState([]);
 diff --git a/src/state/AssistantContext.js b/src/state/AssistantContext.js
 index eff30a0..8a2efdd 100644
 --- a/src/state/AssistantContext.js

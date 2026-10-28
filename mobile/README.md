@@ -1,10 +1,10 @@
 # Mobile — event diff extract
 
-`salmart-mobile.event.patch` (+859/−56, base: pre-kickoff app commit `5ce993f`)
+`salmart-mobile.event.patch` (+870/−58, base: pre-kickoff app commit `5ce993f`)
 is the complete event frontend work. No pre-hackathon app code is copied into
 this repo.
 
-## What the patch adds (17 files)
+## What the patch adds (18 files)
 
 | File | Event change |
 | --- | --- |
@@ -20,6 +20,7 @@ this repo.
 | `src/screens/SearchScreen.js` | loads voice queries + price/category filters from route params |
 | `src/screens/EditProfileScreen.js` | voice fill for name/bio/state/city (validated; photo/phone/bank/password stay manual, Save stays manual) |
 | `src/screens/CreateRequestScreen.js` | voice fill for category/text/budget/location (photo stays manual, posting stays manual) |
+| `src/screens/ShowroomCreateScreen.js` | opens on the voiced tab (new photos / existing listing / text) |
 | `src/api/endpoints.js` | `assistantStatus()`, `assistantShelfScan()`, `assistantSpeak()`, `assistantPhotoClean()`, `sessionId` on `/chat` |
 | `src/api/client.js` | full-origin `EXPO_PUBLIC_API_URL` override, no production failover for it |
 | `src/assistant/dialog.js` | one `Scan my shelf` starter chip |

@@ -211,12 +211,13 @@ app) — this is the executable verification judges can run in seconds:
 
 ```bash
 cd backend
-node --test tests/assistant-tasks.test.js
+npm run demo   # 7-turn judge script through the real brain + tool contracts
+npm test       # eval suite, 16/16 passing
 ```
 
-Expect **8/8 passing**: scope-change detection, correction-preserving draft
-merges, price-gate validation, confirm-gate shape, task TTL/expiry, and
-prompt-block honesty. `node --check` passes on every backend file.
+Expect the full flow — navigations, gallery pick, `fill_ad` with exact form
+values, budget-filtered search, `add_to_cart`, verified checkout — and the
+eval suite at **16/16 passing**. `node --check` passes on every backend file.
 
 Also verified live during the event:
 

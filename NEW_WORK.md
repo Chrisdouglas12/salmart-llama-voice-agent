@@ -32,6 +32,7 @@ byte-identical to the live sources (verified by hash).
 | `backend/routes/voiceRoutes.js` | 2402 | standalone transcribe route, written during the event (reference — not mounted; the mounted equivalent is `/api/assistant/transcribe`) |
 | `backend/tests/agent-tasks.test.js` | new | **Eval suite**: 8/8 passing (`node --test tests/assistant-tasks.test.js`) |
 | `backend/tests/assistant-glimmer-clean.test.js` | new | **Eval suite**: 6/6 passing (stubbed fetch, zero deps) |
+| `backend/judge-flow.js` | new | **Keyless runner**: 7-turn judge script through the real brain + tool contracts (`npm run demo`) |
 | `backend/package.json` | new | fresh manifest for the extract |
 | `backend/.env.example` | new | fresh template, blank values |
 

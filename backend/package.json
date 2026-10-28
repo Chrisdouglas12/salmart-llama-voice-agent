@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "description": "Hackathon extract: Meta Model API voice-first marketplace assistant for Salmart. Event work only (Oct 26 – Nov 4, 2026).",
+  "scripts": {
+    "demo": "node judge-flow.js",
+    "test": "node --test tests/assistant-tasks.test.js tests/assistant-glimmer-clean.test.js"
+  },
   "engines": {
     "node": ">=20"
   },

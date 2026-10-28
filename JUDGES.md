@@ -30,14 +30,21 @@ in this repo. You only need the URL and the test account below.
 
 ## Option B — verify from this repo alone (no server, no keys)
 
+Keyless and dependency-free. From `backend/`:
+
 ```bash
-cd backend
-node --test tests/assistant-tasks.test.js
+npm run demo    # the 7-turn judge script through the real deterministic
+                # brain + tool contracts (sample catalogue, clearly labelled)
+npm test        # eval suite: 16/16 passing
 ```
 
-8/8 passing, zero dependencies: scope-change detection, correction-preserving
-draft merges, price-gate validation, confirm-gate shape, task TTL/expiry,
-prompt-block honesty. This is the planning layer the demo runs on.
+`npm run demo` prints every turn with its real envelope — navigations,
+`pick_photo`/`choose_photo`, `fill_ad` with exact form values (₦50000,
+FCT - Abuja, New), budget-filtered search, `add_to_cart`, and checkout with
+verified title/price. Nothing is published; the seller always taps Post.
+`npm test` covers scope-change detection, correction-preserving draft merges,
+price-gate validation, confirm-gate shape, Glimmer payload shape, bg-clean
+contract rejections, task TTL/expiry, and prompt-block honesty.
 
 ## Option C — sample run + video
 

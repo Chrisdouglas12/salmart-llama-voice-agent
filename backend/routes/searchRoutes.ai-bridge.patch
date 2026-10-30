@@ -1,0 +1,21 @@
+diff --git a/routes/searchRoutes.js b/routes/searchRoutes.js
+--- a/routes/searchRoutes.js
++++ b/routes/searchRoutes.js
+@@ -1393,3 +1393,17 @@ async function setupSearchIndexes() {
+ 
+ module.exports = router;
+ module.exports.setupSearchIndexes = setupSearchIndexes;
++
++// ── AI agent bridge (append-only, no logic changed) ────────────────────────
++// Attached to the exported router so services/ai/tools/productTools.js can
++// call the search helpers without duplicating any query logic. `searchRoutes`
++// is the router itself, so `searchRoutes._internal` resolves here.
++router._internal = {
++  buildProductCriteria,
++  runProductQuery,
++  shapeProduct,
++  enrichSellers,
++  baseProductCriteria,
++  VALID_CATEGORIES,
++};
++

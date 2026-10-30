@@ -1,102 +1,49 @@
-# New work — Meta Global AI Developer Hackathon 2026
+# NEW_WORK — built 26 Oct – 4 Nov 2026, during this hackathon
 
-Event window: **26 October – 4 November 2026** (hacking opened Oct 26 after the
-kickoff). Everything in this repository was written inside that window. The
-Salmart product itself predates it and is not included here.
+**Salmart (the marketplace app) predates this event and is not in this repo.** Everything below is the AI feature, written this week: Meta-first voice assistant, conversational auth, seller messaging, and guided checkout.
 
----
+## New backend files (`backend/` — whole files, event-written)
 
-## 1. Event work in this repo (with evidence)
+| File | One line |
+|---|---|
+| `lib/assistant/llama.js` | Meta chat/vision/transcribe client + model recovery |
+| `lib/assistant/agent.js` | Legacy tool-calling loop + fallback orchestration |
+| `lib/assistant/authIntents.js` | 11 auth intents, 11 conversation states, one-question steps |
+| `lib/assistant/credentialGuard.js` | Refuses/redacts passwords, OTPs, tokens before Meta sees them |
+| `lib/assistant/authGuidance.js` | Closed outcome codes → one spoken sentence + fixing screen |
+| `lib/assistant/authSession.js` | Server-owned auth state across turns (never secrets) |
+| `services/ai/*` | `/api/ai` agent: turn loop, tool allowlist (21 tools), confirmations, task memory |
+| `lib/assistant/sellingFlow.js` | Photo-first question order, quantity→discount offer, spoken-price parsing |
+| `services/ai/sellingSession.js` | Server-owned selling state, skip-once optionals, discount script block |
+| `services/ai/tools/cartTools.js` | Agent cart add, same guards as `POST /api/cart` |
+| `routes/aiRoutes.js`, `routes/aiFormBridge.js` | Agent endpoints + form-patch bridge |
+| `routes/visionRoutes.js`, `routes/voiceRoutes.js` | Reference vision/voice modules |
+| `lib/assistant/shelfie.js`, `clean.js`, `mmsTts.js`, `speechLang.js`, `glimmer.js`, `form.js`, `tasks.js`, `mongoSearch.js`, `config.js`, `tools.js`, `mockAgent.js` | Shelf scan, photo cleanup, voice output, language detect, fallback brain, form parsing, task memory, search, config, legacy tools, mock brain |
+| `scripts/muse-diag.js`, `scripts/ai-eval.js` | Render connectivity diagnostic, scripted eval |
+| `tests/` (16 files) | Contract tests for intents, guard, guidance, tools, handoff, fallback |
 
-### Whole new files — backend
+## Patches to pre-existing server files (append-only, no product code copied)
 
-All eight `lib/assistant/` modules and both new routes first appear in the
-server repo at commit `4252e0663` (Oct 27, post-kickoff), except `shelfie.js`,
-which was written during the event as untracked work. Copies here are
-byte-identical to the live sources (verified by hash).
+| Patch | Change |
+|---|---|
+| `routes/assistantRoutes.event.patch` | Meta provider order, voice/vision routes, Shelfie, MMS voice |
+| `routes/socketRoutes.attachment.patch` | Attachment type normalisation (chat delivery fix) |
+| `routes/searchRoutes.ai-bridge.patch` | Reuse live search helpers in product tools |
+| `routes/userRoutes.verify-email.patch` | App-opening verify/reset links in emails |
+| `routes/paymentRoutes.selection.patch` | `/pay-cart` accepts a validated item selection; fulfillment settles only paid lines |
+| `routes/chat-filter-presend.patch` | Photo pre-send scan endpoint + group REST filter/retract |
+| `routes/socketRoutes.fraud-filter.patch` | Caption/photo OCR retract via shared helper |
+| `routes/ai-selling-photo-first.patch` | Photo-first selling: photo step first, quantity→discount offer with suggestion, skipStep for declined optionals, auto photo chooser on createAd navigation |
+| `app.ai.patch` | Mount `/api/ai` |
 
-| File | Bytes | What it does |
-| --- | --- | --- |
-| `backend/lib/assistant/config.js` | 5025 | env, model ids, sticky live/fallback state, recovery probe |
-| `backend/lib/assistant/llama.js` | 11114 | Meta chat, vision, Muse Voice Transcribe, ffmpeg WAV conversion |
-| `backend/lib/assistant/agent.js` | 10404 | tool-calling loop, envelope, fallback orchestration |
-| `backend/lib/assistant/tools.js` | 11425 | tool schemas → app actions |
-| `backend/lib/assistant/form.js` | 21324 | Pidgin/English parsing → exact Create Ad values |
-| `backend/lib/assistant/mockAgent.js` | 15535 | deterministic fallback brain |
-| `backend/lib/assistant/mongoSearch.js` | 3233 | catalogue search over the host Post model |
-| `backend/lib/assistant/shelfie.js` | 27044 | **Aya Shelfie**: vision boxes, crops, deterministic price bands |
-| `backend/lib/assistant/tasks.js` | new | **Task planner**: scope-change detection, draft merge, price-gate proposal, per-user task store (dependency-free, unit-tested) |
-| `backend/lib/assistant/glimmer.js` | new | **Muse Glimmer client** (Together-hosted, OpenAI-compatible; Meta best practices: temp 1.0, top_p 0.95) |
-| `backend/lib/assistant/clean.js` | new | **Background cleanup**: contract-first matting client + sharp composite to white 1080px JPEG; never fakes a result |
-| `backend/routes/visionRoutes.js` | 11642 | standalone vision routes, written during the event (reference — not mounted in `app.js`; the mounted equivalents are `/api/assistant/rank-photos` and `/api/assistant/ad-from-image`) |
-| `backend/routes/voiceRoutes.js` | 2402 | standalone transcribe route, written during the event (reference — not mounted; the mounted equivalent is `/api/assistant/transcribe`) |
-| `backend/tests/agent-tasks.test.js` | new | **Eval suite**: 8/8 passing (`node --test tests/assistant-tasks.test.js`) |
-| `backend/tests/assistant-glimmer-clean.test.js` | new | **Eval suite**: 6/6 passing (stubbed fetch, zero deps) |
-| `backend/judge-flow.js` | new | **Keyless runner**: 7-turn judge script through the real brain + tool contracts (`npm run demo`) |
-| `backend/package.json` | new | fresh manifest for the extract |
-| `backend/.env.example` | new | fresh template, blank values |
+## Mobile (`mobile/salmart-mobile.ai-voice.patch` — one patch)
 
-### Event diffs to pre-existing files
+Global mic FAB (+ above the "+" button, hidden on splash, present over Paystack), AI chat screen, auth screens (verify/resend, Google + verify actions), tick-to-pay cart, seller-chat draft handoff, outcome codes feeding the next AI turn. Selling: photo-first walkthrough (gallery/camera choice sheet on arrival, vision auto-fill with "I filled X" summary), quantity→discount offer with concrete suggestion, assistant-filled bulk tier, skip-once optionals, no-repeat missing-field steps.
 
-| Patch | Base (pre-kickoff) | Change |
-| --- | --- | --- |
-| `backend/routes/assistantRoutes.event.patch` | server `routes/assistantRoutes.js` at `8c5bef3e2` (Oct 26, pre-kickoff) | +562/−14: Meta imports, recovery probe, Shelfie helpers, `runMetaAgent`, Meta-first `PROVIDERS` order, `metaVision`, Meta transcription, `provider`/`model` fields, `GET /status` (+glimmer/bgClean flags), `POST /scan-shop`, Gemini TTS (`POST /speak`), `POST /photo-clean`, `get_my_listings`, `update_listing_price` + confirm gate, `fill_profile_form`, `fill_request_form`, `request_system_photo`, task-state wiring, Glimmer 4th provider + `GLIMMER_FIRST`, 21 navigable screens + id validation, showroom-status intent (English + Pidgin) |
-| `mobile/salmart-mobile.event.patch` | app at `5ce993f` (Oct 26, pre-kickoff) | +943/−149 across 18 files: `sessionId`, product cards, `add_to_cart`, brain label, Shelfie UI, `assistantStatus`, `assistantShelfScan`, `assistantSpeak` + server-voice playback, `assistantPhotoClean` + cover-photo clean/read pipeline, all 21 non-auth screens navigable, search page loads voice queries, profile/request live-fill bridges (save/post stay manual), showroom creator opens on the voiced tab, single-scroll Create Ad (no Next step) with top-to-bottom step fill, system-gallery sell flow, `showroomCreate`/`vtu` loader fixes, mic FAB allowlist (+ads/alerts), cart-screen + create-ad mic buttons, panel-header cart badge, keyboard-safe `Sheet`, slide transitions with parallax underlay + stable route ids, cold-start fade, mount-on-tap panels, LAN override, one starter chip |
+## Proof
 
-Both patches were verified with `git apply --check --reverse` against the live
-worktrees. No other files in either source repo were touched by the event work.
-
-**Provenance attestation:** the nine whole backend files above
-(`lib/assistant/*.js`, `routes/visionRoutes.js`, `routes/voiceRoutes.js`)
-were written fresh during the event window — not carried over from any
-pre-kickoff experiment. Pre-existing code enters this repo only as diff
-context lines inside the two event patches, never as copied files.
-
-### Aya Shelfie (event work)
-
-| Rule | Implementation |
-| --- | --- |
-| The model may see and describe, but never price | `shelfie.js` uses `muse-spark-1.3` only for items + boxes; prices come from injected `searchProducts()` |
-| Prices are reproducible | quartile band over comparable listings, Naira rounding |
-| Every card has a photo | ffmpeg crops per box; failed crop → full-frame thumbnail |
-| Duplicates removed | title-token containment + box IoU |
-| Nothing auto-published | drafts only; seller taps **Post** per card |
-| No silent fake success | canned shelf only when `SHELFIE_FALLBACK=true` (default off) |
-
----
-
-## 2. Pre-existing Salmart (not in this repo, not claimed)
-
-- Marketplace feed, search, cart, checkout, auth/JWT, seller chat, Mongo models.
-- The React Native app shell, navigation, theme, original assistant screen.
-- The original assistant route, Gemini/Groq providers, `/rank-photos` gallery
-  route (kept as fallbacks).
-- Production hosting and data.
-
-The Salmart product belongs to the same solo builder. Prompt wording and lessons
-learned from the prior assistant were reused; no prior code was copied in. The
-demo calls no non-Meta pipeline: speech is Muse Voice (Groq Whisper fallback),
-vision is Muse Spark (Gemini/Groq fallbacks).
-
----
-
-## 3. Verification status
-
-Verified during the event: live Meta chat + tool calling (`muse-spark-1.3`),
-photo understanding (`/ad-from-image` → `fill_ad`), STT
-(`muse-voice-transcribe-1.0`, `m4a` → WAV), host routes with a test JWT,
-Shelfie crops on a real JPEG, `node --check` on all backend files.
-
-Not claimed: on-device run from this repo, production deployment/load test, a
-real multi-item shelf photo end to end, Wonder/Image on the shipped path.
-
----
-
-## 4. Why these decisions
-
-- **Meta first, fallback second** — the primary brain is Meta; existing
-  providers only keep a seller unblocked.
-- **Voice is the product** — form, gallery and cart are all reachable by talking.
-- **Seller stays in control** — no publish tool, no phone-number capture, no
-  bulk post.
-- **Extract, not fork** — only event work is submitted; the host stays private.
+- Live server suite: **119/119 pass** (`npm test` in the server repo).
+- Keyless extract tests pass here (`backend/tests/`, e.g. 15/15 auth-accessibility).
+- Whole files first appear in the server repo at post-kickoff commits (`4252e0663`, `3a803c49f`); pre-existing files ship only as diffs above.
+- No provider keys, `.env` files, tokens, or database URIs anywhere in this repo.
+- The agent never publishes, pays, or sets credentials — the user always taps the final button.

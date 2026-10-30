@@ -1,0 +1,62 @@
+diff --git a/app.js b/app.js
+index d4cdd29..9c5820c 100644
+--- a/app.js
++++ b/app.js
+@@ -76,6 +76,8 @@ const billboardRoutes = require('./routes/billboardRoutes');
+ const searchRoutes = require('./routes/searchRoutes.js');
+ const assistantRoutes = require('./routes/assistantRoutes.js');
+ const cartRoutes = require('./routes/cartRoutes.js'); // CART WIRING — was missing
++const aiRoutes = require('./routes/aiRoutes.js');
++const aiFormBridge = require('./routes/aiFormBridge.js');
+ 
+ // ─────────────────────────────────────────────
+ // LOGGER
+@@ -136,7 +138,7 @@ app.use(helmet());
+ app.use(compression());
+ app.use(express.json());
+ app.use(express.urlencoded({ extended: true }));
+-app.set('trust proxy', true);
++app.set('trust proxy', 1);
+ 
+ app.use(cors({
+   origin: [
+@@ -628,6 +630,30 @@ mongoose.connection.once('open', async () => {
+   await searchRoutes.setupSearchIndexes();
+ });
+ 
++// ─────────────────────────────────────────────
++// META MODEL API
++// ─────────────────────────────────────────────
++// Same idea as the MongoDB block above: one tiny live call at boot proves
++// THIS machine reaches the model. Unlike Mongo, a failure never exits —
++// Glimmer and the demo brain can still answer, and every later failure is
++// logged per-turn with its requestId.
++const { chatSelfTest } = require('./lib/assistant/llama.js');
++chatSelfTest()
++  .then((r) => {
++    if (r.ok === true) {
++      logger.info(`✅ Meta Model API connected successfully (model "${r.model}" replied "${r.reply}")`);
++    } else if (r.ok === false) {
++      logger.error(`❌ Meta Model API connection failed: model "${r.model}" status=${r.status} ${r.message}`);
++      console.error(`❌ Meta Model API connection failed: model "${r.model}" status=${r.status} ${r.message}`);
++    } else {
++      logger.warn(`⚠️ Meta Model API skipped: ${r.reason}`);
++    }
++  })
++  .catch((err) => {
++    console.error(`❌ Meta Model API connection error: ${err.message}`);
++    logger.error(`❌ Meta Model API connection error: ${err.message}`);
++  });
++
+ // ─────────────────────────────────────────────
+ // SOCKET.IO
+ // ─────────────────────────────────────────────
+@@ -704,6 +730,8 @@ startShowroomExpiryJob(io);
+ app.use('/api/forum', forumRoutes(io));
+ app.use('/api/recommended', recommendedRoutes(io));
+ app.use('/api/cart', cartRoutes); // CART WIRING — mounts GET/POST/PATCH/DELETE on /api/cart
++app.use('/api/ai/forms', aiFormBridge);
++app.use('/api/ai', aiRoutes);
+ startRequestExpiryJob(io);
+ 
+ app.use(searchRoutes);

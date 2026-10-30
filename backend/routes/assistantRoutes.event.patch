@@ -1,44 +1,215 @@
+diff --git a/routes/assistantGallery.js b/routes/assistantGallery.js
+index ab1b359..db1d34b 100644
+--- a/routes/assistantGallery.js
++++ b/routes/assistantGallery.js
+@@ -5,30 +5,25 @@
+  * POST /api/assistant/rank-photos  (multipart: images[] thumbnails, query)
+  *
+  * Ranks the user's recent photo thumbnails by how clearly they show the item
+- * they want to sell. Thumbnails are analysed in memory and never stored.
++ * they want to sell. Meta Muse vision only (hackathon rule: Meta models
++ * throughout). Thumbnails are analysed in memory and never stored.
+  * Mounted from assistant.js with:  router.use('/', require('./assistantGallery'));
+  */
+ 
+ const express = require('express');
+ const multer = require('multer');
+-const { GoogleGenAI } = require('@google/genai');
+-const Groq = require('groq-sdk');
+ 
+ const verifyToken = require('../middleware/auths.js');
++const { visionJSON: metaVisionJSON } = require('../lib/assistant/llama.js');
+ 
+ const router = express.Router();
+ 
+-const genAI = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
+-const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
+-
+ const list = (v, fallback) => (v ? v.split(',').map(x => x.trim()).filter(Boolean) : fallback);
+-const GEMINI_MODELS = list(process.env.GEMINI_MODELS, ['gemini-3.8-flash', 'gemini-3.5-flash-lite']);
+-const GROQ_VISION_MODELS = list(process.env.GROQ_VISION_MODELS, ['meta-llama/llama-4-scout-17b-16e-instruct']);
+-// Order to try. Llama 4 on Groq first (fast, and it is the Meta model); override with GALLERY_PROVIDERS=gemini,groq.
+-const PROVIDER_ORDER = list(process.env.GALLERY_PROVIDERS, ['groq', 'gemini']);
++// Meta Muse vision ranks the gallery; override with GALLERY_PROVIDERS=meta.
++const PROVIDER_ORDER = list(process.env.GALLERY_PROVIDERS, ['meta']);
+ 
+ const TIMEOUT_MS = Number(process.env.GALLERY_TIMEOUT_MS) || 15000;
+-const GROQ_BATCH = Number(process.env.GALLERY_GROQ_BATCH) || 5; // Groq caps images per request
++const META_BATCH = Number(process.env.GALLERY_META_BATCH) || 6; // images per vision call
+ const MAX_PHOTOS = 24;
+ 
+ function withTimeout(promise, ms, label) {
+@@ -68,57 +63,22 @@ RULES
+ 
+ /* ── Providers: each takes [{ mime, b64 }] and returns [{ index, score, label }] relative to that batch ── */
+ 
+-async function groqBatch(items, query) {
+-  let lastErr;
+-  for (const model of GROQ_VISION_MODELS) {
+-    try {
+-      const content = [{ type: 'text', text: buildPrompt(query, items.length) }];
+-      items.forEach((it, i) => {
+-        content.push({ type: 'text', text: `Photo ${i}:` });
+-        content.push({ type: 'image_url', image_url: { url: `data:${it.mime};base64,${it.b64}` } });
+-      });
+-      const res = await withTimeout(groq.chat.completions.create({
+-        model,
+-        temperature: 0.1,
+-        response_format: { type: 'json_object' },
+-        messages: [{ role: 'user', content }],
+-      }), TIMEOUT_MS, `Groq ${model}`);
+-      const parsed = parseJsonLoose(res.choices?.[0]?.message?.content);
+-      return Array.isArray(parsed?.matches) ? parsed.matches : [];
+-    } catch (e) {
+-      lastErr = e;
+-    }
+-  }
+-  throw lastErr;
+-}
+-
+-async function geminiBatch(items, query) {
+-  let lastErr;
+-  for (const model of GEMINI_MODELS) {
+-    try {
+-      const parts = [{ text: buildPrompt(query, items.length) }];
+-      items.forEach((it, i) => {
+-        parts.push({ text: `Photo ${i}:` });
+-        parts.push({ inlineData: { mimeType: it.mime, data: it.b64 } });
+-      });
+-      const res = await withTimeout(genAI.models.generateContent({
+-        model,
+-        contents: [{ role: 'user', parts }],
+-        config: { responseMimeType: 'application/json' },
+-      }), TIMEOUT_MS, `Gemini ${model}`);
+-      const out = (res.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+-      const parsed = parseJsonLoose(out);
+-      return Array.isArray(parsed?.matches) ? parsed.matches : [];
+-    } catch (e) {
+-      lastErr = e;
+-    }
+-  }
+-  throw lastErr;
++async function metaBatch(items, query) {
++  const started = Date.now();
++  const prompt = `${buildPrompt(query, items.length)}\n${items.map((_, i) => `Photo ${i}:`).join(' ')}`;
++  const { data } = await withTimeout(metaVisionJSON({
++    prompt,
++    images: items.map(it => ({ base64: it.b64, mime: it.mime })),
++    maxTokens: 1200,
++    reasoningEffort: 'minimal',
++  }), TIMEOUT_MS, 'Meta gallery');
++  console.log(`[assistant] rank-photos ok: provider=meta batch=${items.length} ms=${Date.now() - started}`);
++  const parsed = data;
++  return Array.isArray(parsed?.matches) ? parsed.matches : [];
+ }
+ 
+ const PROVIDERS = {
+-  groq: { enabled: () => !!groq, batch: groqBatch, size: () => GROQ_BATCH },
+-  gemini: { enabled: () => !!genAI, batch: geminiBatch, size: n => n },
++  meta: { enabled: () => !!process.env.META_API_KEY, batch: metaBatch, size: () => META_BATCH },
+ };
+ 
+ async function rankWith(name, images, query) {
+@@ -127,7 +87,7 @@ async function rankWith(name, images, query) {
+   const chunks = [];
+   for (let i = 0; i < images.length; i += size) chunks.push({ offset: i, items: images.slice(i, i + size) });
+ 
+-  // Batches run in parallel, so 24 photos on Groq (5 per call) is still one round trip of latency.
++  // Batches run in parallel, so 24 photos (6 per call) is still one round trip of latency.
+   const parts = await Promise.all(chunks.map(async c => {
+     const matches = await p.batch(c.items, query);
+     return matches.map(m => ({
 diff --git a/routes/assistantRoutes.js b/routes/assistantRoutes.js
-index eb30b5582..9cabd2c8f 100644
+index eb30b55..2be6138 100644
 --- a/routes/assistantRoutes.js
 +++ b/routes/assistantRoutes.js
-@@ -9,6 +9,21 @@ const multer = require('multer');
- const { GoogleGenAI } = require('@google/genai');
- const Groq = require('groq-sdk');
+@@ -1,14 +1,51 @@
+ 'use strict';
+ 
+ const express = require('express');
++const rateLimit = require('express-rate-limit');
+ const router = express.Router();
+ const fs = require('fs');
+ const os = require('os');
+ const path = require('path');
+ const multer = require('multer');
+-const { GoogleGenAI } = require('@google/genai');
+-const Groq = require('groq-sdk');
  const mongoose = require('mongoose');
 +const { config: metaConfig, providerStatus: metaProviderStatus, shouldUseMock, setRecoveryProbe } = require('../lib/assistant/config.js');
-+const { chatCompletion: metaChat, visionJSON: metaVisionJSON, transcribeAudio: metaTranscribe } = require('../lib/assistant/llama.js');
++const { chatCompletion: metaChat, visionJSON: metaVisionJSON, transcribeAudio: metaTranscribe, verifyBrainModel, activeBrainModel } = require('../lib/assistant/llama.js');
 +const { scanShelfImage } = require('../lib/assistant/shelfie.js');
 +const { TaskStore, scopeResetDetected, mergeTaskDraft, proposePriceChange, formatTaskBlock, normalizeProfilePatch, normalizeRequestPatch } = require('../lib/assistant/tasks.js');
 +const { glimmerConfigured, glimmerChat } = require('../lib/assistant/glimmer.js');
 +const { bgConfigured, cleanBackground } = require('../lib/assistant/clean.js');
++const { detectSpeechLang } = require('../lib/assistant/speechLang.js');
++const { metaTTS, mmsConfigured } = require('../lib/assistant/mmsTts.js');
 +
 +// If Meta is paused after a network/auth failure, keep probing it in the
 +// background. The standalone demo server already does this; without it the
 +// main backend would stay on a fallback provider until a restart.
 +setRecoveryProbe(() => metaChat({
 +  messages: [{ role: 'user', content: 'Reply with OK.' }],
-+  maxTokens: 16,
++  // Muse reasons before it answers and max_tokens covers both, so a 16-token
++  // probe always came back empty and Meta was never marked healthy again.
++  maxTokens: 256,
 +  reasoningEffort: 'minimal',
 +}));
++
++// One-shot boot check. A stale MODEL_BRAIN/META_MODEL in the deploy's env is
++// otherwise invisible until the first user message fails with a 404 that looks
++// like an outage. Logged, never blocking; /status exposes the same details.
++verifyBrainModel()
++  .then((r) => {
++    if (r.ok === true) {
++      console.log(`[muse chat] brain model "${r.model}" is served by Meta`);
++    } else if (r.ok === false) {
++      console.warn(
++        `[muse chat] brain model "${r.model}" is NOT served by Meta. ` +
++        `Turns will retry with "${r.fallback || 'no fallback found'}". ` +
++        `Available: ${r.available.join(', ')}`,
++      );
++    } else {
++      console.warn(`[muse chat] could not verify brain model "${r.model}": ${r.reason}`);
++    }
++  })
++  .catch(() => {});
  
  const verifyToken = require('../middleware/auths.js');
  const Post = require('../models/postSchema.js');
-@@ -35,6 +50,13 @@ const STT_TIMEOUT_MS = Number(process.env.STT_TIMEOUT_MS) || 20000;
- const STT_PROMPT =
-   'Shopping on Salmart, a Nigerian marketplace: iPhone, Samsung, laptop, Toyota, Camry, naira, Lagos, Abuja.';
+@@ -16,24 +53,17 @@ const Showroom = require('../models/showRoomSchema.js');
+ const Cart = require('../models/cartSchema.js');
+ const Message = require('../models/messageSchema.js');
  
-+// Text-to-speech (Gemini). Meta and Groq are STT-only, so spoken replies use
-+// the already-configured Gemini key. Model/voice are env-overridable.
-+const TTS_MODEL = process.env.GEMINI_TTS_MODEL || 'gemini-2.5-flash-preview-tts';
-+const TTS_VOICE = process.env.GEMINI_TTS_VOICE || 'Kore';
-+const TTS_TIMEOUT_MS = Number(process.env.TTS_TIMEOUT_MS) || 30000;
-+const TTS_MAX_CHARS = 500;
+-const genAI = process.env.GEMINI_API_KEY
+-  ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
+-  : null;
+-const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
+-
+ // Model IDs churn. Override via env (comma-separated, first = preferred) without redeploying code.
+ const list = (v, fallback) => (v ? v.split(',').map(x => x.trim()).filter(Boolean) : fallback);
+-const GEMINI_MODELS = list(process.env.GEMINI_MODELS, ['gemini-3.8-flash', 'gemini-3.5-flash-lite']);
+-const GROQ_MODELS = list(process.env.GROQ_MODELS, ['openai/gpt-oss-20b', 'openai/gpt-oss-120b']);
+-// Vision-capable Groq models (used only as a fallback for photo -> ad).
+-const GROQ_VISION_MODELS = list(process.env.GROQ_VISION_MODELS, ['meta-llama/llama-4-scout-17b-16e-instruct']);
+ const MAX_STEPS = 5;
+ 
+-// Speech-to-text (Groq Whisper)
+-const STT_MODEL = process.env.GROQ_STT_MODEL || 'whisper-large-v3-turbo';
+-const STT_TIMEOUT_MS = Number(process.env.STT_TIMEOUT_MS) || 20000;
+-const STT_PROMPT =
+-  'Shopping on Salmart, a Nigerian marketplace: iPhone, Samsung, laptop, Toyota, Camry, naira, Lagos, Abuja.';
++// Speech-to-text is Meta Muse Voice Transcribe only (hackathon rule: Meta
++// models throughout, no third-party provider fallback).
 +
++// Text-to-speech (Meta MMS voices over Hugging Face). No Google key involved.
++// The voice follows the user's own utterance language (`lang`, detected at
++// transcription time); without it we detect from the reply text itself.
++// Model ids are env-overridable per language (MMS_TTS_MODEL_ENG/YOR/HAU/IBO).
+ 
  /* ------------------------------------------------------------------ */
  /* Memory of what the assistant last showed                           */
- /* ------------------------------------------------------------------ */
-@@ -47,10 +69,35 @@ function getLastShown(userId) {
+@@ -47,10 +77,35 @@ function getLastShown(userId) {
    return e.products;
  }
  
@@ -75,7 +246,7 @@ index eb30b5582..9cabd2c8f 100644
  
  /* ------------------------------------------------------------------ */
  /* Create-ad form vocabulary. MUST mirror the native CreateAdScreen.  */
-@@ -86,6 +133,30 @@ const matchList = (arr, v) => {
+@@ -86,6 +141,30 @@ const matchList = (arr, v) => {
    return arr.find(x => x.toLowerCase() === s) || '';
  };
  
@@ -106,7 +277,7 @@ index eb30b5582..9cabd2c8f 100644
  function cleanStr(v, n = 200) {
    return String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim().slice(0, n);
  }
-@@ -210,15 +281,42 @@ HOW TO BEHAVE
+@@ -210,15 +289,42 @@ HOW TO BEHAVE
  
  NAVIGATION & ACTIONS
  - Use the navigate tool when the user asks to open or go to a screen.
@@ -152,7 +323,7 @@ index eb30b5582..9cabd2c8f 100644
  - Only pass fields the user actually said (or that you are changing). Never guess price, quantity or location. Leave them out and ask.
  - Do not repeat fields that are already filled unless the user is changing them.
  - postType: regular (a physical item), service (something they do), digital (a downloadable file).
-@@ -243,7 +341,10 @@ FIND PHOTO IN GALLERY
+@@ -243,7 +349,10 @@ FIND PHOTO IN GALLERY
  ${ctx && ctx.gallery && ctx.gallery.open ? `A photo picker is OPEN with ${ctx.gallery.count} photos numbered 1 to ${ctx.gallery.count} (1 = best match). When the user picks one ("the second one", "the best one", "that one", "number 3") call choose_photo with that number. "best" and "first" mean 1.` : ''}
  
  LAST SHOWN PRODUCTS:
@@ -164,7 +335,7 @@ index eb30b5582..9cabd2c8f 100644
  }
  
  /* ------------------------------------------------------------------ */
-@@ -345,6 +446,62 @@ const FUNCTION_DECLARATIONS = [
+@@ -345,8 +454,64 @@ const FUNCTION_DECLARATIONS = [
        properties: { index: { type: 'number' } },
        required: ['index']
      }
@@ -173,7 +344,7 @@ index eb30b5582..9cabd2c8f 100644
 +    name: 'request_system_photo',
 +    description: 'The seller wants to sell but gave no photo and no details yet. Opens the phone\'s OWN gallery so THEY pick the picture (user-controlled picker, never the assistant). Use for bare "I want to sell" with nothing else said.',
 +    parametersJsonSchema: { type: 'object', properties: {} }
-+  },,
++  },
 +  {
 +    name: 'get_my_listings',
 +    description: 'List the authenticated seller\'s own active listings. Use when they ask about their ads ("my shoes", "what did I list", "find my blender"). Returns real postIds so later turns can act on them.',
@@ -225,9 +396,12 @@ index eb30b5582..9cabd2c8f 100644
 +      }
 +    }
    }
- ];
+-];
++].filter(Boolean); // safety net: a stray ",," can never put an undefined tool in the array again
  
-@@ -400,6 +557,59 @@ async function searchProducts({ query, category, minPrice, maxPrice, location, l
+ /* ------------------------------------------------------------------ */
+ /* Tool implementations                                               */
+@@ -400,6 +565,59 @@ async function searchProducts({ query, category, minPrice, maxPrice, location, l
    };
  }
  
@@ -287,7 +461,7 @@ index eb30b5582..9cabd2c8f 100644
  async function getCartForUser(userId) {
    let cart = await Cart.findOne({ buyerId: userId });
    if (!cart) cart = await Cart.create({ buyerId: userId, items: [] });
-@@ -466,6 +676,16 @@ async function navigate({ screen, postId, params } = {}) {
+@@ -466,6 +684,16 @@ async function navigate({ screen, postId, params } = {}) {
      return { success: true, screen: 'checkout', postId: String(postId), title: post.title, price: post.price, productType: post.postType };
    }
  
@@ -304,7 +478,7 @@ index eb30b5582..9cabd2c8f 100644
    return { success: true, screen, params: params || {} };
  }
  
-@@ -479,6 +699,27 @@ async function fillAdForm(args, ctx) {
+@@ -479,6 +707,27 @@ async function fillAdForm(args, ctx) {
    return { success: true, fields, note: 'Fields applied to the form. The user still has to review and tap Post.' };
  }
  
@@ -332,7 +506,7 @@ index eb30b5582..9cabd2c8f 100644
  async function executeTool(name, args, userId, toolResults) {
    const a = args || {};
    switch (name) {
-@@ -488,6 +729,8 @@ async function executeTool(name, args, userId, toolResults) {
+@@ -488,6 +737,8 @@ async function executeTool(name, args, userId, toolResults) {
      case 'get_cart': return getCart(userId);
      case 'navigate': return navigate(a);
      case 'fill_ad_form': return fillAdForm(a, toolResults?.ctx);
@@ -341,7 +515,7 @@ index eb30b5582..9cabd2c8f 100644
      case 'find_photo_in_gallery': {
        const q = cleanStr(a.query, 60);
        if (!q) throw new Error('Say what to look for.');
-@@ -501,9 +744,14 @@ async function executeTool(name, args, userId, toolResults) {
+@@ -501,9 +752,14 @@ async function executeTool(name, args, userId, toolResults) {
        if (!(i >= 1 && i <= g.count)) throw new Error(`Pick a number from 1 to ${g.count}.`);
        return { success: true, index: i };
      }
@@ -356,16 +530,28 @@ index eb30b5582..9cabd2c8f 100644
      default: throw new Error(`Unknown tool: ${name}`);
    }
  }
-@@ -667,7 +915,7 @@ function classifyError(e) {
+@@ -621,11 +877,6 @@ function quickAdReply(toolResults) {
+ /* ------------------------------------------------------------------ */
+ /* Shared helpers                                                     */
+ /* ------------------------------------------------------------------ */
+-const sleep = ms => new Promise(r => setTimeout(r, ms));
+-const AI_CALL_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS) || 15000;
+-const GROQ_CALL_TIMEOUT_MS = Number(process.env.GROQ_TIMEOUT_MS) || 8000;
+-const GROQ_VISION_TIMEOUT_MS = Number(process.env.GROQ_VISION_TIMEOUT_MS) || 14000;
+-const GEMINI_THINKING_LEVEL = String(process.env.GEMINI_THINKING_LEVEL || 'LOW').toUpperCase();
+ 
+ function withTimeout(promise, ms, label) {
+   let t;
+@@ -667,7 +918,7 @@ function classifyError(e) {
    };
  }
  
 -const cooldownUntil = { gemini: 0, groq: 0 };
-+const cooldownUntil = { meta: 0, gemini: 0, groq: 0, glimmer: 0 };
++const cooldownUntil = { meta: 0, glimmer: 0 };
  
  function markCooldown(name, e) {
    const { quota, auth, transient, gone } = classifyError(e);
-@@ -701,7 +949,7 @@ async function runTool(name, args, userId, toolResults) {
+@@ -701,7 +952,7 @@ async function runTool(name, args, userId, toolResults) {
    let out;
    try {
      out = await executeTool(name, args, userId, toolResults);
@@ -374,72 +560,161 @@ index eb30b5582..9cabd2c8f 100644
        lastShown.set(String(userId), { products: out.products, at: Date.now() });
      }
      toolResults.push({ tool: name, result: out });
-@@ -817,13 +1065,85 @@ async function runGroqAgent(convo, userId, toolResults) {
-   return 'Sorry, I got a bit tangled there. Could you say that another way?';
+@@ -713,96 +964,67 @@ async function runTool(name, args, userId, toolResults) {
  }
  
-+/* ------------------------------------------------------------------ */
-+/* Provider 3: Meta Model API (Muse Spark / Muse Wonder)              */
-+/* Same OpenAI-style tool loop as Groq, so tools and app actions are  */
-+/* identical. Meta is tried first when a key is configured.           */
-+/* ------------------------------------------------------------------ */
+ /* ------------------------------------------------------------------ */
+-/* Provider 1: Gemini                                                 */
++/* Provider 1: Meta Model API (Muse Spark / Muse Wonder) — the brain.    */
++/* Provider 2: Muse Glimmer (Meta open weights, Together-hosted) — the  */
++/* only fallback. No third-party providers anywhere on this router.      */
+ /* ------------------------------------------------------------------ */
+-async function geminiGenerate(contents, config) {
+-  let lastErr;
+-  for (const model of GEMINI_MODELS) {
+-    const call = () => withTimeout(genAI.models.generateContent({ model, contents, config }), AI_CALL_TIMEOUT_MS, `Gemini ${model}`);
+-    try {
+-      return await call();
+-    } catch (e) {
+-      lastErr = e;
+-      if (e.isTimeout) throw e;
+-      const { quota, transient, gone } = classifyError(e);
+-      if (transient) {
+-        await sleep(400);
+-        try { return await call(); } catch (e2) { lastErr = e2; if (e2.isTimeout) throw e2; }
+-      }
+-      if (!quota && !transient && !gone) throw e;
+-    }
+-  }
+-  throw lastErr;
+-}
+-
+-async function runGeminiAgent(convo, userId, toolResults) {
+-  const contents = convo.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+-  const config = {
+-    systemInstruction: buildSystemPrompt(userId, toolResults.ctx),
+-    tools: [{ functionDeclarations: FUNCTION_DECLARATIONS }],
+-    toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+-    ...(GEMINI_THINKING_LEVEL !== 'DEFAULT' && { thinkingConfig: { thinkingLevel: GEMINI_THINKING_LEVEL } })
+-  };
+-
++const AGENT_TOOLS = FUNCTION_DECLARATIONS.map(f => ({
++  type: 'function',
++  function: { name: f.name, description: f.description, parameters: f.parametersJsonSchema }
++}));
 +async function runMetaAgent(convo, userId, toolResults) {
++  const started = Date.now();
 +  const messages = [{ role: 'system', content: buildSystemPrompt(userId, toolResults.ctx) }, ...convo];
-+  for (let step = 0; step < MAX_STEPS; step++) {
+   for (let step = 0; step < MAX_STEPS; step++) {
+-    const res = await geminiGenerate(contents, config);
+-    const content = res.candidates?.[0]?.content;
+-    const parts = content?.parts || [];
+-    const calls = parts.filter(p => p.functionCall);
+-
+-    if (!calls.length) return parts.map(p => p.text || '').join('').trim() || 'Done.';
+-
+-    contents.push(content);
+-    const responseParts = [];
+-    for (const { functionCall: fc } of calls) {
+-      const out = await runTool(fc.name, fc.args, userId, toolResults);
+-      responseParts.push({ functionResponse: { name: fc.name, response: { output: out } } });
 +    const { raw } = await metaChat({
 +      messages,
-+      tools: GROQ_TOOLS,
++      tools: AGENT_TOOLS,
 +      toolChoice: 'auto',
 +      temperature: 0.3,
 +      maxTokens: 2400,
 +    });
 +    const msg = raw?.choices?.[0]?.message || {};
 +    const calls = msg.tool_calls || [];
-+    if (!calls.length) return (msg.content || '').trim() || 'Done.';
++    if (!calls.length) {
++      const answer = (msg.content || '').trim() || 'Done.';
++      console.log(`[assistant] meta answered in ${Date.now() - started}ms (${answer.length} chars, step ${step + 1})`);
++      return answer;
++    }
 +    messages.push({ role: 'assistant', content: msg.content || null, tool_calls: calls });
 +    for (const tc of calls) {
 +      let args = {};
 +      try { args = JSON.parse(tc.function?.arguments || '{}'); } catch (_) {}
 +      const out = await runTool(tc.function?.name, args, userId, toolResults);
 +      messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(out) });
-+    }
-+    const quick = quickAdReply(toolResults);
-+    if (quick) return quick;
+     }
+     const quick = quickAdReply(toolResults);
+     if (quick) return quick;
+-    contents.push({ role: 'user', parts: responseParts });
+-    config.systemInstruction = buildSystemPrompt(userId, toolResults.ctx);
 +    messages[0].content = buildSystemPrompt(userId, toolResults.ctx);
-+  }
-+  return 'Sorry, I got a bit tangled there. Could you say that another way?';
-+}
-+
-+/* ------------------------------------------------------------------ */
-+/* Provider 4: Muse Glimmer (hosted, Together AI)                      */
-+/* Same OpenAI-style tool loop as Meta/Groq: Glimmer was trained for    */
+   }
+   return 'Sorry, I got a bit tangled there. Could you say that another way?';
+ }
+ 
+ /* ------------------------------------------------------------------ */
+-/* Provider 2: Groq (OpenAI-style tool calling)                       */
++/* Provider 2: Muse Glimmer (Meta open weights, Together-hosted)       */
++/* Same OpenAI-style tool loop as Meta: Glimmer was trained for         */
 +/* reliable tool use and failure recovery, so it slots into the same    */
 +/* scaffold. GLIMMER_FIRST=true puts it first (demo the Meta brains    */
 +/* side by side); otherwise it is the last fallback that keeps sellers */
-+/* unblocked when everything else is down.                              */
-+/* ------------------------------------------------------------------ */
++/* unblocked when Meta is down.                                         */
+ /* ------------------------------------------------------------------ */
+-const GROQ_TOOLS = FUNCTION_DECLARATIONS.map(f => ({
+-  type: 'function',
+-  function: { name: f.name, description: f.description, parameters: f.parametersJsonSchema }
+-}));
+-
+-async function groqGenerate(messages, temperature = 0.3) {
+-  let lastErr;
+-  for (const model of GROQ_MODELS) {
+-    const call = t => withTimeout(groq.chat.completions.create({
+-      model, messages, tools: GROQ_TOOLS, tool_choice: 'auto', temperature: t,
+-      ...(/gpt-oss/.test(model) && { reasoning_effort: 'low' })
+-    }), GROQ_CALL_TIMEOUT_MS, `Groq ${model}`);
+-    try {
+-      return await call(temperature);
+-    } catch (e) {
+-      lastErr = e;
+-      if (e.isTimeout) throw e;
+-      const { quota, transient, gone } = classifyError(e);
+-      if (Number(e?.status) === 400 && /tool_use_failed|failed_generation/i.test(String(e?.message))) {
+-        try { return await call(0.1); } catch (e2) { lastErr = e2; }
+-      }
+-      if (!quota && !transient && !gone) throw lastErr;
+-    }
+-  }
+-  throw lastErr;
+-}
+-
+-async function runGroqAgent(convo, userId, toolResults) {
+-  const messages = [{ role: 'system', content: buildSystemPrompt(userId, toolResults.ctx) }, ...convo];
 +async function runGlimmerAgent(convo, userId, toolResults) {
++  const started = Date.now();
 +  const base = buildSystemPrompt(userId, toolResults.ctx);
 +  const messages = [{ role: 'system', content: `${base}\n\nReasoning strength: high` }, ...convo];
-+  for (let step = 0; step < MAX_STEPS; step++) {
-+    const { raw } = await glimmerChat({ messages, tools: GROQ_TOOLS, toolChoice: 'auto', maxTokens: 2400 });
+   for (let step = 0; step < MAX_STEPS; step++) {
+-    const res = await groqGenerate(messages);
+-    const msg = res.choices?.[0]?.message || {};
++    const { raw } = await glimmerChat({ messages, tools: AGENT_TOOLS, toolChoice: 'auto', maxTokens: 2400 });
 +    const msg = raw?.choices?.[0]?.message || {};
-+    const calls = msg.tool_calls || [];
-+    if (!calls.length) return (msg.content || '').trim() || 'Done.';
-+    messages.push({ role: 'assistant', content: msg.content || null, tool_calls: calls });
-+    for (const tc of calls) {
-+      let args = {};
-+      try { args = JSON.parse(tc.function?.arguments || '{}'); } catch (_) {}
-+      const out = await runTool(tc.function?.name, args, userId, toolResults);
-+      messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(out) });
+     const calls = msg.tool_calls || [];
+-    if (!calls.length) return (msg.content || '').trim() || 'Done.';
++    if (!calls.length) {
++      const answer = (msg.content || '').trim() || 'Done.';
++      console.log(`[assistant] glimmer answered in ${Date.now() - started}ms (${answer.length} chars, step ${step + 1})`);
++      return answer;
 +    }
-+    const quick = quickAdReply(toolResults);
-+    if (quick) return quick;
+     messages.push({ role: 'assistant', content: msg.content || null, tool_calls: calls });
+     for (const tc of calls) {
+       let args = {};
+@@ -812,7 +1034,7 @@ async function runGroqAgent(convo, userId, toolResults) {
+     }
+     const quick = quickAdReply(toolResults);
+     if (quick) return quick;
+-    messages[0].content = buildSystemPrompt(userId, toolResults.ctx);
 +    messages[0].content = `${buildSystemPrompt(userId, toolResults.ctx)}\n\nReasoning strength: high`;
-+  }
-+  return 'Sorry, I got a bit tangled there. Could you say that another way?';
-+}
-+
+   }
+   return 'Sorry, I got a bit tangled there. Could you say that another way?';
+ }
+@@ -820,16 +1042,26 @@ async function runGroqAgent(convo, userId, toolResults) {
  /* ------------------------------------------------------------------ */
  /* Orchestrator                                                       */
  /* ------------------------------------------------------------------ */
@@ -448,35 +723,90 @@ index eb30b5582..9cabd2c8f 100644
 -  { name: 'gemini', enabled: () => !!genAI, run: runGeminiAgent }
 -];
 +const glimmerProvider = { name: 'glimmer', enabled: () => glimmerConfigured() && !shouldUseMock(), run: runGlimmerAgent };
++// Meta first, Glimmer (Meta weights) as the only fallback. Deliberately no
++// third-party providers: every reply on this router comes from a Meta model.
 +const PROVIDERS = process.env.GLIMMER_FIRST === 'true'
 +  ? [
 +    glimmerProvider,
 +    { name: 'meta', enabled: () => !!metaConfig.meta.apiKey && !shouldUseMock(), run: runMetaAgent },
-+    { name: 'groq', enabled: () => !!groq, run: runGroqAgent },
-+    { name: 'gemini', enabled: () => !!genAI, run: runGeminiAgent }
 +  ]
 +  : [
 +    { name: 'meta', enabled: () => !!metaConfig.meta.apiKey && !shouldUseMock(), run: runMetaAgent },
-+    { name: 'groq', enabled: () => !!groq, run: runGroqAgent },
-+    { name: 'gemini', enabled: () => !!genAI, run: runGeminiAgent },
 +    glimmerProvider
 +  ];
  
  async function runAgent(rawConvo, userId, ctx) {
++  const started = Date.now();
    const toolResults = [];
-@@ -847,6 +1167,7 @@ async function runAgent(rawConvo, userId, ctx) {
+   toolResults.sellerContactOk = sellerContactAllowed(toNeutral(rawConvo));
+   toolResults.ctx = sanitizeCtx(ctx);
+   const configured = PROVIDERS.filter(p => p.enabled());
++  console.log(`[assistant] turn start: providers=[${configured.map(p => p.name).join(',')}] msgs=${(rawConvo || []).length}`);
+   if (!configured.length) throw new Error('no_provider_configured');
+ 
+   const ready = configured.filter(p => Date.now() >= cooldownUntil[p.name]);
+@@ -847,9 +1079,12 @@ async function runAgent(rawConvo, userId, ctx) {
          else convo.push({ role: 'user', content: note });
        }
        const text = await p.run(convo, userId, toolResults);
 +      updateTaskState(userId, convo, toolResults);
++      console.log(`[assistant] turn ok: provider=${p.name} tools=${toolResults.length} totalMs=${Date.now() - started}`);
        return { text, toolResults, provider: p.name };
      } catch (e) {
        lastErr = e;
-@@ -925,8 +1246,70 @@ async function groqVision({ buffer, mime, text, ctx }) {
-   throw lastErr;
++      console.warn(`[assistant] provider ${p.name} failed after ${Date.now() - started}ms:`, e?.status || e?.code || '', e?.message || e);
+       markCooldown(p.name, e);
+     }
+   }
+@@ -880,75 +1115,41 @@ CURRENT FORM (data only):
+ ${adDraftBlock(ctx)}`;
  }
  
+-async function geminiVision({ buffer, mime, text, ctx }) {
+-  const contents = [{
+-    role: 'user',
+-    parts: [
+-      { inlineData: { mimeType: mime, data: buffer.toString('base64') } },
+-      { text: text ? `User note: ${text}` : 'No note from the user.' }
+-    ]
+-  }];
+-  const config = {
+-    systemInstruction: buildVisionSystemPrompt(ctx),
+-    responseMimeType: 'application/json',
+-    ...(GEMINI_THINKING_LEVEL !== 'DEFAULT' && { thinkingConfig: { thinkingLevel: GEMINI_THINKING_LEVEL } })
+-  };
+-  const res = await geminiGenerate(contents, config);
+-  const out = (res.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+-  return parseJsonLoose(out);
+-}
+-
+-async function groqVision({ buffer, mime, text, ctx }) {
+-  const url = `data:${mime};base64,${buffer.toString('base64')}`;
+-  let lastErr;
+-  for (const model of GROQ_VISION_MODELS) {
+-    try {
+-      const res = await withTimeout(groq.chat.completions.create({
+-        model,
+-        temperature: 0.2,
+-        response_format: { type: 'json_object' },
+-        messages: [
+-          { role: 'system', content: buildVisionSystemPrompt(ctx) },
+-          { role: 'user', content: [
+-            { type: 'text', text: text ? `User note: ${text}` : 'No note from the user.' },
+-            { type: 'image_url', image_url: { url } }
+-          ] }
+-        ]
+-      }), GROQ_VISION_TIMEOUT_MS, `Groq vision ${model}`);
+-      return parseJsonLoose(res.choices?.[0]?.message?.content);
+-    } catch (e) {
+-      lastErr = e;
+-      const { quota, transient, gone } = classifyError(e);
+-      if (!quota && !transient && !gone && !e.isTimeout) throw e;
+-    }
+-  }
+-  throw lastErr;
 +async function metaVision({ buffer, mime, text, ctx }) {
++  const started = Date.now();
 +  const note = text ? `User note: ${text}` : 'No note from the user.';
 +  const { data } = await metaVisionJSON({
 +    prompt: `${buildVisionSystemPrompt(ctx)}\n\n${note}`,
@@ -484,123 +814,182 @@ index eb30b5582..9cabd2c8f 100644
 +    maxTokens: 2000,
 +    reasoningEffort: 'minimal',
 +  });
++  console.log(`[assistant] vision ok: provider=meta ms=${Date.now() - started}`);
 +  return data;
-+}
-+
-+/* Gemini returns raw 16-bit PCM; wrap it in a WAV header so the phone can
-+ * play the bytes directly with no server-side encoding step. */
-+function pcmToWavBase64(pcmBase64, { sampleRate = 24000, channels = 1 } = {}) {
-+  const pcm = Buffer.from(pcmBase64, 'base64');
-+  const header = Buffer.alloc(44);
-+  header.write('RIFF', 0);
-+  header.writeUInt32LE(36 + pcm.length, 4);
-+  header.write('WAVE', 8);
-+  header.write('fmt ', 12);
-+  header.writeUInt32LE(16, 16);
-+  header.writeUInt16LE(1, 20);
-+  header.writeUInt16LE(channels, 22);
-+  header.writeUInt32LE(sampleRate, 24);
-+  header.writeUInt32LE(sampleRate * channels * 2, 28);
-+  header.writeUInt16LE(channels * 2, 32);
-+  header.writeUInt16LE(16, 34);
-+  header.write('data', 36);
-+  header.writeUInt32LE(pcm.length, 40);
-+  return Buffer.concat([header, pcm]).toString('base64');
-+}
-+
-+/* Voice output for spoken replies. Throws when Gemini has no key or returns
-+ * no audio — the route turns that into { success:false } and the app falls
-+ * back to the phone's own TTS. */
-+async function geminiTTS(text) {
-+  const clean = String(text || '').replace(/\s+/g, ' ').trim().slice(0, TTS_MAX_CHARS);
-+  if (!clean) throw new Error('empty_text');
-+  if (!genAI) throw new Error('tts_not_configured');
-+  const res = await withTimeout(genAI.models.generateContent({
-+    model: TTS_MODEL,
-+    contents: [{ role: 'user', parts: [{ text: `Say warmly, at a natural pace: ${clean}` }] }],
-+    config: {
-+      responseModalities: ['AUDIO'],
-+      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: TTS_VOICE } } },
-+    },
-+  }), TTS_TIMEOUT_MS, 'Gemini TTS');
-+  const parts = res.candidates?.[0]?.content?.parts || [];
-+  const audio = parts.find(p => p.inlineData && p.inlineData.data);
-+  if (!audio) throw new Error('no_audio_part');
-+  const mime = String(audio.inlineData.mimeType || '');
-+  const rate = Number((mime.match(/rate=(\d+)/) || [])[1]) || 24000;
-+  return {
-+    audio: pcmToWavBase64(audio.inlineData.data, { sampleRate: rate }),
-+    mimeType: 'audio/wav',
-+    provider: 'gemini',
-+    model: TTS_MODEL,
-+    voice: TTS_VOICE,
-+  };
-+}
-+
+ }
+ 
++/* Voice output for spoken replies (Meta MMS voices over Hugging Face).
++ * Throws when no HF key is set or no audio comes back — the route turns that
++ * into { success:false } and the app falls back to the phone's own TTS.
++ * metaTTS lives in lib/assistant/mmsTts.js and keeps this file free of any
++ * TTS vendor SDK. */
  async function runAdVision(input) {
-   const vision = [
-+    { name: 'meta', enabled: () => !!metaConfig.meta.apiKey && !shouldUseMock(), run: metaVision },
-     { name: 'gemini', enabled: () => !!genAI, run: geminiVision },
-     { name: 'groq', enabled: () => !!groq, run: groqVision }
-   ].filter(p => p.enabled());
-@@ -989,6 +1372,23 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+-  const vision = [
+-    { name: 'gemini', enabled: () => !!genAI, run: geminiVision },
+-    { name: 'groq', enabled: () => !!groq, run: groqVision }
+-  ].filter(p => p.enabled());
+-  if (!vision.length) throw new Error('no_provider_configured');
+-
+-  const ready = vision.filter(p => Date.now() >= cooldownUntil[p.name]);
+-  const order = ready.length ? ready : vision;
+-
+-  let lastErr;
+-  for (const p of order) {
+-    try {
+-      const parsed = await p.run(input);
+-      if (parsed && typeof parsed === 'object') return { parsed, provider: p.name };
+-      lastErr = new Error('bad_model_json');
+-    } catch (e) {
+-      lastErr = e;
+-      markCooldown(p.name, e);
++  const started = Date.now();
++  // Meta vision only. No third-party fallback: a Meta failure surfaces as
++  // VISION_UNAVAILABLE with the reason in the logs.
++  if (!metaConfig.meta.apiKey || shouldUseMock()) throw new Error('no_provider_configured');
++  try {
++    const parsed = await metaVision(input);
++    if (parsed && typeof parsed === 'object') {
++      console.log(`[assistant] ad-vision ok: ms=${Date.now() - started}`);
++      return { parsed, provider: 'meta' };
+     }
++    throw new Error('bad_model_json');
++  } catch (e) {
++    console.warn(`[assistant] vision provider meta failed after ${Date.now() - started}ms:`, e?.status || e?.code || '', e?.message || e);
++    markCooldown('meta', e);
++    throw e;
+   }
+-  const err = new Error('all_providers_failed');
+-  err.cause = lastErr;
+-  throw err;
+ }
+ 
+ /* ------------------------------------------------------------------ */
+@@ -983,40 +1184,193 @@ function receiveImage(req, res, next) {
+ }
+ 
+ /* ------------------------------------------------------------------ */
+-/* Speech-to-text (Groq Whisper)                                      */
++/* Anonymous-safe voice auth + limits                                 */
+ /* ------------------------------------------------------------------ */
+-router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
++/**
++ * Voice input/output is deliberately usable before sign-in: the global mic is
++ * the app's first-run entry point, and a new user has no token yet. Only STT
++ * and TTS are opened; every data-bearing route below still uses verifyToken.
++ *
++ * A missing Bearer header means anonymous. A PRESENT but invalid/expired token
++ * still fails with 401 — silently downgrading a revoked session would hide a
++ * real security problem from the app.
++ */
++function softVoiceAuth(req, res, next) {
++  const hdr = req.headers.authorization || '';
++  if (!hdr.startsWith('Bearer ')) {
++    req.isAuthenticated = false;
++    req.userId = null;
++    return next();
++  }
++  return verifyToken(req, res, () => {
++    req.isAuthenticated = true;
++    req.userId = req.user?.userId || null;
++    next();
++  });
++}
++
++const voiceMinuteLimiter = rateLimit({
++  windowMs: 60_000,
++  max: 30,
++  standardHeaders: true,
++  legacyHeaders: false,
++  message: { success: false, code: 'VOICE_RATE_LIMIT', message: 'Too many voice requests. Please wait a moment.' },
++});
++const voiceHourLimiter = rateLimit({
++  windowMs: 60 * 60_000,
++  max: 300,
++  standardHeaders: true,
++  legacyHeaders: false,
++  message: { success: false, code: 'VOICE_RATE_LIMIT', message: 'Too many voice requests this hour. Please try again later.' },
++});
++const speakMinuteLimiter = rateLimit({
++  windowMs: 60_000,
++  max: 90,
++  standardHeaders: true,
++  legacyHeaders: false,
++  message: { success: false, code: 'VOICE_RATE_LIMIT', message: 'Too many spoken replies. Please wait a moment.' },
++});
++const speakHourLimiter = rateLimit({
++  windowMs: 60 * 60_000,
++  max: 1200,
++  standardHeaders: true,
++  legacyHeaders: false,
++  message: { success: false, code: 'VOICE_RATE_LIMIT', message: 'Too many spoken replies this hour. Please try again later.' },
++});
++
++/* ------------------------------------------------------------------ */
++/* Speech-to-text (Meta Muse Voice Transcribe only)                   */
++/* ------------------------------------------------------------------ */
++router.post('/transcribe', softVoiceAuth, voiceMinuteLimiter, voiceHourLimiter, receiveAudio, async (req, res) => {
    const file = req.file;
    if (!file) return res.status(200).json({ success: false, code: 'NO_AUDIO', message: 'No audio received.' });
++  const started = Date.now();
    try {
+-    if (!groq) throw new Error('groq_not_configured');
+-    const out = await withTimeout(groq.audio.transcriptions.create({
+-      file: fs.createReadStream(file.path),
+-      model: STT_MODEL,
+-      response_format: 'json',
+-      temperature: 0,
+-      prompt: STT_PROMPT,
+-      ...(process.env.STT_LANGUAGE && { language: process.env.STT_LANGUAGE })
+-    }), STT_TIMEOUT_MS, 'Groq transcribe');
+-    return res.json({ success: true, text: String(out?.text || '').trim() });
 +    const buffer = await fs.promises.readFile(file.path);
 +
-+    // Muse Voice Transcribe first. The client sends m4a; lib/assistant/llama.js
-+    // converts it to the mono 16 kHz WAV that Meta requires.
-+    if (metaConfig.stt.configured && !shouldUseMock()) {
-+      try {
-+        const text = await metaTranscribe({
-+          buffer,
-+          mimetype: file.mimetype || 'audio/m4a',
-+          filename: file.originalname || 'voice.m4a',
-+        });
-+        if (text) return res.json({ success: true, text, provider: 'meta', model: metaConfig.stt.model });
-+      } catch (e) {
-+        console.error('Meta transcribe error:', e.message);
-+      }
-+    }
-+
-     if (!groq) throw new Error('groq_not_configured');
-     const out = await withTimeout(groq.audio.transcriptions.create({
-       file: fs.createReadStream(file.path),
-@@ -998,7 +1398,7 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
-       prompt: STT_PROMPT,
-       ...(process.env.STT_LANGUAGE && { language: process.env.STT_LANGUAGE })
-     }), STT_TIMEOUT_MS, 'Groq transcribe');
--    return res.json({ success: true, text: String(out?.text || '').trim() });
-+    return res.json({ success: true, text: String(out?.text || '').trim(), provider: 'groq', model: STT_MODEL });
++    // The client sends m4a; lib/assistant/llama.js converts it to the mono
++    // 16 kHz WAV that Meta requires. Meta-only by hackathon rule: a failure
++    // surfaces as TRANSCRIBE_FAILED with the reason logged, never a silent
++    // third-party fallback.
++    const text = await metaTranscribe({
++      buffer,
++      mimetype: file.mimetype || 'audio/m4a',
++      filename: file.originalname || 'voice.m4a',
++    });
++    if (!text) throw new Error('empty_transcript');
++    // `lang` mirrors the speaker's own language so the reply (text and
++    // voice) can come back in the same language instead of English.
++    console.log(`[assistant] transcribe ok: provider=meta model=${metaConfig.stt.model} ms=${Date.now() - started} chars=${text.length}`);
++    return res.json({ success: true, text, lang: detectSpeechLang(text), provider: 'meta', model: metaConfig.stt.model });
    } catch (e) {
++    console.warn(`[assistant] transcribe FAILED after ${Date.now() - started}ms:`, e?.status || e?.code || '', e?.message || e);
      return res.status(200).json({ success: false, code: 'TRANSCRIBE_FAILED', message: "Couldn't catch that. Please try again." });
    } finally {
-@@ -1006,17 +1406,102 @@ router.post('/transcribe', verifyToken, receiveAudio, async (req, res) => {
+     fs.unlink(file.path, () => {});
    }
  });
  
 +/* ------------------------------------------------------------------ */
-+/* Speech synthesis (Gemini TTS -> WAV)                               */
++/* Speech synthesis (Meta MMS voices over Hugging Face)               */
 +/* ------------------------------------------------------------------ */
 +/**
-+ * POST /speak (JSON: { text }) -> { success, audio (base64 WAV),
-+ *   mimeType, provider, model, voice }.
++ * POST /speak (JSON: { text, lang? }) -> { success, audio (base64),
++ *   mimeType, provider: 'meta-mms', model, voice }.
 + *
-+ * Voice output for spoken replies. Meta and Groq are STT-only, so this uses
-+ * the already-configured Gemini key. Failures return HTTP 200 with
++ * Voice output for spoken replies. `lang` is the language detected from the
++ * user's own utterance (the app sends back the `lang` from /transcribe); when
++ * omitted we detect from the reply text itself. Failures return HTTP 200 with
 + * { success:false, code } and the app falls back to the phone's own TTS.
 + */
-+router.post('/speak', verifyToken, async (req, res) => {
++router.post('/speak', softVoiceAuth, speakMinuteLimiter, speakHourLimiter, async (req, res) => {
++  const started = Date.now();
 +  const text = String(req.body?.text || '').trim();
 +  if (!text) {
 +    return res.status(200).json({ success: false, code: 'NO_TEXT', message: 'Nothing to say.' });
 +  }
 +  try {
-+    const out = await geminiTTS(text);
++    const out = await metaTTS(text, { lang: req.body?.lang });
++    console.log(`[assistant] speak ok: provider=meta-mms voice=${out.voice} model=${out.model} ms=${Date.now() - started}`);
 +    return res.json({ success: true, ...out });
 +  } catch (e) {
-+    console.error('TTS error:', e?.message || e);
++    console.warn(`[assistant] speak FAILED after ${Date.now() - started}ms (lang=${req.body?.lang || 'auto'}):`, e?.status || e?.code || '', e?.message || e);
 +    return res.status(200).json({
 +      success: false,
 +      code: e?.message === 'tts_not_configured' ? 'TTS_UNAVAILABLE' : 'TTS_FAILED',
@@ -659,12 +1048,14 @@ index eb30b5582..9cabd2c8f 100644
 +router.get('/status', (req, res) => res.json({
 +  success: true,
 +  ...metaProviderStatus(),
++  chat: activeBrainModel(),
 +  glimmer: {
 +    configured: glimmerConfigured(),
 +    model: String(process.env.GLIMMER_MODEL || 'meta-models/Muse-Glimmer-30B'),
 +    first: process.env.GLIMMER_FIRST === 'true',
 +  },
 +  bgClean: { configured: bgConfigured() },
++  tts: { provider: 'meta-mms', configured: mmsConfigured() },
 +}));
 +
  const toActions = toolResults =>
@@ -679,7 +1070,7 @@ index eb30b5582..9cabd2c8f 100644
      return [];
    });
  
-@@ -1028,12 +1513,20 @@ router.post('/chat', verifyToken, async (req, res) => {
+@@ -1028,12 +1382,16 @@ router.post('/chat', verifyToken, async (req, res) => {
  
      const { text, toolResults, provider } = await runAgent(convo, userId, context);
  
@@ -692,17 +1083,13 @@ index eb30b5582..9cabd2c8f 100644
 -    return res.json({ success: true, message: text, products, toolResults, navigations, actions, provider });
 +    const model = provider === 'meta'
 +      ? metaConfig.meta.brainModel
-+      : provider === 'groq'
-+        ? GROQ_MODELS[0]
-+        : provider === 'glimmer'
-+          ? String(process.env.GLIMMER_MODEL || 'meta-models/Muse-Glimmer-30B')
-+          : GEMINI_MODELS[0];
++      : String(process.env.GLIMMER_MODEL || 'meta-models/Muse-Glimmer-30B');
 +
 +    return res.json({ success: true, message: text, products, toolResults, navigations, actions, provider, model });
    } catch (err) {
      console.error('Assistant error:', err?.cause || err);
      return res.status(200).json({ success: false, code: 'ASSISTANT_UNAVAILABLE', message: "I'm a bit overloaded right now. Please try again in a minute." });
-@@ -1079,6 +1572,61 @@ router.post('/ad-from-image', verifyToken, receiveImage, async (req, res) => {
+@@ -1079,6 +1437,61 @@ router.post('/ad-from-image', verifyToken, receiveImage, async (req, res) => {
    }
  });
  
@@ -763,5 +1150,6 @@ index eb30b5582..9cabd2c8f 100644
 +
  router.use('/', require('./assistantGallery'));
  
- module.exports = router;
+-module.exports = router;
 \ No newline at end of file
++module.exports = router;

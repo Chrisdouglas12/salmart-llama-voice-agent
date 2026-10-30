@@ -21,7 +21,9 @@ in this repo. You only need the URL and the test account below.
 - Sign-in is required for everything except `/status` and `/ping`; the account
   above is a sandbox seller with sample listings, not production data.
 - Server env needed for the full demo (keys never in the repo): `META_API_KEY`
-  (chat/vision/STT), `GEMINI_API_KEY` (TTS fallback + `/speak`),
+  (chat/vision/STT − every AI reply comes from Meta), `HF_API_KEY` (optional;
+  only if you set `TTS_MODE=mms` — the default `TTS_MODE=device` uses the
+  phone's own voice because Hugging Face retired the hosted Meta MMS route),
   `TOGETHER_API_KEY` (Glimmer brain — confirm the model slug as
   `GLIMMER_MODEL` on the Together dashboard), `BG_API_URL` + `BG_API_KEY`
   (commercial matting endpoint for `/photo-clean`; without them the app
@@ -35,7 +37,7 @@ Keyless and dependency-free. From `backend/`:
 ```bash
 npm run demo    # the 7-turn judge script through the real deterministic
                 # brain + tool contracts (sample catalogue, clearly labelled)
-npm test        # eval suite: 16/16 passing
+npm test        # 23/23: 16 legacy + 7 keyless AI form-normaliser tests
 ```
 
 `npm run demo` prints every turn with its real envelope — navigations,
@@ -44,7 +46,13 @@ FCT - Abuja, New), budget-filtered search, `add_to_cart`, and checkout with
 verified title/price. Nothing is published; the seller always taps Post.
 `npm test` covers scope-change detection, correction-preserving draft merges,
 price-gate validation, confirm-gate shape, Glimmer payload shape, bg-clean
-contract rejections, task TTL/expiry, and prompt-block honesty.
+contract rejections, task TTL/expiry, and prompt-block honesty, plus AI form
+aliases, dropped unknown values, and sensitive-field exclusion.
+
+The newer `/api/ai` agent (17 tools, confirmation flow, durable form bridge)
+needs Mongo and a Meta key for a live turn, so its full contract is documented
+in [`backend/AI_AGENT.md`](backend/AI_AGENT.md) rather than exercised by the
+keyless demo.
 
 ## Option C — sample run + video
 
@@ -62,6 +70,6 @@ contract rejections, task TTL/expiry, and prompt-block honesty.
 
 - No provider keys, `.env` files, tokens, or database URIs — ever.
 - No pre-hackathon code: whole files are event-written; pre-existing files
-  appear only as `.event.patch` diffs (see `NEW_WORK.md` for proof).
+  appear only as patch files (see `NEW_WORK.md` for proof).
 - No publish button for the agent to press: the seller always taps Post. Any
   "listing created" claim in the demo is the user tapping Post on camera.

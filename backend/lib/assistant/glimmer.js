@@ -5,7 +5,7 @@
  * territory, not phones. "Local agentic" here means Meta's open agent model
  * (tool use + failure recovery + 131K context) served over an OpenAI-style
  * API, running the SAME tool loop as Spark. No key → provider is skipped,
- * exactly like groq/gemini when unconfigured.
+ * exactly like the Meta runner when unconfigured.
  *
  * Best practices per Meta's model card: temperature 1.0, top_p 0.95, and a
  * "Reasoning strength: ..." system line. Temperature/top_p live here; the
@@ -32,7 +32,7 @@ function glimmerConfigured() {
 
 /* OpenAI-shaped call. Returns { raw } with choices[0].message carrying
  * content and/or tool_calls, so the route's agent loop treats Glimmer
- * exactly like the Meta/Groq OpenAI-style runners. */
+ * exactly like the Meta OpenAI-style runner. */
 async function glimmerChat({ messages, tools, toolChoice = 'auto', maxTokens = 2400 } = {}) {
   const c = glimmerCfg();
   if (!c.apiKey) throw new Error('glimmer_not_configured');

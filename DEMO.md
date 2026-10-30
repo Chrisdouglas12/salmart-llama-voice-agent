@@ -1,56 +1,23 @@
-# Demo script — chatbot vs. universal agent (5 scenes, ~4 minutes)
+# DEMO — 3 minutes, word for word
 
-Only implemented, tested behaviour. No simulated backend success: every state
-change below is a verified write or a user tap. Use a seller test account with
-at least one active listing (e.g. shoes).
+Setup: seller test account, one active listing, 2+ items in cart. Record in one take; rehearse free with `DEMO_MODE=mock` first.
 
-## Scene 1 — Natural intent
+## 0:00–0:25 — The problem
 
-Say: **"I want to sell something."**
-Expect: the phone's own gallery opens (user-controlled picker — the assistant
-never chooses). Pick a photo: it lands on the single-scroll Create Ad form,
-vision reads it, and the description fills live and editable. Then say:
+Show the register screen. Say: *"For my grandmother, this screen is a locked door. She can't type reliably, passwords confuse her, and 'I can't enter my account' fires a reset she never asked for. This week I taught Salmart's assistant to talk her through it instead."*
 
-**"Two bedroom flat, 50k, Abuja, brand new."**
+## 0:25–1:25 — Account access without the forms
 
-Price, location, condition and category fill step by step, top to bottom.
-The seller reviews and taps **Post**. Nothing is published by the agent.
+1. Mic: **"I can't enter my account."** → one clarifying question, not a reset. *(`beginAuthHelp(ACCOUNT_ACCESS)`)*
+2. **"I forgot the email I used."** → Google-or-email branch, mail-app guidance, honest limits.
+3. **"I want to join."** → one field at a time, local password helper, verification link opens the app.
 
-## Scene 2 — Live correction (no restart)
+## 1:25–2:30 — Buying without reading the interface
 
-Say: **"Actually, make it 70,000, and shorten the description."**
-Expect: same draft patched in place (price 70000, description rewritten);
-unrelated fields untouched. Then say: **"Forget the shoes. I want to sell a
-blender instead."** Expect: task resets, old draft cleared, blender flow
-starts — stale ids never leak (scope reset also clears last-shown products).
+1. **"Find me [item]. How do I buy it?"** → no name/price repeat; offers seller-message + cart hold.
+2. Agree → chat opens with draft + photo; item held in cart.
+3. Cart: tick items (₦0 default with 2+ items) → green Pay button → Paystack opens **with the mic above it** → **"What do I do here?"** → exact steps + escrow reassurance.
 
-## Scene 3 — Safe completion
+## 2:30–3:00 — The guarantees
 
-Expect: completed preview in the real form with `missing[]` read aloud. The
-agent waits. **You tap Post.** The agent never publishes; success is reported
-as "prepared", never "listed", until the queue confirms.
-
-## Scene 4 — Cross-app control (existing listings)
-
-Say: **"Find the shoes I listed."**
-Expect: `get_my_listings` → real titles/prices/postIds in-thread.
-Say: **"Change their price to 70,000."**
-Expect: first reply is a confirmation question with old → new price. Say
-**"Yes."** Expect: `update_listing_price(confirm:true)` → *"Nike shoes:
-₦75,000 → ₦70,000"*, re-read from the database.
-Say: **"Now open my profile for editing."**
-Expect: `navigate(editProfile)` → Edit Profile opens; avatar change stays a
-manual picker tap (the agent never sets photos).
-
-## Scene 5 — Intelligent recovery
-
-Try: change the price of a listing that isn't yours, or one already sold.
-Expect: refusal with the reason (*"That listing is not yours"* /
-*"already sold"*), valid progress preserved, next step offered. Kill the
-server voice mid-reply: the app falls back to phone TTS without stalling.
-
-## What "agentic" means here
-
-Intent → verified tools → observed state → confirmation gates → honest
-reporting. Every scene above maps to a tool call with a database or UI
-receipt, listed in `NEW_WORK.md`.
+To camera: *"Typed passwords never reach Meta. Success is claimed only from real app state. Meta models only, end to end."* End card: 119/119 tests, repo link.

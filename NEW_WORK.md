@@ -42,13 +42,13 @@
 
 First patch: global mic FAB (+ above the "+" button, hidden on splash, present over Paystack), AI chat screen, auth screens (verify/resend, Google + verify actions), tick-to-pay cart, seller-chat draft handoff, outcome codes feeding the next AI turn. Selling: photo-first walkthrough (gallery/camera choice sheet on arrival, vision auto-fill with "I filled X" summary), quantity→discount offer with concrete suggestion, assistant-filled bulk tier, skip-once optionals, no-repeat missing-field steps.
 
-Second patch: voice-first registration. Full name collected in one question; email optional (Google, Yahoo, or any other); when there is no email, a phone number from MTN, Airtel, Glo, or any other network is collected by voice; one secure password modal with the keyboard already focused; agreement card last; automatic submit and sign-in after server confirmation; Market opened without a second login; exact spoken welcome; generic post-sign-in resume suppressed for that transition. Spoken replies now use the phone's standard device voice only.
+Second patch: voice-first registration. Full name collected in one question; email optional (Google, Yahoo, or any other); when there is no email, a phone number from MTN, Airtel, Glo, or any other network is collected by voice; one secure password modal with the keyboard already focused; agreement card last; automatic submit and sign-in after server confirmation; Market opened without a second login; the post-registration welcome is written by the model from a `registration_complete` event, with a fixed fallback; generic post-sign-in resume suppressed for that transition. Spoken replies now use the phone's standard device voice only.
 
 ## Proof
 
-- Live server suite passed **119/119** before the registration change. After it, the four affected files pass **41/41**: `node --test backend/tests/ai-auth-accessibility.test.js backend/tests/ai-form-tools.test.js backend/tests/ai-task-state.test.js backend/tests/ai-navigation.test.js`.
+- Live server suite passed **119/119** before the registration change. After it, the four affected files pass **42/42**: `node --test backend/tests/ai-auth-accessibility.test.js backend/tests/ai-form-tools.test.js backend/tests/ai-task-state.test.js backend/tests/ai-navigation.test.js`.
 - Keyless extract tests pass here (`backend/tests/`, e.g. 15/15 auth-accessibility).
-- Changed mobile files parse under Babel (JSX/JS). No device was attached, so the secure modal, keyboard focus, automatic sign-in and spoken welcome are not device-verified.
+- Changed mobile files parse under Babel (JSX/JS). No device was attached, so the secure modal, keyboard focus, automatic sign-in and model-written welcome are not device-verified.
 - Whole files first appear in the server repo at post-kickoff commits (`4252e0663`, `3a803c49f`); pre-existing files ship only as diffs above.
 - No provider keys, `.env` files, tokens, or database URIs anywhere in this repo.
 - The agent never publishes, pays, or sets credentials — the user always taps the final button.

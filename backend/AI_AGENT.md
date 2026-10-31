@@ -456,9 +456,11 @@ The mobile `RegisterScreen` applies the patch and asks one question at a time:
 Server policy for this hackathon: email and phone are both accepted, no OTP or
 verification gate is inserted, the account is created as verified, and
 `POST /register` returns a 30-day JWT plus the user object. The app applies that
-session immediately, opens Market, and speaks "Welcome to Salmart, we are glad
-to have you here. Would you like to buy or sell something?" The generic
-post-sign-in resume turn is suppressed for this transition.
+session immediately, opens Market, and sends one real turn with
+`context.event = 'registration_complete'`. The server appends an app-event
+instruction, so the model writes the greeting and asks whether the user wants to
+buy or sell. A fixed welcome line is spoken only when the model is unreachable.
+The generic post-sign-in resume turn is suppressed for this transition.
 
 Security limits, stated plainly because they are product limits, not bugs:
 
@@ -784,7 +786,8 @@ live repo itself.
 - `publishProductListing` is intentionally unavailable.
 - Registration is voice-first end to end, but the final checks were script and
   parser tests only: no physical device was attached, so tapping through the
-  secure modal and the spoken welcome still needs a device pass.
+  secure modal, the automatic sign-in and the model-written welcome still needs a
+  device pass.
 - Navigation is limited to screens that take no id. Opening a specific listing,
   chat thread, showroom, or checkout still needs the user to tap the real row.
 - The agent has no streaming transport; each turn returns one JSON response.

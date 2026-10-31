@@ -46,7 +46,7 @@ import {
 import { speakReply, stopSpeaking } from './speak';
 import { takeAuthOutcome } from './authOutcome';
 import { peekFormSnapshot } from './formSnapshot';
-import { peekRegistrationSnapshot } from './registrationSnapshot';
+import { peekRegistrationSnapshot, takeRegistrationSnapshot } from './registrationSnapshot';
 
 const ANON_KEY = 'salmart:ai:anonymousId';
 
@@ -116,6 +116,13 @@ export function AIProvider({ children }) {
   // Registration signs the user in on purpose, so its welcome line replaces
   // the generic "continue what we were doing" resume turn.
   const skipResumeRef = useRef(false);
+  // A registration is followed by one model-generated greeting, even when the
+  // user never spoke to the assistant before signing up.
+  const welcomeRef = useRef(false);
+  const [welcomeTick, setWelcomeTick] = useState(0);
+  // Resolves when the post-sign-in conversation rebind settles, so the greeting
+  // turn never races the anonymous conversation being attached to the account.
+  const rebindPromiseRef = useRef(Promise.resolve());
   const authRef = useRef({ ready: authReady, isAuthenticated });
   authRef.current = { ready: authReady, isAuthenticated };
   // Screen context from the last turn, used to avoid opening the chat when the
@@ -174,11 +181,16 @@ export function AIProvider({ children }) {
     if (isAuthenticated) {
       const anonymousId = anonRef.current;
       const cid = convRef.current;
-      if (!anonymousId || !cid) return;
+      if (!anonymousId || !cid) {
+        // Nothing to rebind. A registration greeting still runs on the new
+        // signed-in conversation.
+        rebindPromiseRef.current = Promise.resolve();
+        return;
+      }
       // Only resume when the user was already talking before signing in. A
-      // manual sign-in with no AI history stays silent.
+      // registration always greets, even with no chat history.
       const hadConversation = messagesRef.current.some(m => m && m.role === 'user');
-      (async () => {
+      rebindPromiseRef.current = (async () => {
         try {
           await rebindConversation({ conversationId: cid, anonymousId });
           anonRef.current = null;
@@ -196,6 +208,7 @@ export function AIProvider({ children }) {
         }
       })();
     } else {
+      rebindPromiseRef.current = Promise.resolve();
       convRef.current = null;
       anonRef.current = null;
       setConversationId(null);
@@ -346,6 +359,35 @@ export function AIProvider({ children }) {
     })();
   }, [authReady, isAuthenticated, send]);
 
+  // A newly created account gets one model-written greeting. The turn carries
+  // an event marker, not form values: the server tells the model the account
+  // exists and the user is signed in, so the reply cannot drift back into
+  // registration questions. The fixed line is only a fallback when the model
+  // is unreachable.
+  useEffect(() => {
+    if (!welcomeRef.current || !authReady || !isAuthenticated) return;
+    welcomeRef.current = false;
+    (async () => {
+      const fallback =
+        'Welcome to Salmart, we are glad to have you here. Would you like to buy or sell something?';
+      try {
+        await rebindPromiseRef.current.catch(() => {});
+        // The screen's completion flags are stale now that the account exists.
+        takeRegistrationSnapshot();
+        const result = await send('I just created my account.', {
+          event: 'registration_complete',
+          screen: 'market',
+        });
+        const line = result.ok && result.reply ? result.reply : fallback;
+        setLastVoice({ text: line, kind: result.ok ? 'reply' : 'error', at: Date.now() });
+        await speakReply(line);
+      } catch (_e) {
+        setLastVoice({ text: fallback, kind: 'reply', at: Date.now() });
+        try { await speakReply(fallback); } catch (_e2) { /* speech is optional */ }
+      }
+    })();
+  }, [welcomeTick, authReady, isAuthenticated, send]);
+
   const confirm = useCallback(async (actionId) => {
     try {
       const res = await apiConfirm(actionId);
@@ -434,12 +476,15 @@ export function AIProvider({ children }) {
   }, []);
 
   /**
-   * The next false→true auth transition was caused by registration, so the
-   * generic resume turn is skipped. The register screen speaks its own welcome.
-   * Pass false when that registration failed, so a later sign-in still resumes.
+   * Mark the next false→true auth transition as a registration: the generic
+   * resume turn is skipped and the assistant writes one welcome instead. Pass
+   * false when registration failed, so a later sign-in still resumes.
    */
-  const suppressNextResume = useCallback((on = true) => {
-    skipResumeRef.current = on !== false;
+  const welcomeAfterRegistration = useCallback((on = true) => {
+    const wanted = on !== false;
+    welcomeRef.current = wanted;
+    skipResumeRef.current = wanted;
+    if (wanted) setWelcomeTick(t => t + 1);
   }, []);
 
   /**
@@ -733,12 +778,12 @@ export function AIProvider({ children }) {
     conversationId, messages, status, error, isReady, recording, transcribing,
     lastVoice, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
     send, confirm, cancel, reset, openSellerChat, micNudge, nudgeMic,
-    startGoogleAuth, authBusy, notice, speak, suppressNextResume,
+    startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
   }), [
     conversationId, messages, status, error, isReady, send, confirm, cancel, reset,
     recording, transcribing, toggleRecording, lastVoice, dismissVoice, confirmVoice, cancelVoice,
     openSellerChat, micNudge, nudgeMic,
-    startGoogleAuth, authBusy, notice, speak, suppressNextResume,
+    startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
   ]);
 
   return <AIContext.Provider value={value}>{children}</AIContext.Provider>;

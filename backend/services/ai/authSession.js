@@ -4,11 +4,11 @@
  * services/ai/authSession.js
  *
  * Persists the authentication task across turns using only the non-sensitive
- * facts owned by lib/assistant/authIntents.js. It is derived from validated
- * tool results, never from the model's prose and never from a client field.
+ * facts owned by lib/assistant/authIntents.js. The state comes from validated
+ * tool results, not from model text and not from a client field.
  *
- * Stored under `collectedInfo.auth`, beside the existing `task`. The email
- * value, password, OTP, tokens, and links are never written here.
+ * Stored under `collectedInfo.auth`, beside the existing `task`. Email
+ * addresses, passwords, OTPs, tokens and links are never written here.
  */
 
 const intents = require('../../lib/assistant/authIntents');
@@ -29,11 +29,24 @@ function promptBlock(auth) {
  * @param {Array} toolResults  from agentRunner, each { name, ok, data }
  * @param {{ isAuthenticated?: boolean, task?: object }} options
  */
-function applyToolResults(prior, toolResults, { isAuthenticated, task } = {}) {
+function applyToolResults(prior, toolResults, { isAuthenticated, task, registration } = {}) {
   let auth = read({ auth: prior });
 
-  const emailProvided = !!(task && task.emailProvided);
+  const snap = registration && typeof registration === 'object' ? registration : {};
+  let emailProvided = !!(task && task.emailProvided) || snap.email === true;
+  let phoneProvided = !!(task && task.phoneProvided) || snap.phone === true;
+  let emailDeclined = !!(task && task.emailDeclined) || snap.emailDeclined === true;
+  const passwordSet = snap.password === true;
+  const agreed = snap.agreed === true;
   const registerDraft = (task && task.drafts && task.drafts.register) || {};
+
+  const flags = () => ({
+    emailProvided,
+    phoneProvided,
+    emailDeclined,
+    passwordSet,
+    agreed,
+  });
 
   for (const r of toolResults || []) {
     if (!r || !r.ok || !r.data) continue;
@@ -46,7 +59,8 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task } = {}) {
           intent: r.data.intent,
           prior: auth,
           registerDraft,
-          emailProvided,
+          ...flags(),
+          registration: snap,
         });
         if (!plan) break;
         const same = !!(auth && auth.intent === plan.intent);
@@ -54,7 +68,7 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task } = {}) {
           intent: plan.intent,
           state: plan.state,
           method: plan.method,
-          emailProvided,
+          ...flags(),
           attempts: same ? Math.min((auth.attempts || 0) + 1, intents._internal.MAX_ATTEMPTS) : 0,
           updatedAt: Date.now(),
         };
@@ -78,19 +92,30 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task } = {}) {
           auth = {
             intent: 'REGISTER',
             state: 'COLLECTING_REGISTRATION_DETAILS',
-            method: 'email',
+            method: null,
             emailProvided: false,
+            phoneProvided: false,
+            emailDeclined: false,
+            passwordSet: false,
+            agreed: false,
             attempts: 0,
             updatedAt: Date.now(),
           };
         }
-        if (r.data.fields && r.data.fields.email) auth = { ...auth, emailProvided: true };
-        const draft = (task && task.drafts && task.drafts.register) || registerDraft;
-        const ready = !!(draft.firstName && draft.lastName && (auth.emailProvided || emailProvided));
+        if (r.data.fields && r.data.fields.email) emailProvided = true;
+        if (r.data.fields && r.data.fields.phoneNumber) phoneProvided = true;
+        if (r.data.emailDeclined) emailDeclined = true;
+        const plan = intents.planAuthHelp({
+          intent: 'REGISTER',
+          prior: auth,
+          registerDraft,
+          ...flags(),
+          registration: snap,
+        });
         auth = {
           ...auth,
-          state: ready ? 'REGISTRATION_READY' : 'COLLECTING_REGISTRATION_DETAILS',
-          method: 'email',
+          state: plan ? plan.state : 'COLLECTING_REGISTRATION_DETAILS',
+          ...flags(),
           updatedAt: Date.now(),
         };
         break;
@@ -103,6 +128,10 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task } = {}) {
 
   // Only the app's real session marks success; a Google button tap does not.
   if (isAuthenticated && auth) auth = intents.applyAuthEvent(auth, { type: 'authenticated' });
+
+  // The frontend snapshot is authoritative for fields completed by hand, so it
+  // is folded in even on a turn with no auth tool call.
+  if (auth) auth = { ...auth, ...flags(), updatedAt: auth.updatedAt || Date.now() };
 
   return auth ? intents.sanitizeAuthState(auth) : null;
 }

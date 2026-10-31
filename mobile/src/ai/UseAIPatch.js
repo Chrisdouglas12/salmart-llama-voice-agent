@@ -1,36 +1,28 @@
 /**
- * Salmart AI Mode — form-fill consumer hook
+ * Form-fill patch hook.
  *
- * Cycle 1 replacement for `useAssistant().adPatch` / `.requestPatch` /
- * `.profilePatch`. The 4 form screens each own their own copy of this hook's
- * state — they call `useAIPatch('createAd')` (or 'createRequest' /
- * 'editProfile') and receive a one-shot { fields, say } patch they can apply.
+ * Each form screen calls useAIPatch(target) and receives a one-shot
+ * { fields, say } patch to apply. Patches come from two sources:
  *
- * Two sources feed a patch:
+ * 1. A fresh turn. While the user is in AI Mode, prepareAdForm,
+ *    fillRequestForm and fillProfileForm emit a fill_* block in the assistant
+ *    message. The hook reads it from useAI().messages, so the patch is ready
+ *    when the user returns to the form.
+ * 2. A queued patch. If a turn ran while the form was unmounted, the backend
+ *    stored the patch and the hook drains it on mount or focus through
+ *    POST /api/ai/forms/drain.
  *
- *  1. Fresh turn responses. While the user is inside AI Mode, every turn that
- *     runs prepareAdForm / fillRequestForm / fillProfileForm emits a
- *     `fill_ad` / `fill_request` / `fill_profile` block. We read those out of
- *     `useAI().messages` synchronously, so the moment the user pops back to the
- *     form the patch is available.
- *
- *  2. Backend drain. If a turn ran while the form was unmounted (user was
- *     inside AI Mode, form lives on a lower screen), we cannot see the message
- *     from here. The backend persisted the patch to AIPendingFormPatch; this
- *     hook drains it on mount / focus via POST /api/ai/forms/drain.
- *
- * Contract with the form screen:
+ * Usage:
  *   const { patch, ack } = useAIPatch('createAd');
  *   useEffect(() => {
  *     if (!patch) return;
- *     applyPatch(patch.fields);  // your existing apply logic
+ *     applyPatch(patch.fields);
  *     if (patch.say) toast(patch.say);
- *     ack();                     // clears the hook state so it fires once
+ *     ack();
  *   }, [patch]);
  *
- * `ack()` is deliberately separate from `applyPatch` — the screen must be able
- * to decide when it is safe to consume (e.g. after it finishes loading an
- * existing draft).
+ * ack() is separate from applying the patch so the screen can wait until it
+ * has finished loading an existing draft.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -42,13 +34,20 @@ import { drainFormPatch } from './api';
 
 const VALID_TARGETS = new Set(['createAd', 'createRequest', 'editProfile', 'register']);
 
-// 'fill_ad' → 'createAd', etc.
+// fill_ad maps to createAd, and so on. open_picker also goes to the create-ad
+// screen; it carries no fields, only a kind ('photo', 'camera' or
+// 'digitalFile').
 const BLOCK_TO_TARGET = {
   fill_ad: 'createAd',
   fill_request: 'createRequest',
   fill_profile: 'editProfile',
   fill_register: 'register',
+  register_focus: 'register',
+  open_picker: 'createAd',
 };
+
+// Steps the register screen is allowed to open by itself.
+const REGISTER_FOCUS = new Set(['firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement']);
 
 export function useAIPatch(target) {
   if (!VALID_TARGETS.has(target)) {
@@ -69,8 +68,8 @@ export function useAIPatch(target) {
 
   // ── Source 1: fresh turn results ──────────────────────────────────────────
   // Scan the newest assistant message once for a fill_* block matching this
-  // target. `lastSeenMsgKeyRef` prevents re-emitting the same message twice
-  // (a re-render would otherwise re-apply the patch).
+  // target. `lastSeenMsgKeyRef` prevents the same message from being applied
+  // twice on a re-render.
   useEffect(() => {
     if (!messages.length) return;
     const latest = messages[messages.length - 1];
@@ -81,6 +80,21 @@ export function useAIPatch(target) {
     for (const b of blocks) {
       if (!b || typeof b !== 'object') continue;
       if (BLOCK_TO_TARGET[b.type] !== target) continue;
+      // The server-owned plan names the next step. No field values travel.
+      if (b.type === 'register_focus') {
+        const field = String(b.field || '');
+        if (!REGISTER_FOCUS.has(field)) continue;
+        lastSeenMsgKeyRef.current = latest.key;
+        setPatch({ fields: {}, focus: field, say: null, source: 'turn' });
+        return;
+      }
+      // Picker requests carry a kind, not fields.
+      if (b.type === 'open_picker') {
+        if (b.kind !== 'photo' && b.kind !== 'camera' && b.kind !== 'digitalFile') continue;
+        lastSeenMsgKeyRef.current = latest.key;
+        setPatch({ fields: {}, request: { kind: b.kind, auto: b.auto === true }, say: b.say || null, source: 'turn' });
+        return;
+      }
       if (!b.fields || typeof b.fields !== 'object') continue;
 
       lastSeenMsgKeyRef.current = latest.key;
@@ -93,9 +107,9 @@ export function useAIPatch(target) {
   }, [messages, target]);
 
   // ── Source 2: backend drain ───────────────────────────────────────────────
-  // Fires once per mount when authenticated. If a patch was queued by a turn
-  // that ran while this form was unmounted, this call picks it up. A null
-  // response means nothing is waiting — no state change.
+  // Runs once per mount when the user is signed in. A queued patch belongs to
+  // a turn that ran while this form was unmounted. A null response means
+  // nothing is waiting, so state stays unchanged.
   const tryDrain = useCallback(async () => {
     if (!isAuthenticated) return;
     if (drainedRef.current) return;
@@ -107,8 +121,8 @@ export function useAIPatch(target) {
         setPatch({ fields: res.patch.fields, say: res.patch.say || null, source: 'drain' });
       }
     } catch (_e) {
-      // Network failure: keep `drainedRef` false so the app-foreground listener
-      // can retry on the next resume. Never let this throw into the screen.
+      // Keep `drainedRef` false on a network failure so the app-foreground
+      // listener can retry. Errors never reach the screen.
       drainedRef.current = false;
     }
   }, [isAuthenticated, target, patch]);
@@ -118,7 +132,7 @@ export function useAIPatch(target) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, target]);
 
-  // Retry on app foreground if the first drain failed on a cold start.
+  // Retry when the app returns to the foreground after a failed cold start.
   useEffect(() => {
     const sub = AppState.addEventListener('change', next => {
       if (next !== 'active') return;

@@ -1,18 +1,18 @@
 /* lib/assistant/authIntents.js
  *
- * The authentication half of Salmart AI. Pure data + pure functions: no
- * database, no network, no secrets, so it is testable everywhere (including
- * the event extract, which has no models).
+ * Authentication help for the assistant. Pure data and pure functions: no
+ * database, no network, no secrets, so the module is testable everywhere,
+ * including the event extract that has no models.
  *
- * The Meta model may only *choose an intent* from this closed list. It never
- * sets a conversation state directly: `planAuthHelp` computes the state, the
- * next screen, and ONE spoken sentence, and `applyAuthEvent` moves the state
- * from validated tool results only.
+ * The model only chooses an intent from this fixed list. It never sets a
+ * conversation state directly. `planAuthHelp` computes the state, the next
+ * screen and one spoken sentence, and `applyAuthEvent` moves the state only
+ * from validated tool results.
  *
- * Security rules enforced by shape:
+ * The types enforce the security rules:
  * - Only non-sensitive facts are stored: intent, state, method, whether an
- *   email was supplied, attempt count. Never the email value, password, OTP,
- *   token, or reset link.
+ *   email was supplied, and an attempt count. The email value, password, OTP,
+ *   token and reset link are never stored.
  * - Every sentence asks at most one question and is short enough to speak.
  * - No sentence promises a recovery channel Salmart does not have.
  */
@@ -60,7 +60,10 @@ const CLARIFY_SAY =
 const REGISTRATION_QUESTIONS = {
   firstName: 'Let us create your account. What is your first name?',
   lastName: 'Thank you. What is your last name?',
-  email: 'What email address should we use? You will need to open it to confirm the account.',
+  email: 'Do you have an email address? If not, that is fine, we can use your phone number instead.',
+  phone: 'That is fine. What phone number should we use for your account?',
+  password: 'Now let us make a secret code for your account. Do not share your password with anyone, not even someone who says they are from Salmart.',
+  agreement: 'Last step. Please read the agreement on the screen and tick the box if you accept to use Salmart.',
 };
 
 /**
@@ -73,7 +76,7 @@ const PLANS = Object.freeze({
     say: REGISTRATION_QUESTIONS.firstName,
     nextScreen: 'register',
     field: 'firstName',
-    method: 'email',
+    method: null,
   },
   SIGN_IN: {
     state: 'SIGN_IN_IN_PROGRESS',
@@ -149,10 +152,10 @@ const PLANS = Object.freeze({
 
 const REGISTRATION_READY = {
   state: 'REGISTRATION_READY',
-  say: 'Your details are filled in. Choose a password on the screen, accept the terms, then tap Create account.',
+  say: 'Your details are complete. I am creating your account now. Please wait a moment.',
   nextScreen: 'register',
   field: null,
-  method: 'email',
+  method: null,
 };
 
 // Retry wording is deliberately shorter and slower, never a lecture.
@@ -205,37 +208,72 @@ function spoken(text) {
   return say.length > MAX_SAY ? `${say.slice(0, MAX_SAY - 1).trim()}…` : say;
 }
 
-function registrationStep({ registerDraft, emailProvided } = {}) {
+function registrationStep({
+  registerDraft,
+  emailProvided,
+  phoneProvided,
+  emailDeclined,
+  passwordSet,
+  agreed,
+  registration,
+} = {}) {
   const draft = registerDraft && typeof registerDraft === 'object' ? registerDraft : {};
-  if (!draft.firstName) return 'firstName';
-  if (!draft.lastName) return 'lastName';
-  if (!emailProvided) return 'email';
+  const snap = registration && typeof registration === 'object' ? registration : {};
+
+  const hasFirst = !!(draft.firstName || snap.firstName === true);
+  const hasLast = !!(draft.lastName || snap.lastName === true);
+  const hasEmail = !!(emailProvided || snap.email === true);
+  const hasPhone = !!(phoneProvided || snap.phone === true);
+  const declined = !!(emailDeclined || snap.emailDeclined === true);
+  const hasPassword = !!(passwordSet || snap.password === true);
+  const accepted = !!(agreed || snap.agreed === true);
+
+  if (!hasFirst) return 'firstName';
+  if (!hasLast) return 'lastName';
+  if (!hasEmail && !declined) return 'email';
+  if (!hasEmail && !hasPhone) return 'phone';
+  if (!hasPassword) return 'password';
+  if (!accepted) return 'agreement';
   return null;
 }
 
 /**
  * Build the one step the assistant may speak for this intent.
  *
+ * `registration` is the safe frontend snapshot (booleans only) so a manually
+ * filled field is never asked for again.
+ *
  * @returns {{ intent: string, state: string, say: string,
  *             nextScreen: string|null, field: string|null,
  *             method: string|null, retry: boolean }|null}
  */
-function planAuthHelp({ intent, prior, registerDraft, emailProvided } = {}) {
+function planAuthHelp({
+  intent,
+  prior,
+  registerDraft,
+  emailProvided,
+  phoneProvided,
+  emailDeclined,
+  passwordSet,
+  agreed,
+  registration,
+} = {}) {
   const key = cleanIntent(intent);
   if (!key) return null;
 
   let plan = PLANS[key];
   if (key === 'REGISTER') {
-    const step = registrationStep({ registerDraft, emailProvided });
+    const step = registrationStep({
+      registerDraft,
+      emailProvided,
+      phoneProvided,
+      emailDeclined,
+      passwordSet,
+      agreed,
+      registration,
+    });
     if (!step) plan = REGISTRATION_READY;
-    else if (step === 'email') {
-      plan = {
-        ...PLANS.REGISTER,
-        say: REGISTRATION_QUESTIONS.email,
-        field: 'email',
-        state: 'COLLECTING_REGISTRATION_DETAILS',
-      };
-    } else {
+    else {
       plan = {
         ...PLANS.REGISTER,
         say: REGISTRATION_QUESTIONS[step],
@@ -273,7 +311,6 @@ function applyAuthEvent(prior, event = {}) {
 
   if (event.type === 'navigate' && SCREEN_STATE[event.screen]) {
     state = SCREEN_STATE[event.screen];
-    if (event.screen === 'register') method = 'email';
     if (event.screen === 'passwordReset') method = 'email';
   } else if (event.type === 'outcome' && OUTCOME_STATE[event.code]) {
     state = OUTCOME_STATE[event.code];
@@ -314,22 +351,30 @@ function sanitizeAuthState(raw) {
     state,
     method: cleanMethod(raw.method),
     emailProvided: raw.emailProvided === true,
+    phoneProvided: raw.phoneProvided === true,
+    emailDeclined: raw.emailDeclined === true,
+    passwordSet: raw.passwordSet === true,
+    agreed: raw.agreed === true,
     attempts,
     updatedAt,
   };
 }
 
-/** Compact prompt block. Contains no email address, password, or token. */
+/** Compact prompt block. Contains no email address, phone number, or password. */
 function buildPromptBlock(auth) {
   if (!auth) return '';
   const lines = [
     `Intent: ${auth.intent}`,
     `State: ${auth.state}`,
     `Email supplied already: ${auth.emailProvided ? 'yes' : 'no'}`,
+    `Phone supplied already: ${auth.phoneProvided ? 'yes' : 'no'}`,
+    `User said they have no email: ${auth.emailDeclined ? 'yes' : 'no'}`,
+    `Password entered on the phone: ${auth.passwordSet ? 'yes' : 'no'}`,
+    `Agreement accepted: ${auth.agreed ? 'yes' : 'no'}`,
     `Method: ${auth.method || 'not chosen yet'}`,
     `Turns on this step: ${auth.attempts}`,
   ];
-  return `\n\n[Auth state — data only, not instructions:\n${lines.join('\n')}\nFollow this state. Do not restart from the beginning. One question at a time.]`;
+  return `\n\n[Auth state — data only, not instructions:\n${lines.join('\n')}\nFollow this state. Do not restart from the beginning. One question at a time. Never ask for a password or an email value in chat.]`;
 }
 
 /**

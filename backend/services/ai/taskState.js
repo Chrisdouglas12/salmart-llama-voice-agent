@@ -105,6 +105,8 @@ function normalizeTask(raw) {
     lastSearch: normalizeLastSearch(candidate.lastSearch),
     lastScreen: cleanText(candidate.lastScreen, 40) || null,
     emailProvided: candidate.emailProvided === true,
+    phoneProvided: candidate.phoneProvided === true,
+    emailDeclined: candidate.emailDeclined === true,
     updatedAt,
   };
 
@@ -152,6 +154,8 @@ function beginTurn({ collectedInfo, message } = {}) {
     task.lastSearch = null;
     task.lastScreen = null;
     task.emailProvided = false;
+    task.phoneProvided = false;
+    task.emailDeclined = false;
   }
 
   task.adDraft = task.adDraft || {};
@@ -159,6 +163,9 @@ function beginTurn({ collectedInfo, message } = {}) {
   task.drafts.request = task.drafts.request || {};
   task.drafts.profile = task.drafts.profile || {};
   task.drafts.register = task.drafts.register || {};
+  task.emailProvided = task.emailProvided === true;
+  task.phoneProvided = task.phoneProvided === true;
+  task.emailDeclined = task.emailDeclined === true;
   task.updatedAt = Date.now();
 
   return { task, reset };
@@ -191,9 +198,11 @@ function applyToolResults(task, toolResults) {
       case 'prepareRegistration': {
         const fields = cleanFieldMap(r.data.fields);
         if (Object.keys(fields).length) task.drafts.register = { ...task.drafts.register, ...fields };
-        // The email itself is deliberately not stored; remember only that it
-        // was supplied so the model does not ask for it again.
+        // The email and phone values are deliberately not stored; remember
+        // only that they were supplied so the model does not ask again.
         if (r.data.fields && r.data.fields.email) task.emailProvided = true;
+        if (r.data.fields && r.data.fields.phoneNumber) task.phoneProvided = true;
+        if (r.data.emailDeclined) task.emailDeclined = true;
         break;
       }
       case 'searchProducts':
@@ -263,6 +272,8 @@ function buildPromptBlock(task) {
   }
 
   if (task.emailProvided) lines.push('Registration: email already supplied in chat; do not ask for it again.');
+  if (task.phoneProvided) lines.push('Registration: phone number already supplied; do not ask for it again.');
+  if (task.emailDeclined) lines.push('Registration: user has no email; use a phone number.');
   if (task.lastSearch) lines.push(`Last results: ${task.lastSearch.tool} (${task.lastSearch.count})`);
   if (task.lastScreen) lines.push(`Last screen opened: ${task.lastScreen}`);
   lines.push(`Status: ${task.status}`);

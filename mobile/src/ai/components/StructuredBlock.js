@@ -7,15 +7,13 @@ import ProductCardMini from './ProductCardMini';
 import { Small, Tiny, T3 } from '../../ui/kit';
 
 /**
- * Renders one entry from `structured[]`. The TYPE ALLOWLIST is the security
- * boundary: any type not listed here returns null. The backend already filters
- * to this set, but a second gate here means a compromised or changed backend
- * cannot force an unexpected component to render.
+ * Renders the supported structured blocks returned by the assistant.
  *
- * fill_ad / fill_request / fill_profile are INTENTIONALLY OMITTED here — they
- * are consumed by the corresponding form screen via useAIPatch, not rendered
- * in the conversation. Returning null for them is correct: they have no UI in
- * this screen.
+ * The renderer map is also an allowlist: unknown types render nothing, so a
+ * changed or compromised backend cannot mount an unexpected component.
+ *
+ * fill_ad, fill_request and fill_profile are handled by their form screens
+ * through useAIPatch and are deliberately absent here.
  */
 
 function Unknown() { return null; }
@@ -143,11 +141,12 @@ function MessagePreview({ block, onOpenChat }) {
 }
 
 /**
- * Seller-chat handoff. Shows the draft WITH the product photo and one
- * "Open chat" button. Tapping navigates to ChatScreen with the draft
- * pre-filled — the user presses send there. Nothing is sent from this card.
+ * Seller-chat handoff. Shows the draft and product photo as information only.
+ * The app already opens the chat with the draft pre-filled, so there is no
+ * button here; the user sends with the green arrow at the bottom of the chat
+ * screen. Nothing is sent from this component.
  */
-function ChatHandoff({ block, onOpenChat }) {
+function ChatHandoff({ block }) {
   const { T } = useTheme();
   if (!block || !block.sellerId) return null;
   return (
@@ -165,20 +164,6 @@ function ChatHandoff({ block, onOpenChat }) {
       {!!block.draft && (
         <Small style={{ color: T.ink, marginTop: 4, lineHeight: 20 }}>{block.draft}</Small>
       )}
-      <Pressable
-        onPress={() => onOpenChat?.(block)}
-        accessibilityRole="button"
-        accessibilityLabel={`Open chat with ${block.sellerName || 'seller'}`}
-        style={({ pressed }) => [
-          styles.option,
-          styles.actionRow,
-          { borderColor: T.emerald, backgroundColor: T.emerald, marginTop: 10 },
-          pressed && { opacity: 0.85 },
-        ]}
-      >
-        <Ionicons name="chatbubbles-outline" size={16} color="#fff" />
-        <Small style={{ color: '#fff', fontWeight: '800', marginLeft: 8 }}>Open chat</Small>
-      </Pressable>
     </View>
   );
 }
@@ -197,10 +182,9 @@ function Capabilities({ block }) {
 }
 
 /**
- * Google handoff. The URL was already gated by the backend and again by
- * StructuredBlock's caller; this component only decides how it looks. It never
- * opens automatically — the user taps, so a misheard utterance cannot launch a
- * browser on its own.
+ * Google sign-in handoff. The URL has already been checked by the backend and
+ * by StructuredBlock's caller; this component only decides how it looks. It
+ * does not open automatically, so a misheard phrase cannot launch a browser.
  */
 function AuthHandoff({ block, onOpenAuth, onSpeak }) {
   const { T } = useTheme();
@@ -237,9 +221,9 @@ function AuthHandoff({ block, onOpenAuth, onSpeak }) {
 }
 
 /**
- * Registration prefill confirmation. The actual fields were applied to the
- * register form by useAIPatch; this only explains what still has to be done by
- * hand (password, terms, email verification) and can be read aloud.
+ * Registration prefill confirmation. useAIPatch has already applied the fields
+ * to the register form; this explains what the user still has to do by hand
+ * (password, terms, email verification) and can be read aloud.
  */
 function RegistrationFill({ block, onSpeak }) {
   const { T } = useTheme();
@@ -274,7 +258,7 @@ const RENDERERS = Object.freeze({
   capabilities:       Capabilities,
   auth_url:           AuthHandoff,
   fill_register:      RegistrationFill,
-  // other fill_* types intentionally absent — they belong to a form screen.
+  // The other fill_* types belong to their form screens.
 });
 
 export default function StructuredBlock({

@@ -1,0 +1,15 @@
+diff --git a/models/userSchema.js b/models/userSchema.js
+index 375e4b9e1..2656db5c6 100644
+--- a/models/userSchema.js
++++ b/models/userSchema.js
+@@ -19,7 +19,9 @@ const userSchema = new mongoose.Schema({
+   },
+   email: { 
+     type: String, 
+-    required: function() { return !this.isAnonymous; },  // Only required for non-anonymous
++    // Optional: a phone-only account is valid for the voice-first sign-up.
++    // Anonymous users still receive a generated address in pre-save.
++    required: false,
+     trim: true, 
+     lowercase: true,
+     // Make email unique but allow multiple nulls for anonymous users

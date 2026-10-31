@@ -129,8 +129,9 @@ A turn no longer starts from a blank slate. Before the model call the route:
 
 Privacy rules enforced in `taskState.js`: `password`, `phone`, `email`, bank
 and identifier keys are stripped before storage and never echoed in the prompt
-block. A registration turn keeps `emailProvided: true` — the flag only — so
-the model can remember that email is handled without storing the address.
+block. A registration turn keeps `emailProvided` / `phoneProvided` /
+`emailDeclined` — flags only — so the model can remember that a contact detail
+is handled without storing the value.
 Only `active`/`awaiting_confirmation` are persisted as live statuses;
 completed and cancelled tasks collapse back to `active` so a stale task never
 claims work that did not happen.
@@ -414,9 +415,9 @@ Save/Post.
   location.
 - `editProfile` accepts first/last name, bio, state, city only. Phone,
   password, bank details, and photos are never part of a patch.
-- `register` accepts first/last name, email, and referral code only. A
-  password, phone number, terms acceptance, and the email-verification step are
-  never part of a patch — see "Registration for voice-first users" below.
+- `register` accepts first/last name, email or phone number, and referral code.
+  The password and the agreement tick are never part of a patch — see
+  "Registration for voice-first users" below.
 - One live patch per `(userId, target)`, latest wins, 10-minute TTL.
 - A turn returns `fill_*` inline for the currently mounted screen **and**
   persists it. A screen that mounts later calls `/api/ai/forms/drain` once.
@@ -429,29 +430,40 @@ The person using the app may not be able to read comfortably. `register` is the
 one auth screen the agent may open, and `prepareRegistration` pre-fills the
 harmless half of it:
 
-- Allowed fields: `firstName`, `lastName`, `email`, `referrer`. The email must
-  match a basic address shape or it is dropped rather than filled.
+- Allowed fields: `firstName`, `lastName`, `email`, `phoneNumber`, `referrer`,
+  plus the `noEmail` flag. An invalid email or phone is dropped rather than
+  filled.
 - Never accepted, never stored, never repeated, never spoken: `password`,
-  `confirm`, `phoneNumber`, `agreed`. Extra keys are discarded by the
-  normaliser, so a model that tries to fill them changes nothing.
-- The tool returns `manualSteps: ['password', 'terms', 'create_account',
-  'verify_email']` so the model can name what is left without claiming it did
-  it.
+  `confirm`, `agreed`. Extra keys are discarded by the normaliser, so a model
+  that tries to fill them changes nothing.
+- The tool returns `manualSteps: ['password', 'agreement', 'create_account']`
+  so the model can name what is left without claiming it did it.
 
-The mobile `RegisterScreen` applies the patch, offers a device-only password
-generator (the generated password never leaves the phone and is not sent to the
-server or the model), reads the steps aloud, and leaves the terms checkbox and
-the Create account tap to the user.
+The mobile `RegisterScreen` applies the patch and asks one question at a time:
+
+1. Name and email-or-phone, by voice.
+2. If the user has no email, the tool is called with `noEmail=true` and the
+   phone number is collected instead. Phone-only accounts are valid.
+3. A secure password modal opens by itself with the keyboard focused. The value
+   stays in the component and goes only to `POST /register`.
+4. The agreement card is last, and ticking it is the user's own action.
+5. When everything is complete and the box is ticked, the assistant says "I am
+   creating your account now." and the form submits.
+
+Server policy for this hackathon: email and phone are both accepted, no OTP or
+verification gate is inserted, the account is created as verified, and
+`POST /register` returns a 30-day JWT plus the user object. The app applies that
+session immediately, opens Market, and speaks "Welcome to Salmart, we are glad
+to have you here. Would you like to buy or sell something?" The generic
+post-sign-in resume turn is suppressed for this transition.
 
 Security limits, stated plainly because they are product limits, not bugs:
 
 - A password must never be spoken to the assistant, typed into a chat, or
-  handled by the server. Anyone who cannot manage a password on their own needs
-  a helper.
-- `POST /register` sends a verification email and returns no token. There is no
-  phone/OTP or passwordless sign-up today, so a person with no access to email
-  cannot finish registration entirely hands-free. The agent must say so instead
-  of promising otherwise.
+  handled by the server outside the registration request. It is hashed by
+  `/register` and never logged.
+- Phone numbers are treated as unverified for this hackathon. The verification
+  screen remains only for older accounts that still need an email link.
 
 ## Google sign-in handoff
 
@@ -480,14 +492,14 @@ backend `[A-Za-z0-9_-]{1,64}` check, so a new account still links its referrer.
 The same global mic is the entry point to signup, sign-in, and recovery.
 The system prompt teaches the model six intents using only flows that exist:
 
-- **register** → navigate `register` + `prepareRegistration` (name/email/referral only; password, terms, and email verification stay manual and are read aloud).
+- **register** → navigate `register` + `prepareRegistration` (name plus email or phone; the password and agreement stay in the screen's own secure controls).
 - **sign_in** → email users go to `signin` (the model never asks for, accepts, or repeats a password); Google users get the `auth_url` handoff.
 - **recover_account** → navigate `passwordReset` and explain one step at a time (email → emailed link → new password; expired links are re-requested from the same screen).
 - **explain_authentication_options** → `getAvailableAuthenticationMethods` + `getOnboardingState`.
 - **continue_pending_authentication / explain_authentication_error** → the `explainAuthError` tool maps the real backend outcome (`email_exists`, `invalid_password`, `no_account`, `google_only`, `unverified`, `expired_link`, `verification_pending`, `suspended`, `recovery_failed`, `google_cancelled`, `session_expired`) to one short spoken sentence plus the screen that fixes it. Raw backend messages never reach the model (they can contain emails); unknown codes get generic help, never an invented diagnosis.
 - **resume_original_intention** → the task goal survives rebind on the same conversation; after sign-in the app runs one spoken resume turn ("I just signed in…") and the model continues instead of asking the user to repeat. A manual sign-in with no prior AI conversation stays silent. Only the app's verified auth state counts — returning to the app is not proof.
 
-Security (unchanged, enforced by shape): no passwords in chat/history/model, no tokens to the model, no invented auth results, no verification bypass, no model-driven credential changes, no sensitive logging. `authentication_success` is only ever spoken after the real auth system confirms it (the `alreadySignedIn`/`ok` paths, never a model claim).
+Security (enforced by shape): no passwords in chat/history/model, no tokens to the model, no invented auth results, no model-driven credential changes, no sensitive logging. `authentication_success` is only ever spoken after the real auth system confirms it (the `alreadySignedIn`/`ok` paths, never a model claim). Registration itself is server-confirmed: the app opens Market only after `/register` returns a session.
 
 ## Anonymous voice
 
@@ -713,7 +725,7 @@ npm run eval:ai       # 11/11 offline contract checks
 | --- | --- | --- |
 | `assistant-tasks.test.js` | 10 | legacy task planner |
 | `assistant-glimmer-clean.test.js` | 6 | Glimmer client + cleanup contract |
-| `ai-form-tools.test.js` | 10 | form normalisers: price/location/condition aliases, service vs regular listings, unknown values dropped, empty patches rejected, sensitive profile fields never patched, registration drops password/phone/terms |
+| `ai-form-tools.test.js` | 10 | form normalisers: price/location/condition aliases, service vs regular listings, unknown values dropped, empty patches rejected, sensitive profile fields never patched, registration drops password/agreement |
 | `ai-navigation.test.js` | 5 | screen allowlist (including `ai` and id-based routes refused), query normalisation, form-fill ordering, one `navigate` per turn, forged targets dropped |
 | `ai-task-state.test.js` | 8 | task create/merge/TTL/reset, prompt block honesty, privacy stripping |
 | `ai-metrics.test.js` | 4 | closed schema, text/phone/email rejection, aggregation, percentiles |
@@ -767,9 +779,9 @@ live repo itself.
   `currency: 'NGN'`. Treat this as a display bug until the amount is
   normalised.
 - `publishProductListing` is intentionally unavailable.
-- Registration cannot be completed hands-free: the password and the email
-  verification link stay with the user (see "Registration for voice-first
-  users"). A passwordless or phone/OTP sign-up would be required to change that.
+- Registration is voice-first end to end, but the final checks were script and
+  parser tests only: no physical device was attached, so tapping through the
+  secure modal and the spoken welcome still needs a device pass.
 - Navigation is limited to screens that take no id. Opening a specific listing,
   chat thread, showroom, or checkout still needs the user to tap the real row.
 - The agent has no streaming transport; each turn returns one JSON response.

@@ -77,9 +77,9 @@ function normalizeAdFields(raw, currentType = 'regular') {
     const cond = matchList(AD_CONDITIONS, r.condition) || CONDITION_ALIASES[key] || '';
     if (cond) out.condition = cond;
 
-    // Bulk tier: "buy at least N units → ₦X off each" (regular posts only).
-    // Accept either an explicit discounted price or an amount off; the form
-    // computes the final per-unit price so the model never does arithmetic.
+    // Bulk discount: "buy at least N units and get X off each" (regular posts
+    // only). The model may pass either an explicit discounted price or an
+    // amount off; the form calculates the final per-unit price.
     const bMin = parseInt(r.bulkDiscountMinQty, 10);
     if (Number.isInteger(bMin) && bMin >= 2) out.bulkDiscountMinQty = Math.min(bMin, 10000);
     const bOff = parseFloat(String(r.bulkDiscountOff == null ? '' : r.bulkDiscountOff).replace(/[^\d.]/g, ''));
@@ -117,8 +117,8 @@ async function prepareAdForm(_ctx, args) {
     e.code = 'TOOL_BAD_ARGS';
     throw e;
   }
-  // The form applies its own validation too, but a discount at or above the
-  // regular price can never be valid — reject it here so the model is told.
+  // The form validates this too, but a discount at or above the regular price
+  // can never be valid. Reject it here so the model gets a clear error.
   if (fields.price && fields.bulkDiscountPrice && fields.bulkDiscountPrice >= fields.price) {
     const e = new Error('The bulk discount price must be below the regular price.');
     e.code = 'TOOL_BAD_ARGS';
@@ -203,14 +203,23 @@ async function fillProfileForm(_ctx, args) {
 
 // ── prepareRegistration ──────────────────────────────────────────────────────
 //
-// Voice-first sign-up: the assistant may pre-fill the harmless half of the
-// register form (name, email, referral code) so a user who cannot comfortably
-// type does not have to. It must never see, repeat, or set a password, and it
-// cannot complete the email-verification step. Those stay in the user's hands.
-// Keeping the password out of the patch means it never leaves the device —
+// Voice-first sign-up: the assistant may pre-fill the harmless part of the
+// register form (name, email, referral code) so a user who cannot type
+// comfortably does not have to. It never receives, repeats or sets a password,
+// and it cannot complete the email verification step. Those stay with the user.
+// Keeping the password out of the patch also means it never leaves the device,
 // not even to our own server.
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const PHONE_RE = /^0[789][01]\d{8}$/;
+
+function normalizeNgPhone(value) {
+  let digits = String(value == null ? '' : value).replace(/[^\d+]/g, '');
+  if (digits.startsWith('+234')) digits = '0' + digits.slice(4);
+  else if (digits.startsWith('234') && digits.length === 13) digits = '0' + digits.slice(3);
+  else if (/^[789][01]\d{8}$/.test(digits)) digits = '0' + digits;
+  return PHONE_RE.test(digits) ? digits : '';
+}
 
 function normalizeRegistrationPatch(raw) {
   const r = raw && typeof raw === 'object' ? raw : {};
@@ -224,50 +233,68 @@ function normalizeRegistrationPatch(raw) {
   const email = String(r.email == null ? '' : r.email).trim().toLowerCase().slice(0, 254);
   if (email && EMAIL_RE.test(email)) out.email = email;
 
+  const phone = normalizeNgPhone(r.phoneNumber);
+  if (phone) out.phoneNumber = phone;
+
   // Same shape the register screen / backend referral service accepts.
   const ref = String(r.referrer == null ? '' : r.referrer).trim();
   if (/^[A-Za-z0-9_-]{1,64}$/.test(ref)) out.referrer = ref;
 
-  // Deliberately excluded: password, confirm, phoneNumber. The register form
-  // does not collect a phone number, and a password must never be spoken to
-  // or handled by the assistant.
+  // Excluded on purpose: password. It is entered once on the phone's secure
+  // keyboard and is never part of a patch or a model request.
   return out;
 }
 
 async function prepareRegistration(_ctx, args) {
   const fields = normalizeRegistrationPatch(args || {});
-  if (!Object.keys(fields).length) {
+  const noEmail = args?.noEmail === true;
+  if (!Object.keys(fields).length && !noEmail) {
     const e = new Error(
-      'No usable sign-up fields. Ask for a first name, last name, and email address.'
+      'No usable sign-up fields. Ask for a first name, last name, and an email address or a phone number.'
     );
     e.code = 'TOOL_BAD_ARGS';
     throw e;
   }
 
-  const hasName = !!(fields.firstName || fields.lastName);
-  const note = !fields.email
-    ? 'I filled what you gave me. I still need your email address.'
-    : (!hasName
-      ? 'I filled your email address. I still need your first and last name.'
-      : 'Your name and email are filled in. Choose a password you can remember, accept the terms, then tap Create account. We will email you a link to finish.');
+  // Keep the same-turn context current so a beginAuthHelp call that follows in
+  // this turn does not ask for a field that was just supplied. Only booleans
+  // and names are mirrored here; the phone and email values stay in `fields`.
+  if (_ctx && typeof _ctx === 'object') {
+    if (fields.firstName || fields.lastName) {
+      _ctx.registerDraft = {
+        ...(_ctx.registerDraft || {}),
+        ...(fields.firstName ? { firstName: fields.firstName } : {}),
+        ...(fields.lastName ? { lastName: fields.lastName } : {}),
+      };
+    }
+    if (fields.email) _ctx.emailProvided = true;
+    if (fields.phoneNumber) _ctx.phoneProvided = true;
+    if (noEmail) _ctx.emailDeclined = true;
+  }
+
+  let note = 'I filled what you gave me.';
+  if (noEmail) note += ' They have no email, so ask for their phone number next.';
+  else if (!fields.email && !fields.phoneNumber) note += ' I still need an email address or a phone number.';
+  else if (!fields.firstName || !fields.lastName) note += ' I still need their first and last name.';
+  else note += ' Ask only for the next missing step. The password and agreement are handled on the screen.';
 
   return {
     fields,
+    ...(noEmail ? { emailDeclined: true } : {}),
     note,
-    // Never part of `fields`: stated explicitly so the model cannot claim it
-    // filled a password.
-    manualSteps: ['password', 'terms', 'create_account', 'verify_email'],
+    // These are never part of `fields`, so the model can never report that it
+    // filled a password or accepted the agreement for the user.
+    manualSteps: ['password', 'agreement', 'create_account'],
   };
 }
 
 // ── requestListingPhoto ────────────────────────────────────────────────────
 //
-// A photo or digital file cannot travel through a text patch — and the user
-// must choose it themselves. The model calls this ONLY after the user agrees
-// to pick one; the client opens its existing picker and the next turn's form
-// snapshot proves whether anything was actually selected. Cancelling simply
-// leaves the snapshot flag false, so the model asks again instead of
-// pretending a picture was added.
+// A photo or digital file cannot travel through a text patch, and the user
+// chooses it. The model calls this only after the user agrees to pick one; the
+// client opens its existing picker, and the next turn's form snapshot shows
+// whether anything was selected. If the user cancels, the snapshot flag stays
+// false and the model asks again instead of assuming a picture was added.
 
 async function requestListingPhoto(_ctx, args) {
   const kind = args && args.kind === 'digitalFile' ? 'digitalFile'

@@ -13,12 +13,10 @@ import { IconButton, Small, Tiny, T2, T3, Body } from '../ui/kit';
 import MessageBubble from './components/MessageBubble';
 
 /**
- * The AI Mode conversation screen. Text-only in cycle 1 — voice returns in a
- * later cycle via expo-speech-recognition, which needs no backend round-trip.
+ * Full AI conversation screen.
  *
- * Structured blocks that arrive as `fill_ad` / `fill_request` / `fill_profile`
- * are consumed by the corresponding form screen via useAIPatch, not rendered
- * here (the StructuredBlock allowlist omits them, so they render nothing).
+ * fill_ad, fill_request and fill_profile blocks are applied by their form
+ * screen through useAIPatch; StructuredBlock does not render them here.
  */
 
 const SUGGESTIONS = [
@@ -41,17 +39,19 @@ export default function AIModeScreen({ route }) {
   const [draft, setDraft] = useState('');
   const listRef = useRef(null);
 
-  // Screen context: if the user came from a form screen, let the model know.
-  // Only primitives are sent — nothing else, per the backend contract. The
-  // platform is always included so the Google URL can be built without asking.
-  // chatPartnerId lets "what did the seller say?" resolve to this thread.
+  // Screen context tells the assistant where the user came from. Only
+  // primitives are sent, per the backend contract. The platform is always
+  // included so the Google URL can be built without asking. `chatPartnerId`
+  // lets "what did the seller say?" resolve to this thread.
   const screenHint = route?.params?.screen || null;
   const chatPartnerHint = route?.params?.chatPartnerId || null;
+  const paymentOpenHint = route?.params?.paymentOpen === true;
   const turnContext = useMemo(() => ({
     platform: Platform.OS,
     ...(screenHint ? { screen: screenHint } : {}),
     ...(chatPartnerHint ? { chatPartnerId: String(chatPartnerHint).slice(0, 24) } : {}),
-  }), [screenHint, chatPartnerHint]);
+    ...(paymentOpenHint ? { paymentOpen: true } : {}),
+  }), [screenHint, chatPartnerHint, paymentOpenHint]);
 
   const sending = status === 'sending';
   const canSend = draft.trim().length > 0 && !sending;
@@ -98,9 +98,8 @@ export default function AIModeScreen({ route }) {
 
   const onPickMethod = useCallback((methodId) => {
     if (methodId === 'google') {
-      // Sending a message triggers the model to call startGoogleAuthentication
-      // and return the URL; the app's existing SignInScreen handles the actual
-      // flow when the user leaves AI Mode. This is just a convenience hook.
+      // Ask the assistant for the Google sign-in URL. The auth_url block it
+      // returns is rendered by StructuredBlock, and startGoogleAuth opens it.
       onSend('Continue with Google');
       return;
     }

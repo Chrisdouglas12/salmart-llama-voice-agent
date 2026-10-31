@@ -1,12 +1,13 @@
 # Mobile — event diff extract
 
-Two patches are kept here, plus full copies of the new AI client, so the code
+Three patches are kept here, plus full copies of the new AI client, so the code
 can be read without applying anything.
 
 | Patch | Size | Base commit | Covers |
 | --- | --- | --- | --- |
 | `salmart-mobile.event.patch` | +943 / −149 | `5ce993f` | original event frontend work (18 files) |
-| `salmart-mobile.ai-voice.patch` | +1135 / −79 | `41e2387` | inline voice, screen navigation, voice-assisted registration, Google handoff, long-press AI screen, same-language voice, post-sign-in resume, LAN dev API discovery (11 files) |
+| `salmart-mobile.ai-voice.patch` | +2451 / −464 | `e3076a1` | inline voice, screen navigation, voice-assisted registration, Google handoff, long-press AI screen, same-language voice, post-sign-in resume, LAN dev API discovery (28 files) |
+| `salmart-mobile.registration.patch` | +625 / −424 | on top of `salmart-mobile.ai-voice.patch` | voice-first sign-up: optional email, phone fallback, secure password modal, agreement card, automatic sign-in, spoken welcome, standard device voice (7 files) |
 
 `mobile/src/**` holds the **current, complete** frontend AI code under its real
 app path, so a reviewer can read it without applying anything:
@@ -46,8 +47,9 @@ Android, tunnel rejected, empty rejected).
 | `AIModeButton.js` | global mic: live status, spoken reply, Confirm/Cancel, Google card, auto-dismiss; tap records inline and never opens the AI screen, long-press opens it with the current screen as context |
 | `AIModeScreen.js` | the AI conversation screen (messages, composer, suggestions); sends `{ screen, platform }` context, handles the Google block and "hear this" speech |
 | `api.js` | HTTP client for `/api/ai/*` on top of `src/api/client.js` |
-| `speak.js` | server TTS (`/api/assistant/speak` → Meta MMS voices) with `expo-speech` fallback; `speakReply(text, lang)` carries the speaker's language both ways. With no hosted Meta voice endpoint today (`TTS_MODE=device`), the server answers `TTS_UNAVAILABLE` instantly and the phone's own voice speaks |
-| `UseAIPatch.js` | form-patch consumer; reads `fill_ad` / `fill_request` / `fill_profile` / `fill_register` and drains queued patches |
+| `speak.js` | spoken replies through the device's standard text-to-speech voice. No locale, voice or pitch is selected, so the phone uses the voice its owner already chose in system settings |
+| `UseAIPatch.js` | form-patch consumer; reads `fill_ad` / `fill_request` / `fill_profile` / `fill_register` / `register_focus` and drains queued patches |
+| `registrationSnapshot.js` | **new**: sends field-completion booleans plus the active step to the next AI turn; the password is never part of the snapshot |
 | `components/StructuredBlock.js` | renders the typed `structured[]` blocks (products, listings, orders, onboarding, message preview, `auth_url`, `fill_register`) |
 | `components/ConfirmationCard.js` | Confirm/Cancel UI for consequential actions |
 | `components/MessageBubble.js` | chat bubble; passes the auth/speak handlers to structured blocks |
@@ -69,28 +71,35 @@ the Meta-voice pass — the ten files below. Backend counterpart is documented i
 
 | File | Change |
 | --- | --- |
-| `src/ai/AIContext.js` | `send()` returns `{ ok, reply, structured, confirmation, navigatedTo }`; single `toggleRecording(context)` path transcribes → sends → speaks; executes the `navigate` block on every turn (voice and text); client-side screen allowlist that excludes `ai`/`assistant` and id-based routes; `startGoogleAuth` prefers the native picker and falls back to the backend `auth_url` in a system browser; `notice()` and `speak()` for spoken status; `authBusy` prevents double taps; voice turns carry the speaker's `lang` from transcription into the turn context and the spoken reply |
+| `src/ai/AIContext.js` | `send()` returns `{ ok, reply, structured, confirmation, navigatedTo }`; single `toggleRecording(context)` path transcribes → sends → speaks; executes the `navigate` block on every turn (voice and text); client-side screen allowlist that excludes `ai`/`assistant` and id-based routes; `startGoogleAuth` prefers the native picker and falls back to the backend `auth_url` in a system browser; `notice()` and `speak()` for spoken status; `authBusy` prevents double taps; voice turns carry the speaker's `lang` from transcription into the turn context and the spoken reply; registration snapshots ride along with the turn and `suppressNextResume()` replaces the generic post-sign-in resume with the registration welcome |
 | `src/ai/AIModeButton.js` | global mic is inline: listening status, spoken reply, Confirm/Cancel, Google button, auto-dismiss after 10 s; tap never pushes the AI screen; **hold 450 ms** opens `ai` with `{ screen: currentName }` and swallows the following tap so the long press cannot also record |
 | `src/ai/AIModeScreen.js` | sends `{ screen, platform }` on every text/voice turn; routes `auth_url` to the Google handler and `onSpeak` to the "hear this" lines |
-| `src/ai/UseAIPatch.js` | accepts `register` as a form target and maps the `fill_register` block |
-| `src/ai/speak.js` | **new**: server TTS via `/api/assistant/speak` (Meta MMS voices), falling back to `expo-speech` (with BCP-47 language mapping); works while signed out |
-| `src/api/endpoints.js` | `assistantSpeak` accepts `{ text, lang }` and forwards the speaker's language |
+| `src/ai/UseAIPatch.js` | accepts `register` as a form target, maps `fill_register`, and focuses the step named by a `register_focus` block |
+| `src/ai/registrationSnapshot.js` | **new**: whitelists the registration snapshot to booleans plus `activeField`/`stage`; password keys are stripped before anything leaves the screen |
+| `src/ai/speak.js` | **rewritten**: device-standard TTS only (`Speech.speak(line, { rate: 1.0 })`), no custom locale or voice selection |
+| `src/api/endpoints.js` | `register()` returns the JWT and user fields, so a successful sign-up signs the user in without a second login |
 | `src/ai/components/StructuredBlock.js` | **new renderers** for `auth_url` (tappable "Continue with Google", never auto-opens) and `fill_register` (explains the remaining manual steps, can be read aloud) |
 | `src/ai/components/MessageBubble.js` | passes `onOpenAuth` / `onSpeak` through to structured blocks |
-| `src/screens/RegisterScreen.js` | applies the assistant's name/email/referral pre-fill, shows what was filled with a "read the steps aloud" button, adds a device-only "Make a password for me" generator that fills both password fields and spells the password with the phone voice |
+| `src/screens/RegisterScreen.js` | voice-first form: optional email, phone fallback, one secure password modal with the keyboard focused, agreement card last, automatic submit and sign-in, Market reset, exact spoken welcome |
+| `src/state/AuthContext.js` | applies the session returned by `/register` immediately; the verification path remains only for older unverified accounts |
 
-`RegisterScreen.js` is a pre-existing screen (added in `ee91a27`, before the
-hackathon), so it is **not** copied into this repo in full. Its assistant
-additions are visible only as the `+` side of `salmart-mobile.ai-voice.patch`,
-the same way the event patch carries edits to pre-existing files.
+`RegisterScreen.js`, `src/state/AuthContext.js` and `src/api/endpoints.js` are
+pre-existing screens/modules, so they are **not** copied into this repo in full.
+Their voice-first registration changes are visible only as the `+` side of
+`salmart-mobile.registration.patch`, the same way the event patch carries edits
+to pre-existing files.
 
 What a non-reading user gets: tap the global mic and speak. The assistant can
 open the right screen ("take me to my messages", "help me create an account"),
 speak its answer, and run the action without leaving the current screen. On the
-register screen it fills name, email and referral code, then reads the remaining
-steps out loud. For sign-in it shows one "Continue with Google" button; tapping
-it opens the account picker (or the system browser on a build without the native
-module), and the user never types a Google password into the assistant.
+register screen it asks for name and email-or-phone by voice, opens the secure
+password box itself when that step comes, then the agreement card. Ticking the
+box is the user's own action; when it is ticked and everything is complete the
+assistant says "I am creating your account now.", the server creates the
+account, and the app opens Market signed in and speaks the welcome question.
+For sign-in it shows one "Continue with Google" button; tapping it opens the
+account picker (or the system browser on a build without the native module), and
+the user never types a Google password into the assistant.
 
 Auth and voice when signed out: the global mic still records and speaks. A
 missing token is allowed on `/api/assistant/transcribe` and `/api/assistant/speak`
@@ -104,28 +113,30 @@ used anywhere — set `HF_API_KEY` on the server for voice output.
 
 Deliberate limits (product limits, not bugs):
 
-- A password is never spoken to the assistant, never sent to the server, and
-  never stored by it. The generator runs on the phone only.
-- The terms checkbox, the Create account tap, and the email verification link
-  stay with the user. `POST /register` requires a password and returns no
-  token, and there is no phone/OTP or passwordless signup yet, so registration
-  cannot be completed fully hands-free without a helper.
+- A password is never spoken to the assistant, never included in a turn, a
+  snapshot, history or text-to-speech. It is typed once into the secure modal
+  and sent only to `POST /register`, where it is hashed and never logged.
+- The agreement tick, the final Create account tap and (for older accounts) the
+  verification link stay with the user.
+- Phone numbers are treated as unverified for the hackathon. No OTP is sent and
+  no verification gate is inserted after a new registration.
 
-Apply the newer patch from the app repo root:
+Apply the voice patch, then the registration patch, from the app repo root:
 
 ```bash
 git apply /path/to/extract/mobile/salmart-mobile.ai-voice.patch
+git apply /path/to/extract/mobile/salmart-mobile.registration.patch
 ```
 
-It is generated against app commit `41e2387`, so apply it to a tree at (or from)
-that base; the current app repo already contains the work in its working tree.
-The files under `mobile/src/` are the same content as the app repo, byte for
-byte. `git apply --check -R` against the current tree confirms the patch is the
-exact reverse of the present changes.
+`salmart-mobile.registration.patch` is generated against the app tree **after**
+the voice patch, so the two apply in order. The files under `mobile/src/` are
+the same content as the app repo, byte for byte. `git apply --check -R` against
+the app repo confirms each patch is the exact reverse of the present changes.
 
-Verification: `node scripts/check-syntax.js` in the app repo parses 127/127
-files. Not run on a device or simulator yet, so the mic, long press, Google
-handoff, and registration flow still need a dev-build test.
+Verification: the app repo parses every changed file under Babel (JSX/JS), and
+the backend contract tests pass (41/41 in the four auth/form/task/navigation
+files). Not run on a device or simulator yet, so the mic, secure modal, keyboard
+focus, automatic sign-in and spoken welcome still need a dev-build pass.
 
 ## Original event work
 

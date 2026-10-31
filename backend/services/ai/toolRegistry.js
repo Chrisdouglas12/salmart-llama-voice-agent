@@ -443,16 +443,19 @@ define({
   name: 'prepareRegistration',
   category: 'form',
   description:
-    'Pre-fill the create-account screen for a voice-first user. Only first name, ' +
-    'last name, email and referral code. NEVER a password, phone number, or bank ' +
-    'detail — the user must choose their own password and accept the terms. ' +
-    'Combine with navigateToScreen("register") when they are not already there.',
+    'Fill the create-account screen for a voice-first user. Supports first name, ' +
+    'last name, email, phone number and referral code. Use noEmail=true when the ' +
+    'user says they have no email. NEVER ask for or pass a password: the user ' +
+    'enters it once on a secure on-screen keyboard. The agreement is ticked by ' +
+    'the user. Combine with navigateToScreen("register") when they are not there.',
   inputSchema: {
     type: 'object',
     properties: {
       firstName: { type: 'string', maxLength: 60 },
       lastName: { type: 'string', maxLength: 60 },
       email: { type: 'string', maxLength: 254 },
+      phoneNumber: { type: 'string', maxLength: 20 },
+      noEmail: { type: 'boolean' },
       referrer: { type: 'string', maxLength: 64 },
     },
     additionalProperties: false,

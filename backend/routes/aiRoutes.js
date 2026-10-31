@@ -211,10 +211,21 @@ AUTHENTICATION COACH
   limit instead of inventing a channel.
 - Only the app's real auth state proves success. Never claim an account was
   created, verified, or signed in until the app or a tool result confirms it.
-- Registration: collect first name, last name, and email one at a time with
-  prepareRegistration, then stay on 'register'. The app asks for the password
-  and the terms; the user taps Create account. After that, guide them to open
-  the Salmart email and tap the link.
+- Registration: one question at a time. Collect first name and last name with
+  prepareRegistration. Then ask whether they have an email address. If they say
+  no, call prepareRegistration with noEmail=true and ask for a phone number
+  instead. A phone-only account is valid, and no OTP is sent. If they give an
+  email, call prepareRegistration with it. Never make email mandatory and never
+  invent an address.
+- After the name and email-or-phone are in, call beginAuthHelp(REGISTER) and
+  follow the 'field' it returns. When it asks for a password, the phone opens
+  one secure box; tell them not to share the code with anyone. Never ask for,
+  accept, repeat, spell, or fill a password. When it asks for the agreement,
+  the agreement card opens and the user ticks it. Only after that may you say
+  you are creating the account now.
+- Never claim the account exists until the app confirms success. On success the
+  app signs them in and opens Market; welcome them and ask whether they want to
+  buy or sell something.
 - Forgotten email: ask whether they used Google or an email address before
   suggesting anything else. If Google, call startGoogleAuthentication. If they
   cannot find the address, explain the real limits above. Do not push a new
@@ -412,9 +423,9 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
         if (typeof v === 'string' && v.length <= 120) safeContext[k] = v;
         else if (typeof v === 'number' && Number.isFinite(v)) safeContext[k] = v;
         else if (typeof v === 'boolean') safeContext[k] = v;
-        // The create-ad form snapshot: presence/validity flags only (booleans
-        // plus postType). Field values never travel here — they stay in the
-        // tool-validated draft. Anything else shaped is dropped.
+        // The create-ad form snapshot: presence and validity flags (booleans
+        // plus postType). Field values stay in the tool-validated draft and
+        // are not sent here. Anything else shaped is dropped.
         else if (k === 'listing' && v && typeof v === 'object' && !Array.isArray(v)) {
           const snap = {};
           for (const [sk, sv] of Object.entries(v).slice(0, 24)) {
@@ -422,6 +433,20 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
             if (typeof sv === 'boolean') snap[sk] = sv;
           }
           if (typeof v.postType === 'string' && v.postType.length <= 20) snap.postType = v.postType;
+          safeContext[k] = snap;
+        }
+        // The registration snapshot: field-completion booleans plus the active
+        // step name. Field values never travel here, and a password value is
+        // never accepted even if a client tries to send one.
+        else if (k === 'registration' && v && typeof v === 'object' && !Array.isArray(v)) {
+          const snap = {};
+          for (const [sk, sv] of Object.entries(v).slice(0, 24)) {
+            if (!/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(sk)) continue;
+            if (typeof sv === 'boolean') snap[sk] = sv;
+            else if ((sk === 'activeField' || sk === 'stage') && typeof sv === 'string' && sv.length <= 40) {
+              snap[sk] = sv;
+            }
+          }
           safeContext[k] = snap;
         }
       }
@@ -432,14 +457,14 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       return res.status(404).json({ success: false, requestId, message: 'Conversation not found.' });
     }
 
-    // Replay only a bounded tail of the conversation, and start it at a user
+    // Replay only a bounded tail of the conversation, starting at a user
     // message so the model never receives a dangling assistant tool_calls /
-    // tool-result pair from a truncated turn. sanitizeHistory() goes further:
-    // a timed-out or failed turn can store an assistant tool_calls message
-    // with no matching tool responses, which the provider rejects with
-    // `400 Missing tool response` on EVERY later turn. Orphaned pairs are
-    // dropped (and counted) so one bad turn can't brick the conversation —
-    // this also self-heals conversations poisoned before the fix shipped.
+    // tool-result pair from a truncated turn. sanitizeHistory() also drops a
+    // stored assistant tool_calls message with no matching tool responses,
+    // which the provider rejects with `400 Missing tool response` on every
+    // later turn. Orphaned pairs are dropped and counted, so one bad turn
+    // cannot break the whole conversation, and conversations that already
+    // contain such a pair recover on the next turn.
     const recent = found.doc.messages.slice(-60);
     const firstUser = recent.findIndex(m => m.role === 'user');
     const { messages: clean, dropped } = sanitizeHistory(firstUser >= 0 ? recent.slice(firstUser) : []);
@@ -469,9 +494,12 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     const authPrior = authSession.read(priorCollected);
     const authBlock = authSession.promptBlock(authPrior);
 
-    // Listing workflow state: derived from validated tool results plus the
-    // phone's real form snapshot (presence flags only). Never from prose.
+    // Listing workflow state, built from validated tool results and the
+    // phone's form snapshot (presence flags only), never from model text.
     const listingSnapshot = sellingSession.snapshotFromContext(safeContext);
+    const registrationSnapshot = safeContext && safeContext.registration
+      ? safeContext.registration
+      : null;
     const sellingPrior = sellingSession.read(priorCollected);
     const sellingBlock = sellingSession.promptBlock(sellingPrior, listingSnapshot, task);
 
@@ -503,7 +531,12 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       // Read-only auth context for beginAuthHelp. No email value, ever.
       auth: authPrior,
       registerDraft: task.drafts.register,
-      emailProvided: !!task.emailProvided,
+      registration: registrationSnapshot,
+      emailProvided: !!task.emailProvided || registrationSnapshot?.email === true,
+      phoneProvided: !!task.phoneProvided || registrationSnapshot?.phone === true,
+      emailDeclined: !!task.emailDeclined || registrationSnapshot?.emailDeclined === true,
+      passwordSet: registrationSnapshot?.password === true,
+      agreed: registrationSnapshot?.agreed === true,
     };
 
     const result = await runTurn({ ctx, messages: modelMessages });
@@ -518,8 +551,8 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
         }
         return { role: t.role, content: t.content || '' };
       });
-      // Never persist a new orphan: a turn that died mid-tool-loop must not
-      // poison the next replay (see the sanitizeHistory note above).
+      // Do not store a new orphan when a turn dies mid-tool-loop; it would
+      // break the next replay (see the sanitizeHistory note above).
       const { messages: storable, dropped: storeDropped } = sanitizeHistory(toStore);
       if (storeDropped > 0) {
         logger.warn(`[aiRoutes] dropped ${storeDropped} orphaned turn message(s) before store: conversationId=${conversationId} requestId=${requestId}`);
@@ -537,10 +570,11 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     const authNext = authSession.applyToolResults(authPrior, result.toolResults || [], {
       isAuthenticated: !!req.userId,
       task,
+      registration: registrationSnapshot,
     });
 
-    // Listing workflow state: same rule. The snapshot is re-read every turn,
-    // so a manual edit on the form is visible immediately.
+    // Listing workflow state follows the same rule. The snapshot is read on
+    // every turn, so a manual edit on the form is seen immediately.
     const sellingNext = sellingSession.applyToolResults(sellingPrior, result.toolResults || [], {
       snapshot: listingSnapshot,
     });

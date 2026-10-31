@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Dimensions, Platform, Pressable, StyleSheet, View,
+  ActivityIndicator, Animated, Dimensions, Platform, Pressable, StyleSheet, View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -8,19 +8,19 @@ import { useTheme } from '../theme/theme';
 import { useNavActions, useNavSelector } from '../state/Navigation';
 import { Small, Tiny } from '../ui/kit';
 import { useAI } from './AIContext';
+import { useSplashVisible } from '../state/splash';
 
 /**
- * Global mic.
+ * Floating microphone button.
  *
- * Stays on the current screen: tap to talk, the transcript goes to /api/ai,
- * the reply is spoken with the server voice, and any action the turn triggered
- * runs where the user already is. It never pushes the AI screen on a tap.
+ * Tap: start or stop one voice turn on the current screen. The transcript goes
+ * to /api/ai, the reply is spoken, and any actions run in place. A tap does not
+ * open the AI screen.
+ * Hold: open the full AI conversation with the current screen as context. A
+ * long press does not also start a recording.
  *
- * Hold the mic to open the full AI conversation instead, with the current
- * screen as context. A long press never also starts a recording.
- *
- * The compact card above the button shows live status, the spoken reply, a
- * Google handoff button, and Confirm/Cancel for actions that need the user's OK.
+ * The card above the button shows live status, the spoken reply, a Google
+ * sign-in action, and Confirm/Cancel for actions that need approval.
  */
 
 const WINDOW_WIDTH = Dimensions.get('window').width;
@@ -29,17 +29,18 @@ const LONG_PRESS_MS = 450;
 // The server prompt calls the create-ad form `create_ad`; every other screen
 // uses its route key (createRequest, editProfile, checkout, ...). The platform
 // is sent on every turn so the backend can build the right Google URL even
-// when the model omits it.
+// when the model leaves it out.
 function screenContext(name, params) {
   const out = { platform: Platform.OS };
   if (name) out.screen = name === 'createAd' ? 'create_ad' : String(name).slice(0, 120);
-  // Chat thread: let "what did the seller say?" resolve without asking for ids.
+  // In a chat thread, send the partner id so "what did the seller say?"
+  // resolves without asking the user for an id.
   const pid = params?.partnerId || params?.userId || params?.id;
   if (name === 'chat' && pid) out.chatPartnerId = String(pid).slice(0, 24);
   return out;
 }
 
-export default function AIModeButton() {
+export default function AIModeButton({ extraContext } = {}) {
   const { T } = useTheme();
   const currentName = useNavSelector(s => s.current.name);
   const currentParams = useNavSelector(s => s.current.params);
@@ -48,36 +49,71 @@ export default function AIModeButton() {
   const {
     recording, transcribing, status, lastVoice,
     toggleRecording, dismissVoice, confirmVoice, cancelVoice,
-    startGoogleAuth, authBusy, openSellerChat,
+    startGoogleAuth, authBusy, micNudge,
   } = useAI();
 
   const [actionBusy, setActionBusy] = useState(null);
   const longPressedRef = useRef(false);
-
+  const splashVisible = useSplashVisible();
   const sending = status === 'sending';
   const busy = recording || transcribing || sending;
+  // Gentle attention pulse from the welcome nudge: three slow scales, then
+  // rest. The label ("Tap to talk") stays visible until the user records or
+  // 12 seconds pass.
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+  const [nudgeVisible, setNudgeVisible] = useState(false);
+  useEffect(() => {
+    if (!micNudge || recording || transcribing || sending) return undefined;
+    setNudgeVisible(true);
+    pulseAnim.setValue(0);
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 0, duration: 700, useNativeDriver: true }),
+      ]),
+      { iterations: 3 },
+    );
+    loop.start();
+    const timer = setTimeout(() => setNudgeVisible(false), 12000);
+    return () => { loop.stop(); clearTimeout(timer); };
+  }, [micNudge, recording, transcribing, sending, pulseAnim]);
+  const pulseScale = pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
+
+  // Always-on invitation glow: a soft brand halo that keeps breathing from
+  // under the mic. A first-time user reads the animated green bubble as "tap
+  // me" before the welcome nudge fires. It is native-driven, so it does not
+  // block the tap or cost JS frames.
+  const glowAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const useNative = Platform.OS !== 'web';
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(glowAnim, { toValue: 1, duration: 1400, useNativeDriver: useNative }),
+        Animated.timing(glowAnim, { toValue: 0, duration: 1400, useNativeDriver: useNative }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [glowAnim]);
+  const glowOpacity = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [0.34, 0.02] });
+  const glowScale = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.8] });
+
   const confirmation = lastVoice?.confirmation || null;
   const authBlock = lastVoice?.authUrl || null;
-  const chatHandoff = lastVoice?.chatHandoff || null;
-  // On the seller's own chat screen the handoff card is noise — you are
-  // already there. The draft is pre-filled in the composer instead.
-  const alreadyInHandoffChat = currentName === 'chat'
-    && !!chatHandoff?.sellerId
-    && String(currentParams?.partnerId || '') === String(chatHandoff.sellerId);
 
-  // A plain reply should not sit over the app forever. Confirmations, a
-  // Google handoff, and a seller-chat handoff stay until the user acts on them.
+  // A plain reply should not stay over the app forever. Confirmations and a
+  // Google sign-in action stay until the user acts on them.
   useEffect(() => {
-    if (!lastVoice?.text || confirmation || authBlock || (chatHandoff && !alreadyInHandoffChat) || busy) return undefined;
+    if (!lastVoice?.text || confirmation || authBlock || busy) return undefined;
     const timer = setTimeout(() => dismissVoice(), 10000);
     return () => clearTimeout(timer);
-  }, [lastVoice, confirmation, authBlock, chatHandoff, alreadyInHandoffChat, busy, dismissVoice]);
+  }, [lastVoice, confirmation, authBlock, busy, dismissVoice]);
 
-  // Hide on the AI screen (it has its own input), the legacy assistant screen,
-  // and inside the WebView.
-  if (currentName === 'ai' || currentName === 'assistant' || inWeb) return null;
+  // Hide on the launch splash, the AI screen (it has its own input), the
+  // legacy assistant screen, and inside the WebView.
+  if (splashVisible || currentName === 'ai' || currentName === 'assistant' || inWeb) return null;
 
-  const showCard = busy || !!lastVoice?.text || !!confirmation || !!authBlock || (!!chatHandoff && !alreadyInHandoffChat);
+  const showCard = busy || !!lastVoice?.text || !!confirmation || !!authBlock;
 
   const statusLabel = recording
     ? 'Listening…'
@@ -88,11 +124,11 @@ export default function AIModeButton() {
         : 'Salmart AI';
 
   const body = recording
-    ? 'Tap the mic again when you are done.'
+    ? "I'm listening. Just stop talking and I'll pick it up — or tap the button."
     : transcribing
-      ? 'One moment…'
+      ? "Got it. I'm understanding you. Please wait a moment."
       : sending
-        ? 'Working on it…'
+        ? "I'm understanding you. Please wait a moment."
         : (lastVoice?.text || '');
 
   const tone = recording || lastVoice?.kind === 'error' ? T.danger : T.emerald;
@@ -119,35 +155,42 @@ export default function AIModeButton() {
     await startGoogleAuth({ url: authBlock.url, platform: authBlock.platform || Platform.OS });
   };
 
-  // A long press opens the full conversation. It must not also record: RN
-  // still fires onPress after a long press, so the tap is swallowed once.
+  // A long press opens the full conversation and must not also record.
+  // React Native still fires onPress after a long press, so this swallows the
+  // next tap.
   const onLongPressMic = () => {
     if (busy) return;
     longPressedRef.current = true;
-    nav.push('ai', currentName ? {
-      screen: currentName,
+    nav.push('ai', {
+      ...(currentName ? { screen: currentName } : {}),
       ...(currentName === 'chat' && currentParams?.partnerId
         ? { chatPartnerId: String(currentParams.partnerId).slice(0, 24) }
         : {}),
-    } : undefined);
+      ...(extraContext || {}),
+    });
   };
 
-  const onOpenChat = () => {
-    if (!chatHandoff) return;
-    dismissVoice();
-    openSellerChat(chatHandoff);
-  };
-
+  // Messages has its own green "+" button at the bottom right, so lift the mic
+  // clearly above it. Market no longer has a bottom-right FAB, but a small lift
+  // keeps the mic from crowding the tab bar.
+  const aboveScreenFab = currentName === 'messages';
+  const screenLift = aboveScreenFab ? 72 : currentName === 'market' ? 28 : 0;
+  const wrapBottom = (Platform.OS === 'ios' ? 100 : 90) + screenLift;
   const onPressMic = () => {
     if (longPressedRef.current) {
       longPressedRef.current = false;
       return;
     }
-    toggleRecording(screenContext(currentName, currentParams));
+    toggleRecording({ ...screenContext(currentName, currentParams), ...(extraContext || {}) });
   };
 
   return (
-    <View style={styles.wrap} pointerEvents="box-none">
+    <View style={[styles.wrap, { bottom: wrapBottom }]} pointerEvents="box-none">
+      {!!(nudgeVisible && micNudge && !busy) && (
+        <View style={[styles.nudge, { backgroundColor: T.card, borderColor: T.border }]}>
+          <Tiny style={{ color: T.ink, fontWeight: '700' }}>{micNudge.label || 'Tap to talk'}</Tiny>
+        </View>
+      )}
       {showCard && (
         <View style={[styles.card, { backgroundColor: T.card, borderColor: T.border }]}>
           <View style={styles.head}>
@@ -237,26 +280,21 @@ export default function AIModeButton() {
               </Small>
             </Pressable>
           )}
-          {!!chatHandoff && !confirmation && !alreadyInHandoffChat && (
-            <Pressable
-              onPress={onOpenChat}
-              accessibilityRole="button"
-              accessibilityLabel={`Open chat with ${chatHandoff.sellerName || 'seller'}`}
-              style={({ pressed }) => [
-                styles.googleBtn,
-                { backgroundColor: T.emerald, borderColor: T.emerald },
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              <Ionicons name="chatbubbles-outline" size={16} color="#fff" />
-              <Small style={{ color: '#fff', fontWeight: '800', marginLeft: 8 }}>
-                Open chat{chatHandoff.sellerName ? ` with ${chatHandoff.sellerName}` : ''}
-              </Small>
-            </Pressable>
-          )}
         </View>
       )}
 
+      <Animated.View style={{ transform: [{ scale: nudgeVisible && !busy ? pulseScale : 1 }] }}>
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.glow,
+          {
+            backgroundColor: recording ? T.danger : T.emerald,
+            opacity: glowOpacity,
+            transform: [{ scale: glowScale }],
+          },
+        ]}
+      />
       <Pressable
         onPress={onPressMic}
         onLongPress={onLongPressMic}
@@ -273,6 +311,7 @@ export default function AIModeButton() {
       >
         <Ionicons name={fabIcon} size={26} color="#fff" />
       </Pressable>
+      </Animated.View>
     </View>
   );
 }
@@ -281,7 +320,8 @@ const styles = StyleSheet.create({
   wrap: {
     position: 'absolute',
     right: 20,
-    bottom: Platform.OS === 'ios' ? 100 : 90, // clears the tab bar safely
+    // `bottom` is set per screen (see wrapBottom). Screens with their own
+    // bottom-right button get a larger lift so the mic sits above it.
     alignItems: 'flex-end',
     zIndex: 9000,
   },
@@ -330,9 +370,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 8,
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
+    shadowColor: '#10B981',
+    shadowOpacity: 0.45,
+    shadowRadius: 14,
     shadowOffset: { width: 0, height: 4 },
+  },
+  // Breathing halo behind the mic (see glowAnim). Same footprint as the fab so
+  // the expansion stays centred on the button.
+  glow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+  },
+  nudge: {
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 14,
+    borderWidth: 1,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
   },
 });

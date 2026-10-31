@@ -61,8 +61,21 @@ test('registration walks one field at a time, then goes ready', () => {
   assert.equal(last.field, 'lastName');
   const email = plan('REGISTER', { registerDraft: { firstName: 'Ada', lastName: 'Obi' } });
   assert.equal(email.field, 'email');
+  const phone = plan('REGISTER', {
+    registerDraft: { firstName: 'Ada', lastName: 'Obi' }, emailDeclined: true,
+  });
+  assert.equal(phone.field, 'phone');
+  const password = plan('REGISTER', {
+    registerDraft: { firstName: 'Ada', lastName: 'Obi' }, emailProvided: true,
+  });
+  assert.equal(password.field, 'password');
+  const agreement = plan('REGISTER', {
+    registerDraft: { firstName: 'Ada', lastName: 'Obi' }, emailProvided: true, passwordSet: true,
+  });
+  assert.equal(agreement.field, 'agreement');
   const ready = plan('REGISTER', {
     registerDraft: { firstName: 'Ada', lastName: 'Obi' }, emailProvided: true,
+    passwordSet: true, agreed: true,
   });
   assert.equal(ready.state, 'REGISTRATION_READY');
   assert.equal(ready.field, null);

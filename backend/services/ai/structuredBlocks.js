@@ -41,10 +41,11 @@ function buildStructured(toolResults) {
   const drafts = { ad: [], request: [], profile: [], register: [] };
   const navigations = [];
   // A create-ad navigation for a physical item opens the photo chooser on the
-  // phone automatically (the selling walkthrough starts from the photo).
-  // A service/digital listing in the same turn suppresses it.
+  // phone automatically, because the selling walkthrough starts with the
+  // photo. A service or digital listing in the same turn suppresses it.
   let openPhotoChooser = false;
   let nonRegularAd = false;
+  let registerFocus = null;
 
   for (const r of toolResults || []) {
     if (!r || !r.ok || !r.data) continue;
@@ -149,6 +150,14 @@ function buildStructured(toolResults) {
         if (r.data.fields) drafts.register.push({ fields: r.data.fields, say: r.data.note || null });
         break;
 
+      // The server-owned plan names the next registration step. The screen
+      // uses it to open the password box or the agreement card itself.
+      case 'beginAuthHelp':
+        if (r.data.nextScreen === 'register' && typeof r.data.field === 'string') {
+          registerFocus = r.data.field.slice(0, 20);
+        }
+        break;
+
       // ── picker request ─────────────────────────────────────────────────
       case 'requestListingPhoto':
         if (r.data.kind === 'photo' || r.data.kind === 'camera' || r.data.kind === 'digitalFile') {
@@ -205,6 +214,9 @@ function buildStructured(toolResults) {
       say: drafts.register.map(d => d.say).filter(Boolean).slice(-1)[0] || null,
     });
   }
+  if (registerFocus) {
+    push({ type: 'register_focus', target: 'register', field: registerFocus });
+  }
 
   // One navigation per turn. If the model asked for several (it should not),
   // the last one wins rather than bouncing the user through intermediate
@@ -212,9 +224,9 @@ function buildStructured(toolResults) {
   // when the target screen mounts.
   if (navigations.length) {
     const last = navigations[navigations.length - 1];
-    // The physical-item selling walkthrough starts with the picture: the
-    // create-ad screen opens its gallery/camera chooser on arrival. A service
-    // or digital listing has no photo step, so it is skipped there.
+    // The physical-item walkthrough starts with the picture: the create-ad
+    // screen opens its gallery or camera chooser on arrival. A service or
+    // digital listing has no photo step, so it is skipped there.
     if (last.target === 'createAd' && openPhotoChooser && !nonRegularAd
       && !out.some(b => b.type === 'open_picker')) {
       push({ type: 'open_picker', target: 'createAd', kind: 'photo', say: null, auto: true });

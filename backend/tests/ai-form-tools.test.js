@@ -165,7 +165,7 @@ test('request/profile handlers reject an empty patch', async () => {
   );
 });
 
-test('registration: no password, phone, or terms ever enters the patch', () => {
+test('registration: no password or agreement ever enters the patch', () => {
   const fields = normalizeRegistrationPatch({
     firstName: ' Ada ',
     lastName: 'Okafor',
@@ -181,11 +181,11 @@ test('registration: no password, phone, or terms ever enters the patch', () => {
     firstName: 'Ada',
     lastName: 'Okafor',
     email: 'ada@example.com',
+    phoneNumber: '08000000000',
     referrer: 'ref_42',
   });
   assert.equal('password' in fields, false);
   assert.equal('confirm' in fields, false);
-  assert.equal('phoneNumber' in fields, false);
   assert.equal('agreed' in fields, false);
 });
 
@@ -210,5 +210,5 @@ test('registration: handler rejects an empty patch and states manual steps', asy
   });
   assert.equal(res.fields.email, 'ada@example.com');
   assert.equal('password' in res.fields, false);
-  assert.deepEqual(res.manualSteps, ['password', 'terms', 'create_account', 'verify_email']);
+  assert.deepEqual(res.manualSteps, ['password', 'agreement', 'create_account']);
 });

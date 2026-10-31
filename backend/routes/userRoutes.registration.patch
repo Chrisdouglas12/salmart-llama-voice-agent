@@ -1,0 +1,258 @@
+diff --git a/routes/userRoutesIndex.js b/routes/userRoutesIndex.js
+index de905af27..d946dd82b 100644
+--- a/routes/userRoutesIndex.js
++++ b/routes/userRoutesIndex.js
+@@ -30,6 +30,17 @@ const resend = new Resend(process.env.RESEND_API_KEY);
+ 
+ const isProduction = process.env.NODE_ENV === 'production';
+ 
++const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
++
++/** Normalise a Nigerian mobile number to the 0XXXXXXXXXX form the schema uses. */
++function normalizePhone(value) {
++  let digits = String(value == null ? '' : value).replace(/[^\d+]/g, '');
++  if (digits.startsWith('+234')) digits = '0' + digits.slice(4);
++  else if (digits.startsWith('234') && digits.length === 13) digits = '0' + digits.slice(3);
++  else if (/^[789][01]\d{8}$/.test(digits)) digits = '0' + digits;
++  return /^0[789][01]\d{8}$/.test(digits) ? digits : '';
++}
++
+ // ================================
+ // AUTHENTICATION ROUTES (Registration, Login, etc.)
+ // ================================
+@@ -43,29 +54,53 @@ router.post('/register', async (req, res) => {
+   try {
+     const { firstName, lastName, email, password, referrer, phoneNumber } = req.body;
+ 
+-    if (!email || !password) {
+-      return res.status(400).json({ message: 'All required fields must be provided.' });
++    const rawEmail = String(email || '').trim().toLowerCase();
++    const rawPhone = String(phoneNumber || '').trim();
++
++    if (!password || String(password).length < 8) {
++      return res.status(400).json({ message: 'Choose a password with at least 8 characters.' });
++    }
++    if (!rawEmail && !rawPhone) {
++      return res.status(400).json({ message: 'Give us an email address or a phone number.' });
++    }
++
++    const normalizedEmail = rawEmail && EMAIL_RE.test(rawEmail) ? rawEmail : '';
++    if (rawEmail && !normalizedEmail) {
++      return res.status(400).json({ message: 'That email address does not look right.' });
+     }
+ 
+-    const normalizedEmail = email.trim().toLowerCase();
++    const normalizedPhone = rawPhone ? normalizePhone(rawPhone) : '';
++    if (rawPhone && !normalizedPhone) {
++      return res.status(400).json({ message: 'That phone number does not look right.' });
++    }
+ 
+-    const existingUser = await User.findOne({ email: normalizedEmail });
++    // Email and phone are both optional, but at least one identifier is
++    // required so the account can be found again at sign-in.
++    const conflicts = [];
++    if (normalizedEmail) conflicts.push({ email: normalizedEmail });
++    if (normalizedPhone) conflicts.push({ phoneNumber: normalizedPhone });
++    const existingUser = await User.findOne({ $or: conflicts });
+     if (existingUser) {
+-      return res.status(400).json({ message: 'User already exists.' });
++      const phoneTaken = !!normalizedPhone && existingUser.phoneNumber === normalizedPhone;
++      return res.status(400).json({
++        message: phoneTaken
++          ? 'An account with this phone number already exists.'
++          : 'An account with this email already exists.',
++      });
+     }
+ 
+     const hashedPassword = await bcrypt.hash(password, 10);
+-    const verificationToken = crypto.randomBytes(32).toString('hex');
+ 
+     const newUser = new User({
+       firstName: firstName?.trim(),
+       lastName: lastName?.trim(),
+-      email: normalizedEmail,
+       password: hashedPassword,
+-      phoneNumber: phoneNumber?.trim(),
+-      isVerified: false,
++      ...(normalizedEmail ? { email: normalizedEmail } : {}),
++      ...(normalizedPhone ? { phoneNumber: normalizedPhone } : {}),
++      // Hackathon policy: phone and email are unverified, so the account is
++      // usable immediately. Existing accounts keep their own verification.
++      isVerified: true,
+       referrer: null,
+-      verificationToken,
+     });
+ 
+     await newUser.save();
+@@ -85,127 +120,34 @@ router.post('/register', async (req, res) => {
+     );
+     // ───────────────────────────────────────────────────────────────────────────
+ 
+-    // Two links, one purpose. The custom scheme opens the Salmart app straight
+-    // on the verify screen (with the token in the route params). The web link
+-    // is the fallback for desktop, a phone without the app, or a mail client
+-    // that strips custom schemes.
+-    const appVerifyUrl = `salmart://verify-email?token=${verificationToken}`;
+-    const webVerifyUrl = `${process.env.FRONTEND_URL || 'https://salmartonline.com.ng'}/#/verify-email?token=${verificationToken}`;
+-
+-    const emailHtml = `
+-      <!DOCTYPE html>
+-      <html lang="en">
+-      <head>
+-        <meta charset="UTF-8">
+-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+-        <title>Welcome to Salmart</title>
+-        <style>
+-          * { margin: 0; padding: 0; box-sizing: border-box; }
+-          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; }
+-          @media only screen and (max-width: 600px) {
+-            .container { width: 100% !important; padding: 10px !important; }
+-            .content { padding: 20px !important; }
+-            .button { font-size: 16px !important; padding: 14px 28px !important; }
+-          }
+-        </style>
+-      </head>
+-      <body style="margin: 0; padding: 20px 0; background-color: #f8f9fa; color: #333;">
+-        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f8f9fa;">
+-          <tr>
+-            <td align="center" style="padding: 20px 0;">
+-              <table class="container" role="presentation" cellspacing="0" cellpadding="0" border="0" width="600"
+-                style="max-width:600px;margin:0 auto;background-color:#fff;border-radius:8px;border:1px solid #e9ecef;">
+-                <tr>
+-                  <td style="background-color:#28a745;padding:30px;text-align:center;">
+-                    <h1 style="color:#fff;font-size:24px;font-weight:700;margin:0;">Salmart</h1>
+-                    <p style="color:#fff;font-size:14px;margin:8px 0 0 0;">Your Online Social Marketplace</p>
+-                  </td>
+-                </tr>
+-                <tr>
+-                  <td class="content" style="padding:40px;">
+-                    <div style="text-align:center;margin-bottom:30px;">
+-                      <div style="width:60px;height:60px;background-color:#28a745;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;margin-bottom:20px;">
+-                        <span style="font-size:30px;color:#fff;">✓</span>
+-                      </div>
+-                      <h2 style="color:#2c3e50;font-size:26px;font-weight:600;margin:0 0 15px 0;">
+-                        Welcome to Salmart, ${newUser.firstName || 'Valued Customer'}!
+-                      </h2>
+-                      <p style="color:#6c757d;font-size:16px;line-height:1.5;margin:0 0 30px 0;">
+-                        Thank you for joining our community! Please verify your email address to activate your account.
+-                      </p>
+-                    </div>
+-                    <div style="text-align:center;margin:30px 0;">
+-                      <a href="${appVerifyUrl}" style="display:inline-block;background-color:#28a745;color:#fff;font-size:16px;font-weight:600;text-decoration:none;padding:15px 30px;border-radius:8px;">
+-                        Verify My Email Address
+-                      </a>
+-                      <p style="margin:18px 0 0 0;font-size:14px;color:#495057;line-height:1.5;">
+-                        This button opens the Salmart app on your phone. If it does not open,
+-                        <a href="${webVerifyUrl}" style="color:#28a745;font-weight:600;">use this page instead</a>.
+-                      </p>
+-                      <p style="margin:12px 0 0 0;font-size:12px;color:#9ca3af;word-break:break-all;">
+-                        App link: ${appVerifyUrl}<br>
+-                        Web link: ${webVerifyUrl}
+-                      </p>
+-                    </div>
+-                    <div style="background-color:#f8f9fa;border-left:4px solid #28a745;padding:20px;margin:30px 0;">
+-                      <p style="color:#495057;font-size:14px;margin:0;">
+-                        <strong>Security Notice:</strong> This link expires in 24 hours. If you didn't create this account, please ignore this email.
+-                      </p>
+-                    </div>
+-                  </td>
+-                </tr>
+-                <tr>
+-                  <td style="background-color:#f8f9fa;padding:30px;text-align:center;border-top:1px solid #e9ecef;">
+-                    <p style="color:#6c757d;font-size:14px;margin:0 0 15px 0;">
+-                      Need help? Contact us at <a href="mailto:support@salmartonline.com.ng" style="color:#28a745;">support@salmartonline.com.ng</a>
+-                    </p>
+-                    <p style="color:#9ca3af;font-size:12px;margin:0;">
+-                      © ${new Date().getFullYear()} Salmart. All rights reserved.<br>
+-                      <a href="https://salmartonline.com.ng/content/privacy.html" style="color:#9ca3af;">Privacy Policy</a> |
+-                      <a href="https://salmartonline.com.ng/content/community.html" style="color:#9ca3af;">Terms of Service</a>
+-                    </p>
+-                  </td>
+-                </tr>
+-              </table>
+-            </td>
+-          </tr>
+-        </table>
+-      </body>
+-      </html>`;
+-
+-    try {
+-      const { error } = await resend.emails.send({
+-        from: 'noreply@salmartonline.com.ng',
+-        to: [newUser.email],
+-        subject: 'Welcome to Salmart - Verify Your Account',
+-        html: emailHtml,
+-        text: `Welcome to Salmart, ${newUser.firstName || 'Valued Customer'}!\n\nOpen this link on your phone to verify in the Salmart app:\n${appVerifyUrl}\n\nIf the app does not open, use this page in a browser:\n${webVerifyUrl}\n\nThis link expires in 24 hours.`,
+-      });
+-
+-      if (error) throw new Error(error.message);
++    const token = jwt.sign(
++      { userId: newUser._id, authProvider: 'local' },
++      process.env.JWT_SECRET,
++      { expiresIn: '30d' }
++    );
+ 
+-      res.status(201).json({
+-        message: 'Registration successful! A verification email has been sent to your inbox.',
+-        userId: newUser._id,
+-        email: newUser.email,
+-        verificationSent: true,
+-      });
+-    } catch (emailError) {
+-      console.error('❌ Failed to send verification email:', emailError);
+-      res.status(201).json({
+-        message: 'Registration successful! However, there was an issue sending the verification email.',
++    res.status(201).json({
++      message: 'Registration successful!',
++      token,
++      userId: newUser._id,
++      email: newUser.email || '',
++      phoneNumber: newUser.phoneNumber || '',
++      verificationSent: false,
++      user: {
++        firstName: newUser.firstName,
++        lastName: newUser.lastName,
++        bio: newUser.bio,
+         userId: newUser._id,
+-        email: newUser.email,
+-        verificationSent: false,
+-        emailError: true,
+-      });
+-    }
++        email: newUser.email || '',
++        phoneNumber: newUser.phoneNumber || '',
++      },
++    });
+   } catch (error) {
+     console.error('❌ Registration error:', error.message);
+     if (error.code === 11000) {
+-      res.status(400).json({ message: 'An account with this email already exists.' });
++      res.status(400).json({ message: 'An account with these details already exists.' });
+     } else if (error.name === 'ValidationError') {
+-      res.status(400).json({ message: 'Invalid data provided. Please check your information.' });
++      res.status(400).json({ message: 'Please check the information and try again.' });
+     } else {
+       res.status(500).json({ message: 'Registration failed. Please try again later.' });
+     }
+@@ -243,10 +185,18 @@ router.get('/verify-email', async (req, res) => {
+  */
+ router.post('/login', async (req, res) => {
+   try {
+-    let { email, password } = req.body;
+-    email = email.trim().toLowerCase();
++    let { email, password, phoneNumber, identifier } = req.body;
++    const emailInput = String(email || '').trim().toLowerCase();
++    const phoneInput = String(phoneNumber || identifier || '').trim();
+ 
+-    const user = await User.findOne({ email });
++    let user = null;
++    if (emailInput && emailInput.includes('@')) {
++      user = await User.findOne({ email: emailInput });
++    } else {
++      // A phone-only account signs in with the same number it registered with.
++      const normalizedPhone = normalizePhone(phoneInput || emailInput);
++      if (normalizedPhone) user = await User.findOne({ phoneNumber: normalizedPhone });
++    }
+     if (!user) return res.status(400).json({ message: 'User not found' });
+ 
+     if (user.isBanned) {

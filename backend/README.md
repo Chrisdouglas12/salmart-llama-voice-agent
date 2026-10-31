@@ -150,12 +150,23 @@ block that lets `services/ai/tools/productTools.js` reuse the live search
 helpers instead of duplicating query logic. Both are append-only: they do not
 change existing behaviour.
 
+`routes/userRoutes.verify-email.patch` (base `7066a89c0`) carries the committed
+auth-route changes up to the registration work: app-opening verify and reset
+links. `routes/userRoutes.registration.patch` and
+`models/userSchema.registration.patch` then make `/register` accept an email or
+a Nigerian phone number, mark the account verified, and return a 30-day JWT;
+`/login` accepts either identifier. The second patch applies on top of the
+first.
+
 Apply from the server repo root (it already mounts `/api/assistant`):
 
 ```bash
 git apply /path/to/extract/backend/routes/assistantRoutes.event.patch
 git apply /path/to/extract/backend/app.ai.patch
 git apply /path/to/extract/backend/routes/searchRoutes.ai-bridge.patch
+git apply /path/to/extract/backend/routes/userRoutes.verify-email.patch
+git apply /path/to/extract/backend/models/userSchema.registration.patch
+git apply /path/to/extract/backend/routes/userRoutes.registration.patch
 cp backend/lib/assistant/*.js <server>/lib/assistant/
 cp -R backend/services/ai <server>/services/
 cp backend/services/logger.js <server>/services/

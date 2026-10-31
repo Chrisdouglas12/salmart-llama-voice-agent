@@ -8,7 +8,7 @@
 |---|---|
 | `lib/assistant/llama.js` | Meta chat/vision/transcribe client + model recovery |
 | `lib/assistant/agent.js` | Legacy tool-calling loop + fallback orchestration |
-| `lib/assistant/authIntents.js` | 11 auth intents, 11 conversation states, one-question steps |
+| `lib/assistant/authIntents.js` | 11 auth intents, 11 conversation states, one-question steps, voice-first registration order |
 | `lib/assistant/credentialGuard.js` | Refuses/redacts passwords, OTPs, tokens before Meta sees them |
 | `lib/assistant/authGuidance.js` | Closed outcome codes → one spoken sentence + fixing screen |
 | `lib/assistant/authSession.js` | Server-owned auth state across turns (never secrets) |
@@ -34,16 +34,21 @@
 | `routes/chat-filter-presend.patch` | Photo pre-send scan endpoint + group REST filter/retract |
 | `routes/socketRoutes.fraud-filter.patch` | Caption/photo OCR retract via shared helper |
 | `routes/ai-selling-photo-first.patch` | Photo-first selling: photo step first, quantity→discount offer with suggestion, skipStep for declined optionals, auto photo chooser on createAd navigation |
+| `models/userSchema.registration.patch` | Email optional for non-anonymous accounts, so a phone-only sign-up validates |
+| `routes/userRoutes.registration.patch` | `/register` accepts email or Nigerian phone, checks both for duplicates, marks the account verified, and returns a 30-day JWT; `/login` accepts either identifier |
 | `app.ai.patch` | Mount `/api/ai` |
 
-## Mobile (`mobile/salmart-mobile.ai-voice.patch` — one patch)
+## Mobile (`mobile/salmart-mobile.ai-voice.patch` + `mobile/salmart-mobile.registration.patch`)
 
-Global mic FAB (+ above the "+" button, hidden on splash, present over Paystack), AI chat screen, auth screens (verify/resend, Google + verify actions), tick-to-pay cart, seller-chat draft handoff, outcome codes feeding the next AI turn. Selling: photo-first walkthrough (gallery/camera choice sheet on arrival, vision auto-fill with "I filled X" summary), quantity→discount offer with concrete suggestion, assistant-filled bulk tier, skip-once optionals, no-repeat missing-field steps.
+First patch: global mic FAB (+ above the "+" button, hidden on splash, present over Paystack), AI chat screen, auth screens (verify/resend, Google + verify actions), tick-to-pay cart, seller-chat draft handoff, outcome codes feeding the next AI turn. Selling: photo-first walkthrough (gallery/camera choice sheet on arrival, vision auto-fill with "I filled X" summary), quantity→discount offer with concrete suggestion, assistant-filled bulk tier, skip-once optionals, no-repeat missing-field steps.
+
+Second patch: voice-first registration. Email optional, phone fallback collected by voice, one secure password modal with the keyboard already focused, agreement card last, automatic submit and sign-in after server confirmation, Market opened without a second login, exact spoken welcome, generic post-sign-in resume suppressed for that transition. Spoken replies now use the phone's standard device voice only.
 
 ## Proof
 
-- Live server suite: **119/119 pass** (`npm test` in the server repo).
+- Live server suite passed **119/119** before the registration change. After it, the four affected files pass **41/41**: `node --test backend/tests/ai-auth-accessibility.test.js backend/tests/ai-form-tools.test.js backend/tests/ai-task-state.test.js backend/tests/ai-navigation.test.js`.
 - Keyless extract tests pass here (`backend/tests/`, e.g. 15/15 auth-accessibility).
+- Changed mobile files parse under Babel (JSX/JS). No device was attached, so the secure modal, keyboard focus, automatic sign-in and spoken welcome are not device-verified.
 - Whole files first appear in the server repo at post-kickoff commits (`4252e0663`, `3a803c49f`); pre-existing files ship only as diffs above.
 - No provider keys, `.env` files, tokens, or database URIs anywhere in this repo.
 - The agent never publishes, pays, or sets credentials — the user always taps the final button.

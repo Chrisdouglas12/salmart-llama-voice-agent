@@ -10,7 +10,7 @@ For a struggling user, Salmart's register screen (5 fields + password rules + em
 
 - **Understands account problems** — 11 intents, 11 conversation states. "I can't enter my account" gets one clarifying question, never an instant reset.
 - **Recovers forgotten emails** — Google-or-email branch, mail-app guidance, honest limits (no name lookup, no invented channels).
-- **Registers by conversation** — one field at a time, local password helper, app-opening verification links.
+- **Registers by conversation** — one field at a time; email optional, phone works; one secure password entry; agreement last; server confirms, the app signs in, and the welcome question is spoken.
 - **Guides buying end-to-end** — finds the item, drafts the seller message, holds it in cart, tick-to-pay checkout, mic stays visible over Paystack with exact payment steps and escrow reassurance.
 - **Never lies, never leaks** — passwords/OTPs typed in chat are refused before reaching Meta; success is claimed only from real app state; Meta models only, end to end.
 
@@ -27,6 +27,6 @@ Live app: point at the server URL, follow `DEMO.md` (the 3-minute script). No ke
 ## Repo map
 
 - `backend/` — every AI module (whole files) + patches to pre-existing server files (`.patch`). No Salmart product code copied.
-- `mobile/` — one patch with the assistant UI, auth screens, cart, and mic changes.
+- `mobile/` — two patches with the assistant UI, voice-first registration, auth screens, cart, and mic changes.
 - `NEW_WORK.md` — what was built this week, file by file, with proof.
 - `DEMO.md` — the 3-minute demo script, word for word.

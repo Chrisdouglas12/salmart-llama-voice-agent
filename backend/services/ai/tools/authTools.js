@@ -3,16 +3,16 @@
 /**
  * services/ai/tools/authTools.js
  *
- * Onboarding + auth initiation. The AI never touches credentials, tokens, or
- * consent — it explains the options that already exist and hands the user a
- * URL the official auth flow handles.
+ * Onboarding and sign-in helpers for the assistant. These tools explain the
+ * sign-in options that already exist and return a URL handled by the official
+ * auth flow. They never receive credentials, tokens or consent.
  *
- * Google URLs confirmed from app.js:
+ * Existing auth routes:
  *   Web:     GET /auth/google?source=mobile&platform=<android|ios>&ref=<code>
- *            → 302 to salmart://auth/callback?...
- *   Native:  POST /auth/google/mobile  body { idToken }  → { success, token }
- *                                                   |  { success, setup_token }
- * Email:     POST /register  (see userRoutesIndex.js)
+ *            redirects to salmart://auth/callback?...
+ *   Native:  POST /auth/google/mobile  body { idToken }  returns { success, token }
+ *                                                     or { success, setup_token }
+ *   Email:   POST /register  (see userRoutesIndex.js)
  */
 
 const User = require('../../../models/userSchema');
@@ -60,12 +60,12 @@ async function getAvailableAuthenticationMethods() {
 // ─── beginAuthHelp ───────────────────────────────────────────────────────────
 
 /**
- * Return the ONE next step for an authentication intent. The model chooses
- * only the intent; the state, the screen, and the spoken sentence come from
- * the closed table in lib/assistant/authIntents.js.
+ * Return the next step for an authentication intent. The model only chooses
+ * the intent; the state, screen and spoken sentence come from the fixed table
+ * in lib/assistant/authIntents.js.
  *
- * The handler receives the stored auth state and the registration draft from
- * the route (never a password or an email value it could echo).
+ * The route passes in the stored auth state and registration draft. Neither
+ * contains a password or an email value the tool could echo back.
  */
 async function beginAuthHelp(ctx, { intent } = {}) {
   const plan = planAuthHelp({
@@ -73,6 +73,11 @@ async function beginAuthHelp(ctx, { intent } = {}) {
     prior: ctx && ctx.auth,
     registerDraft: ctx && ctx.registerDraft,
     emailProvided: !!(ctx && ctx.emailProvided),
+    phoneProvided: !!(ctx && ctx.phoneProvided),
+    emailDeclined: !!(ctx && ctx.emailDeclined),
+    passwordSet: !!(ctx && ctx.passwordSet),
+    agreed: !!(ctx && ctx.agreed),
+    registration: (ctx && ctx.registration) || null,
   });
   if (!plan) {
     const e = new Error(
@@ -131,16 +136,16 @@ async function getOnboardingState(ctx) {
 // ─── startGoogleAuthentication ──────────────────────────────────────────────
 
 /**
- * Returns a URL the CLIENT must open in a system browser or WebView.
- * The AI never sees the resulting OAuth code — the frontend hands it back to
- * the existing callback route, which verifies it and issues a JWT.
+ * Returns a URL the client opens in a system browser. The model never sees the
+ * resulting OAuth code; the app hands it back to the existing callback route,
+ * which verifies it and issues a JWT.
  *
- * For native Android/iOS, the client opens this URL in a system browser;
+ * On native Android and iOS the client opens this URL in a system browser and
  * the callback redirects to `salmart://auth/callback?...`.
  *
- * `platform` may be omitted by the model: the route passes the client's
- * `Platform.OS` in screen context, so the app does not have to repeat itself.
- * Explicit arguments still win when both are present.
+ * `platform` may be omitted by the model. The route passes the client's
+ * `Platform.OS` in screen context, so the app does not have to repeat it.
+ * Explicit arguments win when both are present.
  */
 async function startGoogleAuthentication(ctx, { platform, ref } = {}) {
   if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
@@ -181,11 +186,11 @@ async function startGoogleAuthentication(ctx, { platform, ref } = {}) {
 /**
  * Explain an authentication outcome in one short spoken sentence.
  *
- * `code` is a closed allowlist (email_exists, invalid_password, no_account,
+ * `code` is a fixed allowlist (email_exists, invalid_password, no_account,
  * google_only, unverified, expired_link, verification_pending, suspended,
  * recovery_failed, google_cancelled, session_expired). Raw backend messages
- * are NEVER passed through — they can contain the user's email. Unknown
- * codes get gentle generic guidance, never an invented diagnosis.
+ * are never passed through because they can contain the user's email. Unknown
+ * codes get generic guidance, never an invented diagnosis.
  */
 function explainAuthenticationError(ctx, { code } = {}) {
   return explainAuthError(code);

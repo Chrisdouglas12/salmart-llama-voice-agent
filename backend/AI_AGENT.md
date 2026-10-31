@@ -415,9 +415,9 @@ Save/Post.
   location.
 - `editProfile` accepts first/last name, bio, state, city only. Phone,
   password, bank details, and photos are never part of a patch.
-- `register` accepts first/last name, email or phone number, and referral code.
-  The password and the agreement tick are never part of a patch — see
-  "Registration for voice-first users" below.
+- `register` accepts a full name (split into first/last), email or phone number,
+  and referral code. The password and the agreement tick are never part of a
+  patch — see "Registration for voice-first users" below.
 - One live patch per `(userId, target)`, latest wins, 10-minute TTL.
 - A turn returns `fill_*` inline for the currently mounted screen **and**
   persists it. A screen that mounts later calls `/api/ai/forms/drain` once.
@@ -430,8 +430,9 @@ The person using the app may not be able to read comfortably. `register` is the
 one auth screen the agent may open, and `prepareRegistration` pre-fills the
 harmless half of it:
 
-- Allowed fields: `firstName`, `lastName`, `email`, `phoneNumber`, `referrer`,
-  plus the `noEmail` flag. An invalid email or phone is dropped rather than
+- Allowed fields: `fullName`, `email`, `phoneNumber`, `referrer`, plus the
+  `noEmail` flag. A full name is split into `firstName`/`lastName` for the
+  existing server fields. An invalid email or phone is dropped rather than
   filled.
 - Never accepted, never stored, never repeated, never spoken: `password`,
   `confirm`, `agreed`. Extra keys are discarded by the normaliser, so a model
@@ -441,9 +442,11 @@ harmless half of it:
 
 The mobile `RegisterScreen` applies the patch and asks one question at a time:
 
-1. Name and email-or-phone, by voice.
-2. If the user has no email, the tool is called with `noEmail=true` and the
-   phone number is collected instead. Phone-only accounts are valid.
+1. Full name, by voice.
+2. Then an email question naming Google, Yahoo, or any other email. If the user
+   has no email, the tool is called with `noEmail=true` and a phone number is
+   collected instead, naming MTN, Airtel, Glo, or any other network. Phone-only
+   accounts are valid.
 3. A secure password modal opens by itself with the keyboard focused. The value
    stays in the component and goes only to `POST /register`.
 4. The agreement card is last, and ticking it is the user's own action.

@@ -42,7 +42,7 @@
 
 First patch: global mic FAB (+ above the "+" button, hidden on splash, present over Paystack), AI chat screen, auth screens (verify/resend, Google + verify actions), tick-to-pay cart, seller-chat draft handoff, outcome codes feeding the next AI turn. Selling: photo-first walkthrough (gallery/camera choice sheet on arrival, vision auto-fill with "I filled X" summary), quantity→discount offer with concrete suggestion, assistant-filled bulk tier, skip-once optionals, no-repeat missing-field steps.
 
-Second patch: voice-first registration. Email optional, phone fallback collected by voice, one secure password modal with the keyboard already focused, agreement card last, automatic submit and sign-in after server confirmation, Market opened without a second login, exact spoken welcome, generic post-sign-in resume suppressed for that transition. Spoken replies now use the phone's standard device voice only.
+Second patch: voice-first registration. Full name collected in one question; email optional (Google, Yahoo, or any other); when there is no email, a phone number from MTN, Airtel, Glo, or any other network is collected by voice; one secure password modal with the keyboard already focused; agreement card last; automatic submit and sign-in after server confirmation; Market opened without a second login; exact spoken welcome; generic post-sign-in resume suppressed for that transition. Spoken replies now use the phone's standard device voice only.
 
 ## Proof
 

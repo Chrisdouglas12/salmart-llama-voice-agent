@@ -58,10 +58,9 @@ const CLARIFY_SAY =
   'I can help with that. Which part is giving trouble: your password, the email you used, Google sign-in, or something else?';
 
 const REGISTRATION_QUESTIONS = {
-  firstName: 'Let us create your account. What is your first name?',
-  lastName: 'Thank you. What is your last name?',
-  email: 'Do you have an email address? If not, that is fine, we can use your phone number instead.',
-  phone: 'That is fine. What phone number should we use for your account?',
+  fullName: 'Let us create your account. What is your full name?',
+  email: 'Do you have an email? It can be Google, Yahoo, or any other email.',
+  phone: 'That is fine. What phone number should we use? It can be MTN, Airtel, Glo, or any other network.',
   password: 'Now let us make a secret code for your account. Do not share your password with anyone, not even someone who says they are from Salmart.',
   agreement: 'Last step. Please read the agreement on the screen and tick the box if you accept to use Salmart.',
 };
@@ -73,9 +72,9 @@ const REGISTRATION_QUESTIONS = {
 const PLANS = Object.freeze({
   REGISTER: {
     state: 'COLLECTING_REGISTRATION_DETAILS',
-    say: REGISTRATION_QUESTIONS.firstName,
+    say: REGISTRATION_QUESTIONS.fullName,
     nextScreen: 'register',
-    field: 'firstName',
+    field: 'fullName',
     method: null,
   },
   SIGN_IN: {
@@ -220,16 +219,18 @@ function registrationStep({
   const draft = registerDraft && typeof registerDraft === 'object' ? registerDraft : {};
   const snap = registration && typeof registration === 'object' ? registration : {};
 
-  const hasFirst = !!(draft.firstName || snap.firstName === true);
-  const hasLast = !!(draft.lastName || snap.lastName === true);
+  const hasName = !!(
+    draft.fullName
+    || snap.fullName === true
+    || ((draft.firstName || snap.firstName === true) && (draft.lastName || snap.lastName === true))
+  );
   const hasEmail = !!(emailProvided || snap.email === true);
   const hasPhone = !!(phoneProvided || snap.phone === true);
   const declined = !!(emailDeclined || snap.emailDeclined === true);
   const hasPassword = !!(passwordSet || snap.password === true);
   const accepted = !!(agreed || snap.agreed === true);
 
-  if (!hasFirst) return 'firstName';
-  if (!hasLast) return 'lastName';
+  if (!hasName) return 'fullName';
   if (!hasEmail && !declined) return 'email';
   if (!hasEmail && !hasPhone) return 'phone';
   if (!hasPassword) return 'password';

@@ -55,26 +55,24 @@ test('changing your mind resets the auth task, correcting a detail does not', ()
 });
 
 test('registration walks one field at a time, then goes ready', () => {
-  const first = plan('REGISTER', { registerDraft: {} });
-  assert.equal(first.field, 'firstName');
-  const last = plan('REGISTER', { registerDraft: { firstName: 'Ada' } });
-  assert.equal(last.field, 'lastName');
-  const email = plan('REGISTER', { registerDraft: { firstName: 'Ada', lastName: 'Obi' } });
+  const name = plan('REGISTER', { registerDraft: {} });
+  assert.equal(name.field, 'fullName');
+  const email = plan('REGISTER', { registerDraft: { fullName: 'Ada Obi' } });
   assert.equal(email.field, 'email');
   const phone = plan('REGISTER', {
-    registerDraft: { firstName: 'Ada', lastName: 'Obi' }, emailDeclined: true,
+    registerDraft: { fullName: 'Ada Obi' }, emailDeclined: true,
   });
   assert.equal(phone.field, 'phone');
   const password = plan('REGISTER', {
-    registerDraft: { firstName: 'Ada', lastName: 'Obi' }, emailProvided: true,
+    registerDraft: { fullName: 'Ada Obi' }, emailProvided: true,
   });
   assert.equal(password.field, 'password');
   const agreement = plan('REGISTER', {
-    registerDraft: { firstName: 'Ada', lastName: 'Obi' }, emailProvided: true, passwordSet: true,
+    registerDraft: { fullName: 'Ada Obi' }, emailProvided: true, passwordSet: true,
   });
   assert.equal(agreement.field, 'agreement');
   const ready = plan('REGISTER', {
-    registerDraft: { firstName: 'Ada', lastName: 'Obi' }, emailProvided: true,
+    registerDraft: { fullName: 'Ada Obi' }, emailProvided: true,
     passwordSet: true, agreed: true,
   });
   assert.equal(ready.state, 'REGISTRATION_READY');

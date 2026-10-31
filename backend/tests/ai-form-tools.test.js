@@ -197,6 +197,17 @@ test('registration: invalid email is dropped instead of filled', () => {
   assert.deepEqual(normalizeRegistrationPatch({ email: '' }), {});
 });
 
+test('registration: a full name becomes first and last in the patch', () => {
+  assert.deepEqual(
+    normalizeRegistrationPatch({ fullName: '  Ada   Ngozi Okafor ' }),
+    { firstName: 'Ada', lastName: 'Ngozi Okafor' }
+  );
+  assert.deepEqual(
+    normalizeRegistrationPatch({ fullName: 'Ada' }),
+    { firstName: 'Ada' }
+  );
+});
+
 test('registration: handler rejects an empty patch and states manual steps', async () => {
   await assert.rejects(
     () => prepareRegistration({}, { password: 'hunter2' }),

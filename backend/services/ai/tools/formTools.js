@@ -225,6 +225,17 @@ function normalizeRegistrationPatch(raw) {
   const r = raw && typeof raw === 'object' ? raw : {};
   const out = {};
 
+  // The assistant collects one full name question. Split it here so the
+  // server's existing first/last fields stay the source of truth.
+  const fullName = clean(r.fullName, 120);
+  if (fullName) {
+    const parts = fullName.split(/\s+/).filter(Boolean);
+    if (parts.length) {
+      out.firstName = parts[0].slice(0, 60);
+      if (parts.length > 1) out.lastName = parts.slice(1).join(' ').slice(0, 60);
+    }
+  }
+
   const first = clean(r.firstName, 60);
   if (first) out.firstName = first;
   const last = clean(r.lastName, 60);
@@ -250,7 +261,7 @@ async function prepareRegistration(_ctx, args) {
   const noEmail = args?.noEmail === true;
   if (!Object.keys(fields).length && !noEmail) {
     const e = new Error(
-      'No usable sign-up fields. Ask for a first name, last name, and an email address or a phone number.'
+      'No usable sign-up fields. Ask for their full name, then an email address or a phone number.'
     );
     e.code = 'TOOL_BAD_ARGS';
     throw e;
@@ -260,7 +271,14 @@ async function prepareRegistration(_ctx, args) {
   // this turn does not ask for a field that was just supplied. Only booleans
   // and names are mirrored here; the phone and email values stay in `fields`.
   if (_ctx && typeof _ctx === 'object') {
-    if (fields.firstName || fields.lastName) {
+    if (fields.firstName && fields.lastName) {
+      _ctx.registerDraft = {
+        ...(_ctx.registerDraft || {}),
+        fullName: `${fields.firstName} ${fields.lastName}`,
+        firstName: fields.firstName,
+        lastName: fields.lastName,
+      };
+    } else if (fields.firstName || fields.lastName) {
       _ctx.registerDraft = {
         ...(_ctx.registerDraft || {}),
         ...(fields.firstName ? { firstName: fields.firstName } : {}),
@@ -275,7 +293,7 @@ async function prepareRegistration(_ctx, args) {
   let note = 'I filled what you gave me.';
   if (noEmail) note += ' They have no email, so ask for their phone number next.';
   else if (!fields.email && !fields.phoneNumber) note += ' I still need an email address or a phone number.';
-  else if (!fields.firstName || !fields.lastName) note += ' I still need their first and last name.';
+  else if (!fields.firstName || !fields.lastName) note += ' I still need their full name, first and last.';
   else note += ' Ask only for the next missing step. The password and agreement are handled on the screen.';
 
   return {

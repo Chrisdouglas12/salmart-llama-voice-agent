@@ -499,7 +499,7 @@ index b6b543d..9ad600e 100644
  
    return <AIContext.Provider value={value}>{children}</AIContext.Provider>;
 diff --git a/src/ai/UseAIPatch.js b/src/ai/UseAIPatch.js
-index 49f621c..960de7b 100644
+index 49f621c..302cdba 100644
 --- a/src/ai/UseAIPatch.js
 +++ b/src/ai/UseAIPatch.js
 @@ -1,36 +1,28 @@
@@ -573,7 +573,7 @@ index 49f621c..960de7b 100644
  };
  
 +// Steps the register screen is allowed to open by itself.
-+const REGISTER_FOCUS = new Set(['firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement']);
++const REGISTER_FOCUS = new Set(['fullName', 'firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement']);
 +
  export function useAIPatch(target) {
    if (!VALID_TARGETS.has(target)) {
@@ -854,7 +854,7 @@ index 0613df1..6bc958e 100644
  export async function scanChatImageUrl(imageUrl, opts) {
    const d = await apiPost('/api/messages/scan-image', { imageUrl }, { retries: 0, timeout: 90000, ...opts });
 diff --git a/src/screens/RegisterScreen.js b/src/screens/RegisterScreen.js
-index 184e003..d90dc4f 100644
+index 184e003..6e2f7ec 100644
 --- a/src/screens/RegisterScreen.js
 +++ b/src/screens/RegisterScreen.js
 @@ -1,18 +1,20 @@
@@ -925,7 +925,7 @@ index 184e003..d90dc4f 100644
  
  /** Pull a referral code out of route params, accepting every web alias. */
  function pickRef(params) {
-@@ -64,19 +64,36 @@ function pickRef(params) {
+@@ -64,19 +64,42 @@ function pickRef(params) {
    return '';
  }
  
@@ -934,6 +934,13 @@ index 184e003..d90dc4f 100644
 +  let digits = String(value || '').replace(/\D/g, '');
 +  if (digits.startsWith('234') && digits.length === 13) digits = `0${digits.slice(3)}`;
 +  return digits.slice(0, 11);
++}
++
++/** The server stores first and last separately; one voice answer names both. */
++function splitFullName(value) {
++  const parts = String(value || '').trim().split(/\s+/).filter(Boolean);
++  if (!parts.length) return { firstName: '', lastName: '' };
++  return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
 +}
 +
 +function passwordError(value) {
@@ -954,8 +961,9 @@ index 184e003..d90dc4f 100644
 +  const { notice, speak, suppressNextResume } = useAI();
  
    const [form, setForm] = useState({
-     firstName: '',
-     lastName: '',
+-    firstName: '',
+-    lastName: '',
++    fullName: '',
      email: '',
 +    phoneNumber: '',
      password: '',
@@ -963,7 +971,7 @@ index 184e003..d90dc4f 100644
    });
    const [agreed, setAgreed] = useState(false);
    const [busy, setBusy] = useState(false);
-@@ -86,15 +103,19 @@ export default function RegisterScreen({ route }) {
+@@ -86,15 +109,18 @@ export default function RegisterScreen({ route }) {
    const [sentTo, setSentTo] = useState(null);
    const [resendBusy, setResendBusy] = useState(false);
    const [resendNote, setResendNote] = useState('');
@@ -977,8 +985,9 @@ index 184e003..d90dc4f 100644
 +  const [submitted, setSubmitted] = useState(false);
 +
    const { patch: aiPatch, ack: ackAiPatch } = useAIPatch('register');
-   const firstRef = useRef(null);
-   const lastRef = useRef(null);
+-  const firstRef = useRef(null);
+-  const lastRef = useRef(null);
++  const fullNameRef = useRef(null);
    const emailRef = useRef(null);
 -  const fieldToFocus = aiPatch?.field || aiPatch?.fields?.field || null;
 +  const phoneRef = useRef(null);
@@ -987,7 +996,7 @@ index 184e003..d90dc4f 100644
  
    // Referral: the code arrives either in the route params (a deep link like
    // …/#/register?ref=CODE) or from the persisted pending code. When it comes
-@@ -133,9 +154,17 @@ export default function RegisterScreen({ route }) {
+@@ -133,17 +159,31 @@ export default function RegisterScreen({ route }) {
      setRefFromLink(false);
    }, []);
  
@@ -1008,15 +1017,23 @@ index 184e003..d90dc4f 100644
    useEffect(() => {
      if (!aiPatch) return;
      const f = aiPatch.fields || {};
-@@ -144,6 +173,7 @@ export default function RegisterScreen({ route }) {
-       ...(f.firstName ? { firstName: String(f.firstName) } : {}),
-       ...(f.lastName ? { lastName: String(f.lastName) } : {}),
++    const patchedName = typeof f.fullName === 'string' && f.fullName.trim()
++      ? f.fullName.trim()
++      : [f.firstName, f.lastName]
++        .filter(v => typeof v === 'string' && v.trim())
++        .join(' ')
++        .trim();
+     setForm(prev => ({
+       ...prev,
+-      ...(f.firstName ? { firstName: String(f.firstName) } : {}),
+-      ...(f.lastName ? { lastName: String(f.lastName) } : {}),
++      ...(patchedName ? { fullName: patchedName } : {}),
        ...(f.email ? { email: String(f.email) } : {}),
 +      ...(f.phoneNumber ? { phoneNumber: normalizePhoneInput(f.phoneNumber) } : {}),
      }));
      if (f.referrer) {
        setReferrer(String(f.referrer));
-@@ -151,109 +181,165 @@ export default function RegisterScreen({ route }) {
+@@ -151,109 +191,166 @@ export default function RegisterScreen({ route }) {
        setRefFromLink(false);
      }
      setError('');
@@ -1032,8 +1049,7 @@ index 184e003..d90dc4f 100644
 +
 +    if (focus === 'password') setPasswordOpen(true);
 +    else if (focus === 'agreement') setAgreementOpen(true);
-+    else if (focus === 'firstName') firstRef.current?.focus?.();
-+    else if (focus === 'lastName') lastRef.current?.focus?.();
++    else if (focus === 'fullName' || focus === 'firstName' || focus === 'lastName') fullNameRef.current?.focus?.();
 +    else if (focus === 'email') emailRef.current?.focus?.();
 +    else if (focus === 'phone' || focus === 'phoneNumber') phoneRef.current?.focus?.();
 +
@@ -1063,9 +1079,11 @@ index 184e003..d90dc4f 100644
 +  const hasPassword = form.password.length > 0;
 +  const passwordSet = hasPassword && !passwordError(form.password);
 +  useEffect(() => {
++    const parts = splitFullName(form.fullName);
 +    reportRegistrationSnapshot({
-+      firstName: !!form.firstName.trim(),
-+      lastName: !!form.lastName.trim(),
++      fullName: !!(parts.firstName && parts.lastName),
++      firstName: !!parts.firstName,
++      lastName: !!parts.lastName,
 +      email: !!form.email.trim(),
 +      phone: !!form.phoneNumber.trim(),
 +      emailDeclined: !form.email.trim() && !!form.phoneNumber.trim(),
@@ -1078,7 +1096,7 @@ index 184e003..d90dc4f 100644
 +      stage: agreed ? 'ready' : (passwordSet ? 'agreement' : 'collecting'),
 +    });
 +  }, [
-+    form.firstName, form.lastName, form.email, form.phoneNumber,
++    form.fullName, form.email, form.phoneNumber,
 +    passwordSet, agreed, busy, submitted, error, activeField,
 +  ]);
  
@@ -1113,8 +1131,8 @@ index 184e003..d90dc4f 100644
 +  // Read the remaining steps aloud, in the same order as the form.
 +  const readSignupSteps = useCallback(() => {
 +    speak(
-+      'This is the create account screen. Tell me your first name and last name. '
-+      + 'I will ask if you have an email. If you do not, a phone number is fine. '
++      'This is the create account screen. Tell me your full name. '
++      + 'Then I will ask if you have an email. If you do not, a phone number is fine. '
 +      + 'Then a small box opens for your secret code. Do not share that code with anyone. '
 +      + 'Last, read the agreement and tick the box. I will create your account and take you to Market.'
 +    );
@@ -1123,14 +1141,16 @@ index 184e003..d90dc4f 100644
 -  const validate = useCallback(() => {
 +  const validate = useCallback(({ confirmedAgreement = false } = {}) => {
      const e = {};
-     if (!form.firstName.trim()) e.firstName = 'Required.';
-     if (!form.lastName.trim()) e.lastName = 'Required.';
+-    if (!form.firstName.trim()) e.firstName = 'Required.';
+-    if (!form.lastName.trim()) e.lastName = 'Required.';
 -    if (!form.email.trim()) e.email = 'Enter your email address.';
 -    else if (!EMAIL_RE.test(form.email.trim())) e.email = 'That does not look like a valid email.';
 -    if (!form.password) e.password = 'Choose a password.';
 -    else if (form.password.length < 8) e.password = 'Use at least 8 characters.';
 -    else if (!/[A-Za-z]/.test(form.password) || !/\d/.test(form.password)) {
 -      e.password = 'Include at least one letter and one number.';
++    if (!form.fullName.trim()) e.fullName = 'Required.';
++    else if (!splitFullName(form.fullName).lastName) e.fullName = 'Enter your first and last name.';
 +
 +    if (!form.email.trim() && !form.phoneNumber.trim()) {
 +      e.email = 'Enter an email address or a phone number.';
@@ -1169,10 +1189,13 @@ index 184e003..d90dc4f 100644
 +
      const refCode = referrer.trim();
      try {
++      const name = splitFullName(form.fullName);
        const result = await register({
-         firstName: form.firstName.trim(),
-         lastName: form.lastName.trim(),
+-        firstName: form.firstName.trim(),
+-        lastName: form.lastName.trim(),
 -        email: form.email.trim(),
++        firstName: name.firstName,
++        lastName: name.lastName,
 +        ...(form.email.trim() ? { email: form.email.trim().toLowerCase() } : {}),
 +        ...(form.phoneNumber.trim() ? { phoneNumber: form.phoneNumber.trim() } : {}),
          password: form.password,
@@ -1228,8 +1251,7 @@ index 184e003..d90dc4f 100644
 +    setAgreementOpen(false);
 +
 +    const complete = !!(
-+      form.firstName.trim()
-+      && form.lastName.trim()
++      splitFullName(form.fullName).lastName
 +      && (form.email.trim() || form.phoneNumber.trim())
 +      && passwordSet
 +    );
@@ -1250,7 +1272,7 @@ index 184e003..d90dc4f 100644
  
    const googleSignUp = useCallback(async () => {
      if (googleBusy) return;
-@@ -268,7 +354,7 @@ export default function RegisterScreen({ route }) {
+@@ -268,7 +365,7 @@ export default function RegisterScreen({ route }) {
        }
  
        const { status, params } = await runGoogleAuth(authOptions);
@@ -1259,7 +1281,7 @@ index 184e003..d90dc4f 100644
        if (status === 'cancelled') return;
        if (status === 'setup') {
          nav.push('completeProfile', {
-@@ -284,7 +370,7 @@ export default function RegisterScreen({ route }) {
+@@ -284,7 +381,7 @@ export default function RegisterScreen({ route }) {
          setError('Google sign-up did not complete. Please try again.');
          return;
        }
@@ -1268,7 +1290,7 @@ index 184e003..d90dc4f 100644
        await adoptWebSession({
          authToken: params.token,
          userId: params.userId,
-@@ -295,9 +381,10 @@ export default function RegisterScreen({ route }) {
+@@ -295,9 +392,10 @@ export default function RegisterScreen({ route }) {
        });
        success();
        nav.resetTo('market');
@@ -1280,7 +1302,7 @@ index 184e003..d90dc4f 100644
        // FIX: Expose raw errors here so if it's still 404ing, you see exactly why.
        if (message.includes('DEVELOPER_ERROR') || message.includes('10')) {
          setError('Google Error: SHA-1 fingerprint mismatch (DEVELOPER_ERROR). Check Firebase console.');
-@@ -314,7 +401,7 @@ export default function RegisterScreen({ route }) {
+@@ -314,7 +412,7 @@ export default function RegisterScreen({ route }) {
      } finally {
        setGoogleBusy(false);
      }
@@ -1289,7 +1311,7 @@ index 184e003..d90dc4f 100644
  
    const resend = useCallback(async () => {
      setResendNote('');
-@@ -333,7 +420,7 @@ export default function RegisterScreen({ route }) {
+@@ -333,7 +431,7 @@ export default function RegisterScreen({ route }) {
      }
    }, [sentTo, form.email]);
  
@@ -1298,7 +1320,7 @@ index 184e003..d90dc4f 100644
    if (sentTo || needsVerification) {
      const address = sentTo || form.email.trim();
      return (
-@@ -362,7 +449,7 @@ export default function RegisterScreen({ route }) {
+@@ -362,7 +460,7 @@ export default function RegisterScreen({ route }) {
            <Body style={styles.doneBody}>
              We sent a secure verification link to{'\n'}
              <Body style={styles.doneEmail}>{address}</Body>
@@ -1307,29 +1329,57 @@ index 184e003..d90dc4f 100644
            </Body>
  
            {!!resendNote && (
-@@ -472,8 +559,10 @@ export default function RegisterScreen({ route }) {
-                 <View style={[styles.fieldInput, errs.firstName && styles.fieldInputError]}>
-                   <Ionicons name="person-outline" size={18} color={T.muted} style={styles.fieldIcon} />
-                   <TextInput
-+                    ref={firstRef}
-                     value={form.firstName}
-                     onChangeText={t => set('firstName', t)}
-+                    onFocus={() => setActiveField('firstName')}
-                     placeholder="Ola"
-                     placeholderTextColor={T.muted}
-                     autoCapitalize="words"
-@@ -488,8 +577,10 @@ export default function RegisterScreen({ route }) {
-                 <View style={[styles.fieldInput, errs.lastName && styles.fieldInputError]}>
-                   <Ionicons name="person-outline" size={18} color={T.muted} style={styles.fieldIcon} />
-                   <TextInput
-+                    ref={lastRef}
-                     value={form.lastName}
-                     onChangeText={t => set('lastName', t)}
-+                    onFocus={() => setActiveField('lastName')}
-                     placeholder="Damilare"
-                     placeholderTextColor={T.muted}
-                     autoCapitalize="words"
-@@ -501,12 +592,14 @@ export default function RegisterScreen({ route }) {
+@@ -466,48 +564,34 @@ export default function RegisterScreen({ route }) {
+           )}
+ 
+           <View style={styles.formBox}>
+-            <View style={styles.rowSplit}>
+-              <View style={styles.half}>
+-                <Text style={styles.fieldLabel}>First name</Text>
+-                <View style={[styles.fieldInput, errs.firstName && styles.fieldInputError]}>
+-                  <Ionicons name="person-outline" size={18} color={T.muted} style={styles.fieldIcon} />
+-                  <TextInput
+-                    value={form.firstName}
+-                    onChangeText={t => set('firstName', t)}
+-                    placeholder="Ola"
+-                    placeholderTextColor={T.muted}
+-                    autoCapitalize="words"
+-                    style={styles.input}
+-                  />
+-                </View>
+-                {!!errs.firstName && <Text style={styles.fieldError}>{errs.firstName}</Text>}
+-              </View>
+-
+-              <View style={styles.half}>
+-                <Text style={styles.fieldLabel}>Last name</Text>
+-                <View style={[styles.fieldInput, errs.lastName && styles.fieldInputError]}>
+-                  <Ionicons name="person-outline" size={18} color={T.muted} style={styles.fieldIcon} />
+-                  <TextInput
+-                    value={form.lastName}
+-                    onChangeText={t => set('lastName', t)}
+-                    placeholder="Damilare"
+-                    placeholderTextColor={T.muted}
+-                    autoCapitalize="words"
+-                    style={styles.input}
+-                  />
+-                </View>
+-                {!!errs.lastName && <Text style={styles.fieldError}>{errs.lastName}</Text>}
++            <View>
++              <Text style={styles.fieldLabel}>Full name</Text>
++              <View style={[styles.fieldInput, errs.fullName && styles.fieldInputError]}>
++                <Ionicons name="person-outline" size={18} color={T.muted} style={styles.fieldIcon} />
++                <TextInput
++                  ref={fullNameRef}
++                  value={form.fullName}
++                  onChangeText={t => set('fullName', t)}
++                  onFocus={() => setActiveField('fullName')}
++                  placeholder="Ola Damilare"
++                  placeholderTextColor={T.muted}
++                  autoCapitalize="words"
++                  style={styles.input}
++                />
+               </View>
++              {!!errs.fullName && <Text style={styles.fieldError}>{errs.fullName}</Text>}
              </View>
  
              <View>
@@ -1341,24 +1391,42 @@ index 184e003..d90dc4f 100644
 +                  ref={emailRef}
                    value={form.email}
                    onChangeText={t => set('email', t)}
+-                  placeholder="oladami@example.com"
 +                  onFocus={() => setActiveField('email')}
-                   placeholder="oladami@example.com"
++                  placeholder="oladami@gmail.com"
                    placeholderTextColor={T.muted}
                    autoCapitalize="none"
-@@ -518,67 +611,46 @@ export default function RegisterScreen({ route }) {
+                   keyboardType="email-address"
+@@ -518,67 +602,46 @@ export default function RegisterScreen({ route }) {
              </View>
  
              <View>
 -              <Text style={styles.fieldLabel}>Password</Text>
 -              <View style={[styles.fieldInput, errs.password && styles.fieldInputError]}>
 -                <Ionicons name="lock-closed-outline" size={18} color={T.muted} style={styles.fieldIcon} />
+-                <TextInput
+-                  value={form.password}
+-                  onChangeText={t => set('password', t)}
+-                  placeholder="At least 8 characters"
+-                  placeholderTextColor={T.muted}
+-                  secureTextEntry
+-                  style={styles.input}
+-                />
+-              </View>
+-              {!!errs.password && <Text style={styles.fieldError}>{errs.password}</Text>}
+-            </View>
+-
+-            <View>
+-              <Text style={styles.fieldLabel}>Confirm password</Text>
+-              <View style={[styles.fieldInput, errs.confirm && styles.fieldInputError]}>
+-                <Ionicons name="shield-outline" size={18} color={T.muted} style={styles.fieldIcon} />
 +              <Text style={styles.fieldLabel}>Phone number (use this if you have no email)</Text>
 +              <View style={[styles.fieldInput, errs.phoneNumber && styles.fieldInputError]}>
 +                <Ionicons name="call-outline" size={18} color={T.muted} style={styles.fieldIcon} />
                  <TextInput
--                  value={form.password}
--                  onChangeText={t => set('password', t)}
--                  placeholder="At least 8 characters"
+-                  value={form.confirm}
+-                  onChangeText={t => set('confirm', t)}
+-                  placeholder="Re-enter password"
 +                  ref={phoneRef}
 +                  value={form.phoneNumber}
 +                  onChangeText={t => set('phoneNumber', normalizePhoneInput(t))}
@@ -1371,22 +1439,6 @@ index 184e003..d90dc4f 100644
                    style={styles.input}
                  />
                </View>
--              {!!errs.password && <Text style={styles.fieldError}>{errs.password}</Text>}
--            </View>
--
--            <View>
--              <Text style={styles.fieldLabel}>Confirm password</Text>
--              <View style={[styles.fieldInput, errs.confirm && styles.fieldInputError]}>
--                <Ionicons name="shield-outline" size={18} color={T.muted} style={styles.fieldIcon} />
--                <TextInput
--                  value={form.confirm}
--                  onChangeText={t => set('confirm', t)}
--                  placeholder="Re-enter password"
--                  placeholderTextColor={T.muted}
--                  secureTextEntry
--                  style={styles.input}
--                />
--              </View>
 -              {!!errs.confirm && <Text style={styles.fieldError}>{errs.confirm}</Text>}
 +              {!!errs.phoneNumber && <Text style={styles.fieldError}>{errs.phoneNumber}</Text>}
              </View>
@@ -1441,7 +1493,7 @@ index 184e003..d90dc4f 100644
              </View>
  
              <View style={styles.refSection}>
-@@ -628,10 +700,7 @@ export default function RegisterScreen({ route }) {
+@@ -628,10 +691,7 @@ export default function RegisterScreen({ route }) {
            </View>
  
            <Pressable
@@ -1453,7 +1505,7 @@ index 184e003..d90dc4f 100644
              hitSlop={10}
              accessibilityRole="checkbox"
              accessibilityState={{ checked: agreed }}
-@@ -648,7 +717,7 @@ export default function RegisterScreen({ route }) {
+@@ -648,7 +708,7 @@ export default function RegisterScreen({ route }) {
            {!!errs.agreed && <Text style={styles.errorTextInline}>{errs.agreed}</Text>}
  
            <Pressable
@@ -1462,7 +1514,7 @@ index 184e003..d90dc4f 100644
              disabled={busy}
              accessibilityRole="button"
              style={({ pressed }) => [styles.primaryBtn, busy && { opacity: 0.72 }, pressed && !busy && { opacity: 0.96 }]}
-@@ -693,6 +762,128 @@ export default function RegisterScreen({ route }) {
+@@ -693,6 +753,127 @@ export default function RegisterScreen({ route }) {
            </View>
          </ScrollView>
        </KeyboardAvoidingView>
@@ -1517,8 +1569,7 @@ index 184e003..d90dc4f 100644
 +                  Keyboard.dismiss();
 +
 +                  const restComplete = !!(
-+                    form.firstName.trim()
-+                    && form.lastName.trim()
++                    splitFullName(form.fullName).lastName
 +                    && (form.email.trim() || form.phoneNumber.trim())
 +                  );
 +                  if (!restComplete) return;
@@ -1591,7 +1642,7 @@ index 184e003..d90dc4f 100644
      </SafeAreaView>
    );
  }
-@@ -702,6 +893,64 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+@@ -702,6 +883,64 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
    flex: { flex: 1 },
    scroll: { flexGrow: 1, paddingHorizontal: 22, paddingTop: 12 },
  
@@ -1656,6 +1707,15 @@ index 184e003..d90dc4f 100644
    brandRow: {
      flexDirection: 'row',
      alignItems: 'center',
+@@ -762,8 +1001,6 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+   },
+ 
+   formBox: { gap: 16, marginBottom: 10 },
+-  rowSplit: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+-  half: { flex: 1 },
+   fieldLabel: {
+     marginBottom: 8,
+     fontSize: 13,
 diff --git a/src/state/AuthContext.js b/src/state/AuthContext.js
 index e9a43b5..d1ed794 100644
 --- a/src/state/AuthContext.js

@@ -443,14 +443,18 @@ define({
   name: 'prepareRegistration',
   category: 'form',
   description:
-    'Fill the create-account screen for a voice-first user. Supports first name, ' +
-    'last name, email, phone number and referral code. Use noEmail=true when the ' +
-    'user says they have no email. NEVER ask for or pass a password: the user ' +
-    'enters it once on a secure on-screen keyboard. The agreement is ticked by ' +
-    'the user. Combine with navigateToScreen("register") when they are not there.',
+    'Fill the create-account screen for a voice-first user. Supports full name, ' +
+    'email, phone number and referral code. Ask for the full name in one question, ' +
+    'then ask whether they have an email (Google, Yahoo, or any other). Use ' +
+    'noEmail=true when they say they have no email and ask for a phone number ' +
+    '(MTN, Airtel, Glo, or any other network). NEVER ask for or pass a password: ' +
+    'the user enters it once on a secure on-screen keyboard. The agreement is ' +
+    'ticked by the user. Combine with navigateToScreen("register") when they are ' +
+    'not there.',
   inputSchema: {
     type: 'object',
     properties: {
+      fullName: { type: 'string', maxLength: 120 },
       firstName: { type: 'string', maxLength: 60 },
       lastName: { type: 'string', maxLength: 60 },
       email: { type: 'string', maxLength: 254 },

@@ -47,7 +47,7 @@ const BLOCK_TO_TARGET = {
 };
 
 // Steps the register screen is allowed to open by itself.
-const REGISTER_FOCUS = new Set(['firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement']);
+const REGISTER_FOCUS = new Set(['fullName', 'firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement']);
 
 export function useAIPatch(target) {
   if (!VALID_TARGETS.has(target)) {

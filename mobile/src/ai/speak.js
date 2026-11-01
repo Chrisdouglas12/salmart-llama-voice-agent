@@ -16,6 +16,21 @@ export async function stopSpeaking() {
 }
 
 /**
+ * Queue one sentence behind any speech already playing. Used while a streamed
+ * reply is still arriving: the first sentence starts at once and the rest
+ * follow without gaps or cut-offs. Never stops current speech — use
+ * speakReply for a fresh reply that must interrupt.
+ */
+export function queueSpeech(text) {
+  const line = String(text || '').trim();
+  if (!line) return;
+
+  try {
+    Speech.speak(line, { rate: 1.0 });
+  } catch (_e) { /* speech is optional */ }
+}
+
+/**
  * Speak one assistant reply with the device's default voice. Resolves once
  * playback starts.
  */

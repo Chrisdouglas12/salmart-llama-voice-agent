@@ -416,6 +416,18 @@ router.post('/conversations/rebind', hardAuth, conversationLimiter, async (req, 
 const MAX_MESSAGE_LEN = 2000;
 const MAX_CONTEXT_KEYS = 8;
 
+// Split a reply into speakable sentences so a voice client can voice each one
+// as it arrives instead of waiting for the whole turn.
+function splitSentences(text) {
+  const parts = String(text || '').split(/(?<=[.!?])\s+|\n+/);
+  const out = [];
+  for (const p of parts) {
+    const s = p.trim();
+    if (s) out.push(s);
+  }
+  return out;
+}
+
 router.post('/turn', softAuth, turnLimiter, async (req, res) => {
   const requestId = uuidv4();
   const turnStarted = Date.now();
@@ -687,6 +699,23 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       platform: safeContext?.platform,
       tools: result.toolLog,
     }).catch(() => {});
+
+    // A voice client that asks for an event stream gets one event per sentence
+    // as it is ready, then the full turn payload in `done`. The sentences are
+    // the reply split after the turn ran, so tools, confirmations and safety
+    // rules are identical to the JSON path. Anything else keeps one JSON body.
+    if (String(req.headers.accept || '').includes('text/event-stream')) {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+      for (const sentence of splitSentences(result.finalText)) {
+        res.write(`event: sentence\ndata: ${JSON.stringify({ text: sentence })}\n\n`);
+      }
+      res.write(`event: done\ndata: ${JSON.stringify(response)}\n\n`);
+      return res.end();
+    }
 
     return res.json(response);
   } catch (err) {

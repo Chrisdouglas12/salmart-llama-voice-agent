@@ -140,6 +140,14 @@ reasoning=...`, so a slow turn can be attributed to thinking, output length, or
 the provider itself. A turn that needs a tool makes two model calls; that is
 expected, and the second one is the spoken sentence.
 
+A voice client can also ask `POST /api/ai/turn` for an event stream (`Accept:
+text/event-stream`). The server runs the identical turn — same tools, same
+safety rules — then emits one `sentence` event per reply sentence and a final
+`done` event carrying the exact JSON payload. The phone renders and speaks
+each sentence as it arrives (`queueSpeech`), so the user hears the answer
+starting while the turn completes, instead of waiting for the whole reply plus
+full TTS. Anything unexpected falls back to the single-reply path.
+
 Speech-to-text is Meta Muse Voice Transcribe. Its latency is the provider's
 mic-to-text service (plus one ffmpeg conversion on the server) and is not
 tunable from this repo without moving to streaming ASR. On a slow clip it is

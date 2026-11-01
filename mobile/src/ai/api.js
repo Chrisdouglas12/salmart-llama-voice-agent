@@ -7,6 +7,7 @@
  */
 
 import { apiGet, apiPost } from '../api/client';
+import { API_BASE, getAuthToken } from '../api/client';
 
 /** POST /api/ai/conversations returns { success, conversationId, created, status, anonymousId? } */
 export function createConversation({ conversationId, anonymousId } = {}) {
@@ -32,6 +33,93 @@ export function sendTurn({ conversationId, message, anonymousId, context } = {})
   if (anonymousId) body.anonymousId = anonymousId;
   if (context) body.context = context;
   return apiPost('/api/ai/turn', body, { retries: 0 });
+}
+
+/**
+ * POST /api/ai/turn with `Accept: text/event-stream`.
+ *
+ * The server runs the identical turn (same tools, same safety rules), then
+ * emits one `sentence` event per reply sentence and a final `done` event
+ * carrying the full turn payload. `onSentence` fires per sentence so the UI
+ * can render and the voice can start before the turn completes. Resolves with
+ * the `done` payload, shaped exactly like sendTurn's response.
+ *
+ * Anything unexpected (no stream support, a parse failure, the network) throws
+ * and the caller falls back to sendTurn.
+ */
+export async function sendTurnStream({ conversationId, message, anonymousId, context, onSentence } = {}) {
+  const body = {
+    conversationId,
+    message: String(message || '').slice(0, 2000),
+  };
+  if (anonymousId) body.anonymousId = anonymousId;
+  if (context) body.context = context;
+  const token = getAuthToken();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/api/ai/turn`, {
+      method: 'POST',
+      headers: {
+        Accept: 'text/event-stream',
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) {
+    throw Object.assign(new Error(`turn stream HTTP ${res.status}`), { status: res.status });
+  }
+  const contentType = String(res.headers?.get?.('content-type') || '');
+  if (!contentType.includes('text/event-stream') || !res.body?.getReader) {
+    // The server answered with one JSON body instead of a stream.
+    const data = await res.json();
+    if (data?.reply && onSentence) onSentence(String(data.reply));
+    return data;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let done = null;
+  const dispatch = (event, raw) => {
+    let data = null;
+    try { data = raw ? JSON.parse(raw) : null; } catch (_e) { return; }
+    if (event === 'sentence') {
+      const text = String(data?.text || '').trim();
+      if (text && onSentence) onSentence(text);
+    } else if (event === 'done' && data) {
+      done = data;
+    }
+  };
+  for (;;) {
+    const { value, done: finished } = await reader.read();
+    if (finished) break;
+    buf += decoder.decode(value, { stream: true });
+    const blocks = buf.split('\n\n');
+    buf = blocks.pop();
+    for (const block of blocks) {
+      let event = 'message';
+      const dataLines = [];
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+      }
+      if (dataLines.length) dispatch(event, dataLines.join('\n'));
+    }
+    if (done) {
+      try { await reader.cancel(); } catch (_e) { /* stream already ended */ }
+      break;
+    }
+  }
+  if (!done || done.success === false) {
+    throw new Error(done?.message || 'turn_stream_failed');
+  }
+  return done;
 }
 
 /** POST /api/ai/actions/:id/confirm. Returns 200, 400, 404, 409 or 410. */

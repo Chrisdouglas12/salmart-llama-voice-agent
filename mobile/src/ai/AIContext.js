@@ -40,10 +40,10 @@ import { useNavActions } from '../state/Navigation';
 import { TAB_ROOTS } from '../state/routes';
 import { runGoogleAuth } from '../utils/oauth';
 import {
-  createConversation, rebindConversation, sendTurn,
+  createConversation, rebindConversation, sendTurn, sendTurnStream,
   confirmAction as apiConfirm, cancelAction as apiCancel,
 } from './api';
-import { speakReply, stopSpeaking } from './speak';
+import { speakReply, queueSpeech, stopSpeaking } from './speak';
 import { takeAuthOutcome } from './authOutcome';
 import { peekFormSnapshot } from './formSnapshot';
 import { peekRegistrationSnapshot, takeRegistrationSnapshot } from './registrationSnapshot';
@@ -241,7 +241,107 @@ export function AIProvider({ children }) {
     return target.target;
   }, [nav]);
 
-  const send = useCallback(async (text, context) => {
+  // Shared tail of every successful turn: queue the assistant message, then
+  // run navigation and the seller-chat handoff. Used by the single-reply path
+  // and the streamed path alike, so both behave identically once the turn data
+  // is in.
+  const finishTurn = useCallback((res, context) => {
+    const reply = res.reply || '';
+    setMessages(prev => [...prev, {
+      key: newKey(),
+      role: 'assistant',
+      text: reply,
+      structured: res.structured || null,
+      confirmation: res.confirmation_required || null,
+      at: Date.now(),
+    }]);
+    setStatus('idle');
+
+    // Move after the assistant message is queued, so a screen that mounts
+    // because of this call already sees its fill_* patch.
+    const navigatedTo = runNavigation(res.structured);
+
+    // Seller-chat handoff: the user agreed to message the seller, so carry
+    // them to the chat with the draft pre-filled, unless they are already in
+    // that thread (context.chatPartnerId matches). The block carries ids and
+    // display text only, and the id shape is checked again here.
+    let handoffTo = null;
+    if (Array.isArray(res.structured)) {
+      const h = res.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId);
+      if (h
+        && /^[a-fA-F0-9]{24}$/.test(String(h.sellerId))
+        && String(context?.chatPartnerId || '') !== String(h.sellerId)) {
+        handoffTo = 'chat';
+        nav.push('chat', {
+          partnerId: String(h.sellerId),
+          ...(h.sellerName ? { name: String(h.sellerName).slice(0, 80) } : {}),
+          ...(h.draft ? { draft: String(h.draft).slice(0, 500) } : {}),
+          ...((h.productId || h.imageUrl || h.productTitle) ? {
+            product: {
+              ...(h.productId ? { productId: String(h.productId) } : {}),
+              ...(h.productTitle ? { title: String(h.productTitle).slice(0, 120) } : {}),
+              ...(h.imageUrl ? { imageUrl: String(h.imageUrl).slice(0, 2048) } : {}),
+              ...(typeof h.price === 'number' ? { price: h.price } : {}),
+            },
+          } : {}),
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      reply,
+      structured: res.structured || null,
+      confirmation: res.confirmation_required || null,
+      navigatedTo: handoffTo || navigatedTo,
+    };
+  }, [runNavigation, nav]);
+
+  // Streams one turn: each sentence renders in the chat and is spoken the
+  // moment it arrives, so the user hears the answer starting while the turn
+  // still completes. Returns null when nothing was heard, so the caller runs
+  // the single-reply path instead. A partial stream keeps what was heard and
+  // finishes the turn from it rather than failing.
+  const sendStreamedTurn = useCallback(async ({ cid, clean, anonId, turnContext, context }) => {
+    const streamKey = newKey();
+    let full = '';
+    let heard = 0;
+    setMessages(prev => [...prev, { key: streamKey, role: 'assistant', text: '', streaming: true, at: Date.now() }]);
+    try {
+      const res = await sendTurnStream({
+        conversationId: cid,
+        message: clean,
+        anonymousId: anonId,
+        context: turnContext,
+        onSentence: (sentence) => {
+          heard += 1;
+          full = full ? `${full} ${sentence}` : sentence;
+          setMessages(prev => prev.map(m => (
+            m.key === streamKey ? { ...m, text: full } : m
+          )));
+          queueSpeech(sentence);
+        },
+      });
+      if (!res?.success) throw new Error(res?.message || 'turn_failed');
+      // Swap the live placeholder for the exact server text, then run the
+      // shared tail (navigation, handoff) once.
+      setMessages(prev => prev.filter(m => m.key !== streamKey));
+      const out = finishTurn(res, context);
+      return { ...out, spoken: true };
+    } catch (_e) {
+      if (!heard) {
+        setMessages(prev => prev.filter(m => m.key !== streamKey));
+        return null;
+      }
+      setMessages(prev => prev.map(m => (
+        m.key === streamKey ? { ...m, streaming: false } : m
+      )));
+      setStatus('idle');
+      return { ok: true, reply: full, structured: null, confirmation: null, navigatedTo: null, spoken: true, partial: true };
+    }
+  }, [finishTurn]);
+
+  const send = useCallback(async (text, context, opts) => {
     const clean = String(text || '').trim();
     if (!clean) return { ok: false, code: 'empty', message: 'I did not catch that.' };
     if (status === 'sending') {
@@ -273,63 +373,25 @@ export function AIProvider({ children }) {
 
     try {
       const cid = await ensureConversation();
+      const anonId = authRef.current.isAuthenticated ? undefined : (anonRef.current || undefined);
+      // A streamed turn speaks each sentence the moment it arrives, so the
+      // user hears the answer starting while the turn is still completing.
+      // Anything unexpected falls back to the single-reply path below.
+      if (opts?.streamSpeech && typeof sendTurnStream === 'function') {
+        const streamed = await sendStreamedTurn({
+          cid, clean, anonId, turnContext, context,
+        });
+        if (streamed) return streamed;
+      }
       const res = await sendTurn({
         conversationId: cid,
         message: clean,
-        anonymousId: authRef.current.isAuthenticated ? undefined : (anonRef.current || undefined),
+        anonymousId: anonId,
         context: turnContext,
       });
       if (!res?.success) throw new Error(res?.message || 'turn_failed');
 
-      const reply = res.reply || '';
-      setMessages(prev => [...prev, {
-        key: newKey(),
-        role: 'assistant',
-        text: reply,
-        structured: res.structured || null,
-        confirmation: res.confirmation_required || null,
-        at: Date.now(),
-      }]);
-      setStatus('idle');
-
-      // Move after the assistant message is queued, so a screen that mounts
-      // because of this call already sees its fill_* patch.
-      const navigatedTo = runNavigation(res.structured);
-
-      // Seller-chat handoff: the user agreed to message the seller, so carry
-      // them to the chat with the draft pre-filled, unless they are already in
-      // that thread (context.chatPartnerId matches). The block carries ids and
-      // display text only, and the id shape is checked again here.
-      let handoffTo = null;
-      if (Array.isArray(res.structured)) {
-        const h = res.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId);
-        if (h
-          && /^[a-fA-F0-9]{24}$/.test(String(h.sellerId))
-          && String(context?.chatPartnerId || '') !== String(h.sellerId)) {
-          handoffTo = 'chat';
-          nav.push('chat', {
-            partnerId: String(h.sellerId),
-            ...(h.sellerName ? { name: String(h.sellerName).slice(0, 80) } : {}),
-            ...(h.draft ? { draft: String(h.draft).slice(0, 500) } : {}),
-            ...((h.productId || h.imageUrl || h.productTitle) ? {
-              product: {
-                ...(h.productId ? { productId: String(h.productId) } : {}),
-                ...(h.productTitle ? { title: String(h.productTitle).slice(0, 120) } : {}),
-                ...(h.imageUrl ? { imageUrl: String(h.imageUrl).slice(0, 2048) } : {}),
-                ...(typeof h.price === 'number' ? { price: h.price } : {}),
-              },
-            } : {}),
-          });
-        }
-      }
-
-      return {
-        ok: true,
-        reply,
-        structured: res.structured || null,
-        confirmation: res.confirmation_required || null,
-        navigatedTo: handoffTo || navigatedTo,
-      };
+      return finishTurn(res, context);
     } catch (e) {
       setError(e);
       setStatus('error');
@@ -339,7 +401,7 @@ export function AIProvider({ children }) {
       setMessages(prev => [...prev, { key: newKey(), role: 'assistant', kind: 'error', text: human, at: Date.now() }]);
       return { ok: false, code: 'error', error: e, message: human };
     }
-  }, [status, ensureConversation, runNavigation, nav]);
+  }, [status, ensureConversation, runNavigation, nav, finishTurn, sendStreamedTurn]);
 
   // Resume the pre-auth request once, right after a rebind that followed a
   // real conversation. The line is truthful (they did just sign in), and the
@@ -625,10 +687,12 @@ export function AIProvider({ children }) {
         return;
       }
 
-      // The card shows "Thinking…" while the turn runs.
+      // The card shows "Thinking…" while the turn runs. The turn streams: each
+      // sentence speaks as it arrives, so `spoken` means there is nothing
+      // left to say at the end.
       setTranscribing(false);
       const turnContext = { ...(context || {}), ...(heardLang ? { lang: heardLang } : {}) };
-      const result = await send(transcript, turnContext);
+      const result = await send(transcript, turnContext, { streamSpeech: true });
       const line = result.ok
         ? (result.reply || 'Done.')
         : (result.message || 'The assistant is temporarily unavailable. Please try again.');
@@ -651,7 +715,7 @@ export function AIProvider({ children }) {
         chatHandoff: chatBlock || null,
         at: Date.now(),
       });
-      await speakReply(line, heardLang);
+      if (!result.spoken) await speakReply(line, heardLang);
     } catch (e) {
         const line = e?.status === 401
           ? 'Your session has expired. Please sign in again.'

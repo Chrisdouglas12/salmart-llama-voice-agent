@@ -46,6 +46,8 @@ const STT_API_BASE = trimSlash(process.env.STT_API_BASE);
 const STT_MODEL = cleanModel(process.env.STT_MODEL)
   || cleanModel(process.env.MODEL_VOICE)
   || "muse-voice-transcribe-1.0";
+// Modes Meta documents for the transcription endpoints.
+const STT_MODES = new Set(["PUSH_TO_TALK", "ENDPOINTING", "DIARIZATION"]);
 const SALMART_API_BASE = trimSlash(process.env.SALMART_API_BASE);
 
 const forcedMode = String(process.env.DEMO_MODE || "auto").toLowerCase();
@@ -151,6 +153,14 @@ const config = {
     baseUrl: STT_API_BASE || META_API_BASE,
     model: STT_MODEL,
     path: process.env.STT_PATH || "/asr/transcribe",
+    // The app uploads one finished push-to-talk clip, so the whole file is one
+    // turn. PUSH_TO_TALK is Meta's mode for that; ENDPOINTING would also make
+    // the model hunt for turn edges inside a clip the user already finished.
+    mode: STT_MODES.has(String(process.env.STT_MODE || "").toUpperCase())
+      ? String(process.env.STT_MODE).toUpperCase()
+      : "PUSH_TO_TALK",
+    // A stuck transcription must not hold the voice turn open for a minute.
+    timeoutMs: positiveInt(process.env.STT_TIMEOUT_MS, 25000),
     // A real transcription call needs a base URL, a model and a key.
     configured: Boolean(STT_MODEL && (STT_API_BASE || metaConfigured) && (STT_API_KEY || META_API_KEY)),
   },

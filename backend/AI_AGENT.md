@@ -145,6 +145,14 @@ mic-to-text service (plus one ffmpeg conversion on the server) and is not
 tunable from this repo without moving to streaming ASR. On a slow clip it is
 now the larger half of the wait even after the agent cuts.
 
+The app records one clip per turn, so the request uses Meta's `PUSH_TO_TALK`
+mode (`STT_MODE`). That is the mode Meta documents for a controlled recording:
+the whole file is one turn, and the model does not also hunt for turn edges
+inside audio the user has already finished. `ENDPOINTING` remains available
+for a caller that uploads a multi-speaker or multi-turn recording. One call is
+capped by `STT_TIMEOUT_MS` (25 s) so a stuck transcription cannot hold the
+voice turn open.
+
 To confirm a change on the live server, read one pair of lines:
 
 ```text
@@ -693,6 +701,9 @@ Indexes are declared in the schemas and are created by Mongoose on connect.
 | `META_TURN_TIMEOUT_MS` | `lib/assistant/config.js` | default 22,000; one turn call is trimmed to the wall-clock time left. A timeout does not pause Meta for other users |
 | `META_HISTORY_MESSAGES` | `routes/aiRoutes.js` | default 20 (minimum 2); recent stored messages replayed to the model |
 | `META_TIMEOUT_MS` | `lib/assistant/config.js` | default 30,000 |
+| `STT_MODEL` | `lib/assistant/config.js` | default `muse-voice-transcribe-1.0`; falls back to `MODEL_VOICE` |
+| `STT_MODE` | `lib/assistant/config.js` | default `PUSH_TO_TALK` (one finished clip per request); `ENDPOINTING` and `DIARIZATION` are also accepted |
+| `STT_TIMEOUT_MS` | `lib/assistant/config.js` | default 25,000; cap for one transcription call |
 | `META_COOLDOWN_MS` | `lib/assistant/config.js` | legacy provider recovery interval; the `/api/ai` path calls Meta directly |
 | `DEMO_MODE` | `lib/assistant/config.js` | legacy assistant `auto`/`live`/`mock`; `/api/ai` has no mock brain and requires a real key |
 | `APP_BASE_URL` | `services/ai/tools/authTools.js` | public origin used in the Google sign-in URL |
@@ -776,7 +787,7 @@ Do not copy `backend/services/ai/tools/productTools.js` without the
 
 ```bash
 cd backend
-npm test              # 84/84 across 12 keyless suites
+npm test              # 84/84 across 12 keyless suites; stt-mode.test.js adds 2
 npm run eval:ai       # 11/11 offline contract checks
 ```
 
@@ -794,9 +805,11 @@ npm run eval:ai       # 11/11 offline contract checks
 | `ai-history.test.js` | 8 | replay hygiene: orphans dropped, strays dropped, wire shape valid |
 | `ai-auth-guidance.test.js` | 5 | closed auth-error codes, short safe speech, no echo, anonymous registry wiring |
 | `llama-model-fallback.test.js` | 10 | stale `MODEL_BRAIN` 404 recovery, working-id reuse, non-model 404 surfaced, full candidate walk, empty `/models` walk + reason, `chatSelfTest` ok/fail, boot `/models` check, reasoning-budget retry |
+| `stt-mode.test.js` | 2 | one finished clip is sent as `PUSH_TO_TALK` (model, WAV encoding, JSON response), explicit `ENDPOINTING` still allowed; skips where runtime deps are omitted |
 
-All twelve need no Mongo and no provider key. Most need no network; the model
-fallback suite stubs `fetch` so it is offline too.
+All twelve need no Mongo and no provider key. `stt-mode.test.js` stubs `fetch`
+the same way. Most need no network; the model fallback suite stubs `fetch` so
+it is offline too.
 
 `npm test` and `npm run eval:ai` are plain `package.json` scripts
 (`node --test "tests/**/*.test.js"` and `node scripts/ai-eval.js`). The quoted

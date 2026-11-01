@@ -448,7 +448,7 @@ function runFfmpeg(input) {
     const timer = setTimeout(() => {
       child.kill();
       reject(new LlamaError("stt: audio conversion timed out"));
-    }, config.meta.timeoutMs);
+    }, config.stt.timeoutMs || config.meta.timeoutMs);
 
     child.stdout.on("data", (c) => out.push(c));
     child.stderr.on("data", (c) => err.push(c));
@@ -488,6 +488,8 @@ async function toMetaWav(buffer) {
  * configured so the route can fall back to a client transcript.
  *
  * Meta's contract: multipart with a JSON `request` part and an `audio` part.
+ * The caller records one push-to-talk clip, so the file is one turn and the
+ * default mode is PUSH_TO_TALK (no turn search inside a finished clip).
  * https://dev.meta.ai/docs/api-reference/voice/transcribe
  */
 async function transcribeAudio({
@@ -496,7 +498,7 @@ async function transcribeAudio({
   filename = "voice.m4a",
   language,
   keywords = DEFAULT_KEYWORDS,
-  mode = "ENDPOINTING",
+  mode = config.stt.mode,
 }) {
   if (!config.stt.configured) return null;
 
@@ -530,7 +532,7 @@ async function transcribeAudio({
         Accept: "application/json",
       },
       body: form,
-      signal: AbortSignal.timeout(config.meta.timeoutMs),
+      signal: AbortSignal.timeout(config.stt.timeoutMs || config.meta.timeoutMs),
     });
   } catch (e) {
     throw new LlamaError(`stt: network error (${e.message})`, { cause: e });

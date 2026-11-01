@@ -16,7 +16,7 @@ Show the register screen. Say: *"For my grandmother, this screen is a locked doo
 
 1. **"I want to buy a bag."** → one short question: what kind of bag?
 2. **"A black leather bag."** → search with those words; the picture picker opens by itself. Say: *"Touch the one you want — you don't need to read or say its name."*
-3. Touch a card → the item is added to the cart and the assistant says its price and description. If a seller is reachable it asks whether to chat them.
+3. Touch a card → the item is added to the cart and the assistant speaks a confirmation it wrote from that listing's title, price, description and seller. Point out the small line on the card: the reply came from the model, and the server only speaks it after checking the price. If a seller is reachable the assistant asks whether to chat them.
 4. **"Yes, chat him."** → chat opens with the draft and product photo; press send. Then open the cart: tick items (₦0 default with 2+ items) → green Pay button → Paystack opens **with the mic above it** → **"What do I do here?"** → exact steps + escrow reassurance.
 5. Point out: a sold-out item keeps the picker open so the buyer can touch another one; the tap itself is a direct server call, not a model guess.
 

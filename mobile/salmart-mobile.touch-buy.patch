@@ -1,5 +1,5 @@
 diff --git a/src/ai/AIContext.js b/src/ai/AIContext.js
-index 9d88d62..4bf7e2b 100644
+index 9d88d62..c068f3a 100644
 --- a/src/ai/AIContext.js
 +++ b/src/ai/AIContext.js
 @@ -41,6 +41,7 @@ import { TAB_ROOTS } from '../state/routes';
@@ -10,7 +10,17 @@ index 9d88d62..4bf7e2b 100644
    confirmAction as apiConfirm, cancelAction as apiCancel,
  } from './api';
  import { speakReply, queueSpeech, stopSpeaking } from './speak';
-@@ -452,6 +453,71 @@ export function AIProvider({ children }) {
+@@ -107,6 +108,9 @@ export function AIProvider({ children }) {
+ 
+   const anonRef = useRef(null);
+   const convRef = useRef(null);
++  // The language the buyer last spoke (yor/hau/ibo), so the model-written
++  // touch reply answers in the same language. Null means English/Pidgin.
++  const lastLangRef = useRef(null);
+   const authBusyRef = useRef(false);
+   const messagesRef = useRef([]);
+   messagesRef.current = messages;
+@@ -452,6 +456,72 @@ export function AIProvider({ children }) {
      })();
    }, [welcomeTick, authReady, isAuthenticated, send]);
  
@@ -42,6 +52,7 @@ index 9d88d62..4bf7e2b 100644
 +        productId,
 +        itemType: product.itemType === 'showroom' ? 'showroom' : 'post',
 +        conversationId: cid || undefined,
++        lang: lastLangRef.current || undefined,
 +      });
 +      if (!res?.success) throw new Error(res?.message || 'Could not add it to your cart.');
 +
@@ -82,7 +93,15 @@ index 9d88d62..4bf7e2b 100644
    const confirm = useCallback(async (actionId) => {
      try {
        const res = await apiConfirm(actionId);
-@@ -706,6 +772,13 @@ export function AIProvider({ children }) {
+@@ -678,6 +748,7 @@ export function AIProvider({ children }) {
+       const transcript = String(res?.text || '').trim();
+       // The reply, in text and voice, follows the speaker's language.
+       heardLang = (res && typeof res.lang === 'string' && res.lang !== 'eng') ? res.lang : null;
++      lastLangRef.current = heardLang;
+ 
+       if (!res?.success || !transcript) {
+         const line = 'I could not catch that. Please try again.';
+@@ -706,6 +777,13 @@ export function AIProvider({ children }) {
        const chatBlock = result.ok && Array.isArray(result.structured)
          ? result.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId)
          : null;
@@ -96,7 +115,7 @@ index 9d88d62..4bf7e2b 100644
  
        setLastVoice({
          text: line,
-@@ -713,6 +786,7 @@ export function AIProvider({ children }) {
+@@ -713,6 +791,7 @@ export function AIProvider({ children }) {
          confirmation: result.ok ? (result.confirmation || null) : null,
          authUrl: authBlock || null,
          chatHandoff: chatBlock || null,
@@ -104,7 +123,7 @@ index 9d88d62..4bf7e2b 100644
          at: Date.now(),
        });
        if (!result.spoken) await speakReply(line, heardLang);
-@@ -843,10 +917,10 @@ export function AIProvider({ children }) {
+@@ -843,10 +922,10 @@ export function AIProvider({ children }) {
    const value = useMemo(() => ({
      conversationId, messages, status, error, isReady, recording, transcribing,
      lastVoice, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
@@ -321,7 +340,7 @@ index bf694b1..8d27e0d 100644
    );
  }
 diff --git a/src/ai/api.js b/src/ai/api.js
-index 5efc05b..6853187 100644
+index 5efc05b..eb3ffd7 100644
 --- a/src/ai/api.js
 +++ b/src/ai/api.js
 @@ -122,6 +122,17 @@ export async function sendTurnStream({ conversationId, message, anonymousId, con
@@ -335,8 +354,8 @@ index 5efc05b..6853187 100644
 + * same cart validation as addToCart and returns one spoken line, the product,
 + * and an optional seller-chat handoff. Requires auth.
 + */
-+export function selectProductToCart({ productId, itemType, conversationId } = {}) {
-+  return apiPost('/api/ai/cart/select', { productId, itemType, conversationId }, { retries: 0 });
++export function selectProductToCart({ productId, itemType, conversationId, lang } = {}) {
++  return apiPost('/api/ai/cart/select', { productId, itemType, conversationId, lang }, { retries: 0 });
 +}
 +
  /** POST /api/ai/actions/:id/confirm. Returns 200, 400, 404, 409 or 410. */
@@ -592,7 +611,7 @@ index 0000000..8683589
 +  body: { padding: 10 },
 +}));
 diff --git a/src/ai/components/StructuredBlock.js b/src/ai/components/StructuredBlock.js
-index c51cf62..3f9a246 100644
+index c51cf62..82b9eb6 100644
 --- a/src/ai/components/StructuredBlock.js
 +++ b/src/ai/components/StructuredBlock.js
 @@ -18,18 +18,21 @@ import { Small, Tiny, T3 } from '../../ui/kit';
@@ -620,7 +639,7 @@ index c51cf62..3f9a246 100644
          ))}
        </ScrollView>
      </View>
-@@ -246,9 +249,86 @@ function RegistrationFill({ block, onSpeak }) {
+@@ -246,9 +249,92 @@ function RegistrationFill({ block, onSpeak }) {
    );
  }
  
@@ -661,6 +680,12 @@ index c51cf62..3f9a246 100644
 +          <Small numberOfLines={3} style={{ color: T.inkMuted, lineHeight: 18, marginTop: 8 }}>
 +            {p.description}
 +          </Small>
++        )}
++
++        {block.replySource === 'ai' && (
++          <Tiny style={{ color: T.muted, marginTop: 8 }}>
++            This reply was written by the assistant from the live listing.
++          </Tiny>
 +        )}
 +
 +        <View style={styles.addedActions}>
@@ -707,7 +732,7 @@ index c51cf62..3f9a246 100644
    listing_list:       ListingList,
    order_information:  OrderInformation,
    order_details:      OrderInformation,
-@@ -262,7 +342,8 @@ const RENDERERS = Object.freeze({
+@@ -262,7 +348,8 @@ const RENDERERS = Object.freeze({
  });
  
  export default function StructuredBlock({
@@ -717,7 +742,7 @@ index c51cf62..3f9a246 100644
  }) {
    if (!block || typeof block !== 'object') return null;
    const R = RENDERERS[block.type];
-@@ -271,10 +352,12 @@ export default function StructuredBlock({
+@@ -271,10 +358,12 @@ export default function StructuredBlock({
      <R
        block={block}
        onOpenProduct={onOpenProduct}
@@ -730,7 +755,7 @@ index c51cf62..3f9a246 100644
      />
    );
  }
-@@ -287,4 +370,22 @@ const styles = StyleSheet.create({
+@@ -287,4 +376,22 @@ const styles = StyleSheet.create({
      paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12,
      borderWidth: StyleSheet.hairlineWidth, marginBottom: 8,
    },

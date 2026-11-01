@@ -108,3 +108,80 @@ test('task: a fresh search clears the old touch pick', () => {
 
   assert.equal(task.lastPick, null);
 });
+
+test('touch: the model prompt carries the live listing and the seller rule', () => {
+  const prompt = touchBuy.buildPickPrompt({
+    title: 'Black leather bag',
+    price: 18500,
+    description: 'Strong leather bag with a long strap.',
+    hasSeller: true,
+    sellerName: 'Ada',
+    lang: 'yor',
+  });
+
+  assert.match(prompt.system, /Yoruba/);
+  assert.match(prompt.system, /chat the seller/);
+  assert.match(prompt.user, /Black leather bag/);
+  assert.match(prompt.user, /₦18,500/);
+  assert.match(prompt.user, /long strap/);
+  assert.match(prompt.user, /Ada/);
+
+  const noSeller = touchBuy.buildPickPrompt({ title: 'Bag', price: 100, hasSeller: false });
+  assert.match(noSeller.system, /do not mention a seller/i);
+  assert.match(noSeller.user, /not reachable/);
+});
+
+test('touch: a good model reply is accepted and cleaned', () => {
+  const line = touchBuy.acceptModelReply(
+    '**I added the black leather bag to your cart.** It costs ₦18,500. Do you want me to chat the seller?',
+    { price: 18500, hasSeller: true },
+  );
+
+  assert.equal(
+    line,
+    'I added the black leather bag to your cart. It costs ₦18,500. Do you want me to chat the seller?',
+  );
+});
+
+test('touch: a model reply that changes the price is rejected', () => {
+  assert.equal(
+    touchBuy.acceptModelReply('I added it to your cart for ₦20,000.', {
+      price: 18500, hasSeller: true,
+    }),
+    null,
+  );
+});
+
+test('touch: a model reply that invents a seller is rejected when none is reachable', () => {
+  assert.equal(
+    touchBuy.acceptModelReply('I added the bag to your cart. Do you want me to chat the seller?', {
+      price: 18500, hasSeller: false,
+    }),
+    null,
+  );
+});
+
+test('touch: payment and delivery claims are rejected', () => {
+  for (const text of [
+    'I added the bag to your cart. It is already paid.',
+    'I added the bag to your cart. It will be delivered tomorrow for ₦18,500.',
+  ]) {
+    assert.equal(touchBuy.acceptModelReply(text, { price: 18500, hasSeller: true }), null);
+  }
+});
+
+test('touch: a model reply without a cart confirmation is rejected', () => {
+  assert.equal(
+    touchBuy.acceptModelReply('The black bag costs ₦18,500.', { price: 18500, hasSeller: true }),
+    null,
+  );
+});
+
+test('touch: a long model reply is cut at a sentence boundary', () => {
+  const long = `${'I added the bag to your cart. It costs ₦18,500. '.repeat(12)}`;
+  const line = touchBuy.acceptModelReply(long, { price: 18500, hasSeller: false });
+
+  assert.ok(line && line.length <= 360, `reply too long: ${line && line.length}`);
+  assert.match(line, /₦18,500/);
+});
+

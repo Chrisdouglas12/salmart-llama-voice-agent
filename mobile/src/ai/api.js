@@ -129,8 +129,8 @@ export async function sendTurnStream({ conversationId, message, anonymousId, con
  * same cart validation as addToCart and returns one spoken line, the product,
  * and an optional seller-chat handoff. Requires auth.
  */
-export function selectProductToCart({ productId, itemType, conversationId } = {}) {
-  return apiPost('/api/ai/cart/select', { productId, itemType, conversationId }, { retries: 0 });
+export function selectProductToCart({ productId, itemType, conversationId, lang } = {}) {
+  return apiPost('/api/ai/cart/select', { productId, itemType, conversationId, lang }, { retries: 0 });
 }
 
 /** POST /api/ai/actions/:id/confirm. Returns 200, 400, 404, 409 or 410. */

@@ -288,6 +288,12 @@ function ProductAdded({ block, onOpenChat, onOpenCart }) {
           </Small>
         )}
 
+        {block.replySource === 'ai' && (
+          <Tiny style={{ color: T.muted, marginTop: 8 }}>
+            This reply was written by the assistant from the live listing.
+          </Tiny>
+        )}
+
         <View style={styles.addedActions}>
           {!!chat?.sellerId && (
             <Pressable

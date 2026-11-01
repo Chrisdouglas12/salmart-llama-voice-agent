@@ -35,6 +35,7 @@ services/ai/tools/formTools.js     pure form normalisers (createAd/request/profi
 services/ai/tools/messagingTools.js prepare + send seller enquiry
 services/ai/tools/orderTools.js    buyer order reads
 services/ai/tools/cartTools.js     buyer cart add (same guards as POST /api/cart; checkout stays manual)
+services/ai/touchBuy.js           touch-to-buy reply prompt, model-reply checker, safe fallback
 services/ai/sellingSession.js      listing workflow state (type, asked steps; snapshot re-read every turn)
 lib/assistant/sellingFlow.js       per-type question order, spoken-price parser, field rules
 services/logger.js                 Winston logger used by AI modules
@@ -338,25 +339,37 @@ The buyer touches a product, and the app sends that exact id:
 {
   "productId": "…",
   "itemType": "post",
-  "conversationId": "…"
+  "conversationId": "…",
+  "lang": "yor"
 }
 ```
 
-The route is deterministic: it runs the same `cartTools.addToCart` validation
-as the agent tool (valid id, listing exists, not sold, not the buyer's own,
-cart size), then returns one short spoken line with the title, price and
-description. No model call means a tap works when the provider is slow and a
-tapped id can never be replaced by a guessed product.
+The cart write is deterministic: the route runs the same
+`cartTools.addToCart` validation as the agent tool (valid id, listing exists,
+not sold, not the buyer's own, cart size) and adds **exactly** the tapped id. A
+tap therefore works even when the provider is slow, and it can never be
+replaced by a product the model guessed.
+
+The spoken reply is model-written from that listing's live data: title, exact
+price, description, and whether a seller is reachable. `touchBuy.buildPickPrompt`
+builds the prompt; `touchBuy.acceptModelReply` rejects a line that changes the
+price, mentions a seller when none is reachable, claims payment/delivery/reserve,
+lacks a cart confirmation, contains a URL, or runs too long. When the model is
+unavailable or rejected, the route falls back to the deterministic template, so
+the buyer always hears a correct line. `lang` (`yor`/`hau`/`ibo`) makes the reply
+match the language the buyer last spoke.
 
 ```json
 {
   "success": true,
-  "reply": "I have added Black leather bag to your cart. It costs ₦18,500. …",
+  "replySource": "ai",
+  "reply": "I added the black leather bag to your cart. It costs ₦18,500. It has a long strap. Want me to chat the seller?",
   "structured": [
     {
       "type": "product_added",
       "product": { "productId": "…", "title": "…", "price": 18500, "description": "…" },
       "cartCount": 4,
+      "replySource": "ai",
       "chat": {
         "sellerId": "…", "sellerName": "Ada", "productId": "…",
         "productTitle": "…", "imageUrl": "…", "price": 18500,
@@ -367,11 +380,15 @@ tapped id can never be replaced by a guessed product.
 }
 ```
 
-`chat` is omitted when the listing has no reachable seller, is inactive, or
-the buyer is blocked. When present, the phone shows a **Chat the seller**
+`replySource` is `ai` when the model wrote the spoken line and `template` when
+the safe fallback did; the server log records the same value with the model
+latency. `chat` is omitted when the listing has no reachable seller, is inactive,
+or the buyer is blocked. When present, the phone shows a **Chat the seller**
 button; the draft opens in the chat and the user still presses send. The route
-also stores the tapped product on the task (`lastPick`), so a following voice
-"yes, chat him" resolves to the same `productId`. A fresh search clears it.
+also stores the tapped product on the task (`lastPick`) and appends the spoken
+line to the conversation history, so a following voice "yes, chat him" resolves
+to the same `productId` and answers the confirmation the buyer actually heard.
+A fresh search clears `lastPick`.
 
 Failure codes: `BAD_PRODUCT` (400), `AUTH_REQUIRED` (401), `UNAVAILABLE` (409,
 sold/no seller), `CART_FAILED` (400/500). The picker stays open only for
@@ -434,7 +451,7 @@ applied exactly once.
 | --- | --- | --- |
 | `product_results` | `{ products, total, hint }` | `searchProducts` |
 | `product_details` | `{ product }` | `getProductDetails` |
-| `product_added` | `{ product, cartCount, chat? }` | `POST /api/ai/cart/select` (touch-to-buy) |
+| `product_added` | `{ product, cartCount, replySource, chat? }` | `POST /api/ai/cart/select` (touch-to-buy) |
 | `listing_list` | `{ listings, total }` | `getMyListings` |
 | `order_information` | `{ orders, total }` | `getMyOrders` |
 | `order_details` | `{ found, order }` | `getOrderDetails` |

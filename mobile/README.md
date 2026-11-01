@@ -8,7 +8,7 @@ can be read without applying anything.
 | `salmart-mobile.event.patch` | +943 / −149 | `5ce993f` | original event frontend work (18 files) |
 | `salmart-mobile.ai-voice.patch` | +2451 / −464 | `e3076a1` | inline voice, screen navigation, voice-assisted registration, Google handoff, long-press AI screen, same-language voice, post-sign-in resume, LAN dev API discovery (28 files) |
 | `salmart-mobile.registration.patch` | +911 / -471 | on top of `salmart-mobile.ai-voice.patch` | voice-first sign-up: full name, optional email (Google/Yahoo/other), phone fallback (MTN/Airtel/Glo/other), sized secure password modal with copyable suggestion and spoken help, agreement card, automatic sign-in, model-written welcome, stale registration state cleared by screen/sign-in, standard device voice (7 files) |
-| `salmart-mobile.touch-buy.patch` | +501 / −12 | on top of `salmart-mobile.registration.patch` | touch-to-buy: large picture picker that opens after a search, a deterministic cart select call, spoken price/description, `product_added` card with seller-chat draft and cart button (7 files) |
+| `salmart-mobile.touch-buy.patch` | +512 / −12 | on top of `salmart-mobile.registration.patch` | touch-to-buy: large picture picker that opens after a search, a deterministic cart select call, an AI-written spoken confirmation, `product_added` card with seller-chat draft and cart button (7 files) |
 
 `mobile/src/**` holds the **current, complete** frontend AI code under its real
 app path, so a reviewer can read it without applying anything:
@@ -158,15 +158,19 @@ global mic on any other screen — and shows the results as large pictures with
 price and seller name.
 
 Touching a card sends that exact `productId` to `POST /api/ai/cart/select`. The
-route is deterministic and reuses the agent's cart validation, so a tap works
-when the model is slow and the tapped id cannot be replaced by a guess. The
-server adds the item, returns a short spoken line with the title, price and
-description, and shows a `product_added` card with **Chat the seller** (opens
-the existing chat with a ready draft, the user presses send) and **Open cart**.
-A sold-out item keeps the sheet open so the buyer can touch another one.
+cart write is deterministic and reuses the agent's cart validation, so a tap
+works when the model is slow and the tapped id cannot be replaced by a guess.
+The spoken confirmation is then written by the model from the listing's live
+title, price, description and seller, and checked before it is heard: a changed
+price, an invented seller, or a payment/delivery claim falls back to a
+deterministic line. The card carries `replySource` (`ai` or `template`), shows
+**Chat the seller** (opens the existing chat with a ready draft, the user presses
+send) and **Open cart**. A sold-out item keeps the sheet open so the buyer can
+touch another one.
 
 The tapped item is stored on the task, so a following "yes, chat him" resolves
-to the same product without a new search; a fresh search clears it.
+to the same product without a new search; a fresh search clears it. The reply is
+spoken in the buyer's last language when it is Yoruba, Hausa or Igbo.
 
 ## Original event work
 

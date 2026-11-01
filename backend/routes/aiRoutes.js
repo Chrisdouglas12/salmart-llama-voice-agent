@@ -65,6 +65,7 @@ const { sanitizeHistory, toModelMessages } = require('../services/ai/history');
 const metrics = require('../services/ai/metrics');
 const { runTurn } = require('../services/ai/agentRunner');
 const { executeConfirmed } = require('../services/ai/toolExecutor');
+const metaProvider = require('../services/ai/metaProvider');
 const cartTools = require('../services/ai/tools/cartTools');
 const messagingTools = require('../services/ai/tools/messagingTools');
 const touchBuy = require('../services/ai/touchBuy');
@@ -753,15 +754,18 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
 // ─── POST /api/ai/cart/select ──────────────────────────────────────────────
 //
 // Touch-to-buy. The app opens a picker after a product search; the buyer taps
-// the item they want. This route is deliberately deterministic: it runs the
-// same cart validation as the addToCart tool, adds exactly that listing, and
-// returns one spoken line with the price and description. No model call means
-// a tap works even when the provider is slow, and a tapped id can never be
-// replaced by a different product the model guessed.
+// the item they want. The cart write itself is deliberately deterministic: it
+// runs the same validation as the addToCart tool and adds exactly the tapped
+// id, so a tap works even when the provider is slow and the item can never be
+// replaced by one the model guessed. The spoken reply is written by the model
+// from that listing's live data, so the buyer hears a natural confirmation;
+// the template below is only the fallback when the model is unavailable or
+// breaks a rule.
 router.post('/cart/select', hardAuth, actionLimiter, async (req, res) => {
   const requestId = uuidv4();
   try {
-    const { productId, itemType, conversationId } = req.body || {};
+    const { productId, itemType, conversationId, lang } = req.body || {};
+    const replyLang = ['yor', 'hau', 'ibo'].includes(String(lang || '')) ? String(lang) : null;
     if (typeof productId !== 'string' || !/^[a-fA-F0-9]{24}$/.test(productId)) {
       return res.status(400).json({
         success: false, requestId,
@@ -802,12 +806,55 @@ router.post('/cart/select', hardAuth, actionLimiter, async (req, res) => {
       prepared = null;
     }
 
-    const reply = touchBuy.buildPickReply({
-      title: added.title,
-      price: added.price,
-      description: added.description,
-      hasSeller: !!prepared,
-    });
+    // The model now writes what the buyer hears, from the live listing. It
+    // cannot change the product or the cart: those are already committed. The
+    // checker rejects a wrong price, a seller promise when none exists, or a
+    // delivery/payment claim, and the template speaks instead.
+    let reply = '';
+    let replySource = 'template';
+    try {
+      const prompt = touchBuy.buildPickPrompt({
+        title: added.title,
+        price: added.price,
+        description: added.description,
+        hasSeller: !!prepared,
+        sellerName: prepared?.sellerName || added.sellerName,
+        lang: replyLang,
+      });
+      const aiStarted = Date.now();
+      const ai = await metaProvider.chat({
+        messages: [
+          { role: 'system', content: prompt.system },
+          { role: 'user', content: prompt.user },
+        ],
+        requestId,
+        maxTokens: 200,
+        reasoningEffort: 'minimal',
+        timeoutMs: 10000,
+      });
+      const accepted = ai.kind === 'final'
+        ? touchBuy.acceptModelReply(ai.text, {
+          price: added.price,
+          hasSeller: !!prepared,
+        })
+        : null;
+      if (accepted) {
+        reply = accepted;
+        replySource = 'ai';
+      }
+      logger.info(`[aiRoutes] cart select reply source=${replySource} ms=${Date.now() - aiStarted} requestId=${requestId}${accepted ? '' : ' (checker rejected)'}`);
+    } catch (e) {
+      logger.warn(`[aiRoutes] cart select reply fallback requestId=${requestId}: ${e.message}`);
+    }
+
+    if (!reply) {
+      reply = touchBuy.buildPickReply({
+        title: added.title,
+        price: added.price,
+        description: added.description,
+        hasSeller: !!prepared,
+      });
+    }
 
     const product = {
       productId: added.productId,
@@ -823,6 +870,7 @@ router.post('/cart/select', hardAuth, actionLimiter, async (req, res) => {
       type: 'product_added',
       product,
       cartCount: added.cartCount,
+      replySource,
       ...(prepared ? {
         chat: {
           sellerId: prepared.sellerId,
@@ -854,15 +902,21 @@ router.post('/cart/select', hardAuth, actionLimiter, async (req, res) => {
               at: Date.now(),
             }),
           });
+          // Put the spoken confirmation in history too, so a follow-up voice
+          // turn ("yes, chat him") answers the line the buyer actually heard.
+          await store.appendMessages(conversationId, [
+            { role: 'assistant', content: reply, at: new Date() },
+          ]);
         }
       } catch (_e) { /* task memory is best-effort */ }
     }
 
-    logger.info(`[aiRoutes] cart select ok user=${req.userId} product=${productId} requestId=${requestId}`);
+    logger.info(`[aiRoutes] cart select ok user=${req.userId} product=${productId} reply=${replySource} requestId=${requestId}`);
     return res.json({
       success: true,
       requestId,
       reply,
+      replySource,
       structured,
       product,
       cartCount: added.cartCount,

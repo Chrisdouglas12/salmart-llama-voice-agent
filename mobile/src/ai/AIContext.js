@@ -108,6 +108,9 @@ export function AIProvider({ children }) {
 
   const anonRef = useRef(null);
   const convRef = useRef(null);
+  // The language the buyer last spoke (yor/hau/ibo), so the model-written
+  // touch reply answers in the same language. Null means English/Pidgin.
+  const lastLangRef = useRef(null);
   const authBusyRef = useRef(false);
   const messagesRef = useRef([]);
   messagesRef.current = messages;
@@ -481,6 +484,7 @@ export function AIProvider({ children }) {
         productId,
         itemType: product.itemType === 'showroom' ? 'showroom' : 'post',
         conversationId: cid || undefined,
+        lang: lastLangRef.current || undefined,
       });
       if (!res?.success) throw new Error(res?.message || 'Could not add it to your cart.');
 
@@ -744,6 +748,7 @@ export function AIProvider({ children }) {
       const transcript = String(res?.text || '').trim();
       // The reply, in text and voice, follows the speaker's language.
       heardLang = (res && typeof res.lang === 'string' && res.lang !== 'eng') ? res.lang : null;
+      lastLangRef.current = heardLang;
 
       if (!res?.success || !transcript) {
         const line = 'I could not catch that. Please try again.';

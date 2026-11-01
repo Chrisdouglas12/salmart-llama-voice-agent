@@ -1,32 +1,62 @@
-# Aya — a voice assistant for people technology leaves behind
+Salmart Intelligence
 
-Salmart is a Nigerian marketplace app (built before this hackathon). **Aya is new: a Meta-powered voice assistant built during this hackathon** that lets elderly and low-digital-literacy users register, sign in, recover accounts, message sellers, and pay — through conversation, not forms.
+AI that understands people, not just commands.
 
-## The problem
+Salmart Intelligence is a Meta-powered, voice-first AI assistant built during the Meta AI Developer Hackathon 2026. It transforms how people interact with digital commerce, making it possible for elderly users and people with limited digital literacy to use a marketplace through natural conversation, touch and voice.
 
-For a struggling user, Salmart's register screen (5 fields + password rules + email link) is a locked door. "I can't enter my account" fires a password reset they never asked for. A forgotten email means a dead account. Checkout charges the whole cart with no selection. These users don't need a chatbot — they need someone who understands what they want and does it with them.
+Salmart marketplace existed before the hackathon. Salmart Intelligence is the new AI layer built during the event.
 
-## What Aya does (all live, all tested)
+The Problem
 
-- **Understands account problems** — 11 intents, 11 conversation states. "I can't enter my account" gets one clarifying question, never an instant reset.
-- **Recovers forgotten emails** — Google-or-email branch, mail-app guidance, honest limits (no name lookup, no invented channels).
-- **Registers by conversation** - full name first; email optional (Google, Yahoo, or any other); if no email, a phone number from MTN, Airtel, Glo, or any other network; one secure password entry with a copyable suggested code and spoken help; agreement last; server confirms, the app signs in, and the model writes the welcome question aloud.
-- **Guides buying end-to-end** — finds the item, opens a large picture picker so the buyer only has to touch the one they want (no reading or pronunciation), then the model writes the spoken confirmation from the live listing (price-checked before it is heard), holds it in cart, drafts the seller message, tick-to-pay checkout, mic stays visible over Paystack with exact payment steps and escrow reassurance.
-- **Never lies, never leaks** — passwords/OTPs typed in chat are refused before reaching Meta; success is claimed only from real app state; Meta models only, end to end.
+Most digital platforms assume users can read, type, navigate menus and understand application interfaces.
 
-## Verify in 60 seconds
+But millions of people are excluded by these assumptions.
 
-```bash
+We believe access to technology shouldn't depend on knowing how to use technology.
+
+What We Built
+
+Salmart Intelligence helps users:
+
+- Register and sign in: Create accounts through guided conversation without navigating complicated forms.
+- Recover accounts: Understand account problems and receive appropriate recovery guidance.
+- Shop by touch: Touch a product picture and hear its name, actual price and details without reading descriptions.
+- Buy through conversation: Add products to the cart, contact sellers and navigate checkout with voice guidance.
+- Pay with guidance: Follow clear payment instructions through the existing Paystack checkout.
+
+Aya understands user intentions, remembers the current application context and executes approved actions through Salmart's existing systems.
+
+Powered by Meta AI
+
+Meta models power the intelligence behind Salmart Intelligence, enabling natural-language understanding, intent recognition and context-aware responses.
+
+Rather than simply answering questions, the assistant connects AI reasoning to real application actions.
+
+Why It Matters
+
+Salmart Intelligence explores a different future for digital platforms.
+
+Imagine Meta-powered applications that elderly people, first-time smartphone users and people who struggle with reading can operate without having to master complicated interfaces.
+
+This could help Meta's AI ecosystem stand out by making its models useful beyond conventional chat interfaces — enabling developers to build applications that adapt to people rather than expecting people to adapt to applications.
+
+The opportunity is bigger than shopping. It's digital inclusion through conversational AI.
+
+Verify the Implementation
+
 cd backend
-npm test        # keyless contract tests
-npm run demo    # 7-turn scripted run through the real tool contracts
-```
+npm test
+npm run demo
 
-Live app: point at the server URL, follow `DEMO.md` (the 3-minute script). No keys in this repo — ever.
+See:
 
-## Repo map
+- "DEMO.md" — Three-minute demonstration guide.
+- "NEW_WORK.md" — Hackathon implementation and changes.
+- "backend/" — AI orchestration, model integration and tool contracts.
+- "mobile/" — Mobile application integration and interaction changes.
 
-- `backend/` — every AI module (whole files) + patches to pre-existing server files (`.patch`). No Salmart product code copied.
-- `mobile/` - patches with the assistant UI, voice-first registration, touch-to-buy, auth screens, cart, and mic changes.
-- `NEW_WORK.md` — what was built this week, file by file, with proof.
-- `DEMO.md` — the 3-minute demo script, word for word.
+Our Vision
+
+Don't make people learn how to use technology. Make technology understand people.
+
+Built for the Meta AI Developer Hackathon 2026.

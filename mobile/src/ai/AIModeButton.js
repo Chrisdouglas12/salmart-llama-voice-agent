@@ -195,12 +195,22 @@ export default function AIModeButton({ extraContext } = {}) {
     });
   };
 
-  // Messages has its own green "+" button at the bottom right, so lift the mic
-  // clearly above it. Market no longer has a bottom-right FAB, but a small lift
-  // keeps the mic from crowding the tab bar.
+  // One dock rule for every screen, so the mic and its card never sit on top
+  // of screen-owned controls:
+  // - chat / group threads: the composer owns the bottom-right (attach +
+  //   input + send), so the mic docks bottom-LEFT, lifted just above the
+  //   composer. The card goes compact (3-line body) so the message list,
+  //   the reply/product preview and the send button all stay visible.
+  // - messages: its own green "+" owns the bottom-right, so the mic stays
+  //   right but lifted clearly above it.
+  // - market: a small lift keeps the mic off the tab bar.
+  const isThread = currentName === 'chat' || currentName === 'group';
   const aboveScreenFab = currentName === 'messages';
   const screenLift = aboveScreenFab ? 72 : currentName === 'market' ? 28 : 0;
-  const wrapBottom = (Platform.OS === 'ios' ? 100 : 90) + screenLift;
+  // Composer height (~60) + preview rows + safe margin: the mic floats above
+  // the whole composer block on thread screens instead of on the send button.
+  const threadLift = isThread ? (Platform.OS === 'ios' ? 170 : 160) : 0;
+  const wrapBottom = (Platform.OS === 'ios' ? 100 : 90) + screenLift + threadLift;
   const onPressMic = () => {
     if (longPressedRef.current) {
       longPressedRef.current = false;
@@ -210,7 +220,15 @@ export default function AIModeButton({ extraContext } = {}) {
   };
 
   return (
-    <View style={[styles.wrap, { bottom: wrapBottom }]} pointerEvents="box-none">
+    <View
+      style={[
+        styles.wrap,
+        { bottom: wrapBottom },
+        // Left dock on thread screens: the send button keeps the right edge.
+        isThread ? { right: undefined, left: 20, alignItems: 'flex-start' } : null,
+      ]}
+      pointerEvents="box-none"
+    >
       {!!(nudgeVisible && micNudge && !busy) && (
         <View style={[styles.nudge, { backgroundColor: T.card, borderColor: T.border }]}>
           <Tiny style={{ color: T.ink, fontWeight: '700' }}>{micNudge.label || 'Tap to talk'}</Tiny>
@@ -240,7 +258,13 @@ export default function AIModeButton({ extraContext } = {}) {
           </View>
 
           {!!body && (
-            <Small style={{ color: T.ink, marginTop: 6, lineHeight: 19 }}>
+            <Small
+              style={{ color: T.ink, marginTop: 6, lineHeight: 19 }}
+              // Compact on thread screens: the full reply lives in the AI
+              // conversation; the card stays a glanceable strip that cannot
+              // bury the product preview or the message list.
+              numberOfLines={isThread ? 3 : undefined}
+            >
               {body}
             </Small>
           )}
@@ -378,6 +402,9 @@ const styles = StyleSheet.create({
   card: {
     width: Math.min(WINDOW_WIDTH - 40, 340),
     marginBottom: 12,
+    // Compact ceiling: long transcriptions scroll inside the card on thread
+    // screens instead of growing over the preview rows and composer.
+    maxHeight: 240,
     padding: 14,
     borderRadius: 18,
     borderWidth: 1,

@@ -902,8 +902,11 @@ export function AIProvider({ children }) {
 
   // Seller-chat handoff: open ChatScreen with the AI draft and product card
   // pre-filled. The user presses send in the chat; nothing is auto-sent.
+  // The floating voice card is dismissed first so it never covers the
+  // product preview or the composer on the chat screen.
   const openSellerChat = useCallback((handoff) => {
     if (!handoff?.sellerId) return;
+    setLastVoice(null);
     nav.push('chat', {
       partnerId: String(handoff.sellerId),
       ...(handoff.sellerName ? { name: String(handoff.sellerName).slice(0, 80) } : {}),
@@ -917,7 +920,7 @@ export function AIProvider({ children }) {
         },
       } : {}),
     });
-  }, [nav]);
+  }, [nav, dismissVoice]);
 
   const value = useMemo(() => ({
     conversationId, messages, status, error, isReady, recording, transcribing,

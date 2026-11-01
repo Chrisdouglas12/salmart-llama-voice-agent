@@ -1,5 +1,5 @@
 diff --git a/src/ai/AIContext.js b/src/ai/AIContext.js
-index 9d88d62..c068f3a 100644
+index 9d88d62..632a453 100644
 --- a/src/ai/AIContext.js
 +++ b/src/ai/AIContext.js
 @@ -41,6 +41,7 @@ import { TAB_ROOTS } from '../state/routes';
@@ -123,7 +123,25 @@ index 9d88d62..c068f3a 100644
          at: Date.now(),
        });
        if (!result.spoken) await speakReply(line, heardLang);
-@@ -843,10 +922,10 @@ export function AIProvider({ children }) {
+@@ -823,8 +902,11 @@ export function AIProvider({ children }) {
+ 
+   // Seller-chat handoff: open ChatScreen with the AI draft and product card
+   // pre-filled. The user presses send in the chat; nothing is auto-sent.
++  // The floating voice card is dismissed first so it never covers the
++  // product preview or the composer on the chat screen.
+   const openSellerChat = useCallback((handoff) => {
+     if (!handoff?.sellerId) return;
++    setLastVoice(null);
+     nav.push('chat', {
+       partnerId: String(handoff.sellerId),
+       ...(handoff.sellerName ? { name: String(handoff.sellerName).slice(0, 80) } : {}),
+@@ -838,15 +920,15 @@ export function AIProvider({ children }) {
+         },
+       } : {}),
+     });
+-  }, [nav]);
++  }, [nav, dismissVoice]);
+ 
    const value = useMemo(() => ({
      conversationId, messages, status, error, isReady, recording, transcribing,
      lastVoice, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
@@ -137,7 +155,7 @@ index 9d88d62..c068f3a 100644
      openSellerChat, micNudge, nudgeMic,
      startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
 diff --git a/src/ai/AIModeButton.js b/src/ai/AIModeButton.js
-index 802e2d7..fb471ed 100644
+index 802e2d7..bbc36bc 100644
 --- a/src/ai/AIModeButton.js
 +++ b/src/ai/AIModeButton.js
 @@ -8,6 +8,7 @@ import { useTheme } from '../theme/theme';
@@ -210,7 +228,66 @@ index 802e2d7..fb471ed 100644
  
    const statusLabel = recording
      ? 'Listening…'
-@@ -280,6 +305,24 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -170,12 +195,22 @@ export default function AIModeButton({ extraContext } = {}) {
+     });
+   };
+ 
+-  // Messages has its own green "+" button at the bottom right, so lift the mic
+-  // clearly above it. Market no longer has a bottom-right FAB, but a small lift
+-  // keeps the mic from crowding the tab bar.
++  // One dock rule for every screen, so the mic and its card never sit on top
++  // of screen-owned controls:
++  // - chat / group threads: the composer owns the bottom-right (attach +
++  //   input + send), so the mic docks bottom-LEFT, lifted just above the
++  //   composer. The card goes compact (3-line body) so the message list,
++  //   the reply/product preview and the send button all stay visible.
++  // - messages: its own green "+" owns the bottom-right, so the mic stays
++  //   right but lifted clearly above it.
++  // - market: a small lift keeps the mic off the tab bar.
++  const isThread = currentName === 'chat' || currentName === 'group';
+   const aboveScreenFab = currentName === 'messages';
+   const screenLift = aboveScreenFab ? 72 : currentName === 'market' ? 28 : 0;
+-  const wrapBottom = (Platform.OS === 'ios' ? 100 : 90) + screenLift;
++  // Composer height (~60) + preview rows + safe margin: the mic floats above
++  // the whole composer block on thread screens instead of on the send button.
++  const threadLift = isThread ? (Platform.OS === 'ios' ? 170 : 160) : 0;
++  const wrapBottom = (Platform.OS === 'ios' ? 100 : 90) + screenLift + threadLift;
+   const onPressMic = () => {
+     if (longPressedRef.current) {
+       longPressedRef.current = false;
+@@ -185,7 +220,15 @@ export default function AIModeButton({ extraContext } = {}) {
+   };
+ 
+   return (
+-    <View style={[styles.wrap, { bottom: wrapBottom }]} pointerEvents="box-none">
++    <View
++      style={[
++        styles.wrap,
++        { bottom: wrapBottom },
++        // Left dock on thread screens: the send button keeps the right edge.
++        isThread ? { right: undefined, left: 20, alignItems: 'flex-start' } : null,
++      ]}
++      pointerEvents="box-none"
++    >
+       {!!(nudgeVisible && micNudge && !busy) && (
+         <View style={[styles.nudge, { backgroundColor: T.card, borderColor: T.border }]}>
+           <Tiny style={{ color: T.ink, fontWeight: '700' }}>{micNudge.label || 'Tap to talk'}</Tiny>
+@@ -215,7 +258,13 @@ export default function AIModeButton({ extraContext } = {}) {
+           </View>
+ 
+           {!!body && (
+-            <Small style={{ color: T.ink, marginTop: 6, lineHeight: 19 }}>
++            <Small
++              style={{ color: T.ink, marginTop: 6, lineHeight: 19 }}
++              // Compact on thread screens: the full reply lives in the AI
++              // conversation; the card stays a glanceable strip that cannot
++              // bury the product preview or the message list.
++              numberOfLines={isThread ? 3 : undefined}
++            >
+               {body}
+             </Small>
+           )}
+@@ -280,6 +329,24 @@ export default function AIModeButton({ extraContext } = {}) {
                </Small>
              </Pressable>
            )}
@@ -235,7 +312,7 @@ index 802e2d7..fb471ed 100644
          </View>
        )}
  
-@@ -312,6 +355,13 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -312,6 +379,13 @@ export default function AIModeButton({ extraContext } = {}) {
          <Ionicons name={fabIcon} size={26} color="#fff" />
        </Pressable>
        </Animated.View>
@@ -249,6 +326,16 @@ index 802e2d7..fb471ed 100644
      </View>
    );
  }
+@@ -328,6 +402,9 @@ const styles = StyleSheet.create({
+   card: {
+     width: Math.min(WINDOW_WIDTH - 40, 340),
+     marginBottom: 12,
++    // Compact ceiling: long transcriptions scroll inside the card on thread
++    // screens instead of growing over the preview rows and composer.
++    maxHeight: 240,
+     padding: 14,
+     borderRadius: 18,
+     borderWidth: 1,
 diff --git a/src/ai/AIModeScreen.js b/src/ai/AIModeScreen.js
 index bf694b1..8d27e0d 100644
 --- a/src/ai/AIModeScreen.js

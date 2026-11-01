@@ -122,6 +122,17 @@ export async function sendTurnStream({ conversationId, message, anonymousId, con
   return done;
 }
 
+/**
+ * POST /api/ai/cart/select — the touch-to-buy path.
+ *
+ * The app sends the exact productId the buyer touched; the server runs the
+ * same cart validation as addToCart and returns one spoken line, the product,
+ * and an optional seller-chat handoff. Requires auth.
+ */
+export function selectProductToCart({ productId, itemType, conversationId } = {}) {
+  return apiPost('/api/ai/cart/select', { productId, itemType, conversationId }, { retries: 0 });
+}
+
 /** POST /api/ai/actions/:id/confirm. Returns 200, 400, 404, 409 or 410. */
 export function confirmAction(actionId) {
   return apiPost(`/api/ai/actions/${encodeURIComponent(actionId)}/confirm`, {}, { retries: 0 });

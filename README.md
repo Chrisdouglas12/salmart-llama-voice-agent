@@ -27,6 +27,6 @@ Live app: point at the server URL, follow `DEMO.md` (the 3-minute script). No ke
 ## Repo map
 
 - `backend/` — every AI module (whole files) + patches to pre-existing server files (`.patch`). No Salmart product code copied.
-- `mobile/` — two patches with the assistant UI, voice-first registration, auth screens, cart, and mic changes.
+- `mobile/` - patches with the assistant UI, voice-first registration, touch-to-buy, auth screens, cart, and mic changes.
 - `NEW_WORK.md` — what was built this week, file by file, with proof.
 - `DEMO.md` — the 3-minute demo script, word for word.

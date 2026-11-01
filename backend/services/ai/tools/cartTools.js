@@ -3,15 +3,15 @@
 /**
  * services/ai/tools/cartTools.js
  *
- * Buyer-side cart write for the agent. Mirrors the guards in
- * routes/cartRoutes.js#POST /api/cart exactly — valid id, listing exists,
- * not sold out, and never the buyer's own listing — so the agent cannot put
- * anything in the cart the cart screen itself would reject.
+ * Buyer-side cart writes for the agent. The checks match
+ * routes/cartRoutes.js#POST /api/cart: valid id, listing exists, not sold out,
+ * and never the buyer's own listing. The agent cannot add anything the cart
+ * screen itself would reject.
  *
- * Adding to cart is reversible (the cart screen can remove it) and only ever
- * runs after the user agrees in conversation, so it executes inline with no
- * confirmation card. Payment itself is never touched: checkout stays manual
- * on the cart screen, where escrow protects the buyer.
+ * Adding to the cart is reversible, and it only runs after the user agrees in
+ * conversation, so it executes inline without a confirmation card. Payment is
+ * never touched: checkout stays manual on the cart screen, where escrow
+ * protects the buyer.
  */
 
 const mongoose = require('mongoose');
@@ -98,9 +98,23 @@ async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {
   }
   await cart.save();
 
+  const photo = product.photo
+    || (Array.isArray(product.photos) && product.photos[0])
+    || null;
+  const sellerName = type === 'showroom'
+    ? (product.sellerName || product.businessName || null)
+    : (product.createdBy?.name || null);
+
   return {
     added: true,
+    productId: String(product._id),
+    itemType: type,
     title: product.title || product.description || 'Item',
+    price: typeof product.price === 'number' ? product.price : null,
+    description: product.description ? String(product.description).slice(0, 600) : null,
+    photo,
+    sellerId,
+    sellerName,
     quantity: existing ? existing.quantity : addQty,
     cartCount: cart.items.length,
     note: 'Item added to the cart. Checkout stays manual on the cart screen.',

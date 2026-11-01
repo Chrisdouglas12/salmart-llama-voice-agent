@@ -41,6 +41,7 @@ import { TAB_ROOTS } from '../state/routes';
 import { runGoogleAuth } from '../utils/oauth';
 import {
   createConversation, rebindConversation, sendTurn, sendTurnStream,
+  selectProductToCart,
   confirmAction as apiConfirm, cancelAction as apiCancel,
 } from './api';
 import { speakReply, queueSpeech, stopSpeaking } from './speak';
@@ -452,6 +453,71 @@ export function AIProvider({ children }) {
     })();
   }, [welcomeTick, authReady, isAuthenticated, send]);
 
+  /**
+   * Touch-to-buy. The buyer tapped a product card; send that exact productId
+   * to the deterministic server route, queue the confirmation in the chat,
+   * and speak the price and description. No model call, so the confirmation
+   * arrives immediately and cannot drift to another product.
+   */
+  const selectProduct = useCallback(async (product) => {
+    const productId = product?.productId || product?._id;
+    if (!productId) {
+      return { ok: false, code: 'BAD_PRODUCT', message: 'That item could not be found.' };
+    }
+
+    if (!authRef.current.isAuthenticated) {
+      const line = 'Please sign in first, then touch the item again.';
+      setMessages(prev => [...prev, {
+        key: newKey(), role: 'assistant', kind: 'error', text: line, at: Date.now(),
+      }]);
+      setLastVoice({ text: line, kind: 'error', at: Date.now() });
+      await speakReply(line);
+      return { ok: false, code: 'AUTH_REQUIRED', message: line };
+    }
+
+    try {
+      const cid = conversationId || await ensureConversation().catch(() => null);
+      const res = await selectProductToCart({
+        productId,
+        itemType: product.itemType === 'showroom' ? 'showroom' : 'post',
+        conversationId: cid || undefined,
+      });
+      if (!res?.success) throw new Error(res?.message || 'Could not add it to your cart.');
+
+      const line = res.reply || 'I added it to your cart.';
+      const blocks = Array.isArray(res.structured) ? res.structured : [];
+      setMessages(prev => [...prev, {
+        key: newKey(),
+        role: 'assistant',
+        text: line,
+        structured: blocks,
+        at: Date.now(),
+      }]);
+      const added = blocks.find(b => b && b.type === 'product_added');
+      setLastVoice({
+        text: line,
+        kind: 'reply',
+        chatHandoff: added?.chat || null,
+        at: Date.now(),
+      });
+      await speakReply(line);
+      return { ok: true, ...res };
+    } catch (e) {
+      const code = e?.status === 401 ? 'AUTH_REQUIRED' : (e?.code || 'CART_FAILED');
+      const line = e?.status === 401
+        ? 'Please sign in first, then touch the item again.'
+        : e?.isNetwork
+          ? 'No internet connection. Please try again.'
+          : (e?.message || 'I could not add that item. Please touch another one.');
+      setMessages(prev => [...prev, {
+        key: newKey(), role: 'assistant', kind: 'error', text: line, at: Date.now(),
+      }]);
+      setLastVoice({ text: line, kind: 'error', at: Date.now() });
+      await speakReply(line);
+      return { ok: false, code, message: line };
+    }
+  }, [conversationId, ensureConversation]);
+
   const confirm = useCallback(async (actionId) => {
     try {
       const res = await apiConfirm(actionId);
@@ -706,6 +772,13 @@ export function AIProvider({ children }) {
       const chatBlock = result.ok && Array.isArray(result.structured)
         ? result.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId)
         : null;
+      // A search returns products for the touch picker. The floating mic keeps
+      // the block so a voice turn started on Market opens the same sheet as a
+      // turn inside AI Mode.
+      const productBlock = result.ok && Array.isArray(result.structured)
+        ? result.structured.find(b => b && b.type === 'product_results'
+          && Array.isArray(b.products) && b.products.length)
+        : null;
 
       setLastVoice({
         text: line,
@@ -713,6 +786,7 @@ export function AIProvider({ children }) {
         confirmation: result.ok ? (result.confirmation || null) : null,
         authUrl: authBlock || null,
         chatHandoff: chatBlock || null,
+        products: productBlock || null,
         at: Date.now(),
       });
       if (!result.spoken) await speakReply(line, heardLang);
@@ -843,10 +917,10 @@ export function AIProvider({ children }) {
   const value = useMemo(() => ({
     conversationId, messages, status, error, isReady, recording, transcribing,
     lastVoice, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
-    send, confirm, cancel, reset, openSellerChat, micNudge, nudgeMic,
+    send, selectProduct, confirm, cancel, reset, openSellerChat, micNudge, nudgeMic,
     startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
   }), [
-    conversationId, messages, status, error, isReady, send, confirm, cancel, reset,
+    conversationId, messages, status, error, isReady, send, selectProduct, confirm, cancel, reset,
     recording, transcribing, toggleRecording, lastVoice, dismissVoice, confirmVoice, cancelVoice,
     openSellerChat, micNudge, nudgeMic,
     startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,

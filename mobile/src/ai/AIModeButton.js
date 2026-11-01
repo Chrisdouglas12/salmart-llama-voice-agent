@@ -8,6 +8,7 @@ import { useTheme } from '../theme/theme';
 import { useNavActions, useNavSelector } from '../state/Navigation';
 import { Small, Tiny } from '../ui/kit';
 import { useAI } from './AIContext';
+import ProductPicker from './components/ProductPicker';
 import { useSplashVisible } from '../state/splash';
 
 /**
@@ -49,10 +50,14 @@ export default function AIModeButton({ extraContext } = {}) {
   const {
     recording, transcribing, status, lastVoice,
     toggleRecording, dismissVoice, confirmVoice, cancelVoice,
-    startGoogleAuth, authBusy, micNudge,
+    startGoogleAuth, authBusy, micNudge, selectProduct, openSellerChat,
   } = useAI();
 
   const [actionBusy, setActionBusy] = useState(null);
+  // The touch picker lives here too, so a voice turn started on any screen
+  // shows the same large product sheet as the full AI conversation.
+  const [pickerProducts, setPickerProducts] = useState(null);
+  const seenProductsRef = useRef('');
   const longPressedRef = useRef(false);
   const splashVisible = useSplashVisible();
   const sending = status === 'sending';
@@ -98,16 +103,36 @@ export default function AIModeButton({ extraContext } = {}) {
   const glowOpacity = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [0.34, 0.02] });
   const glowScale = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.8] });
 
+  // A product search from the floating mic opens the touch picker on top of
+  // whatever screen the user is on. AI Mode has its own picker, so it is
+  // skipped here. The key prevents the same results reopening after a close.
+  useEffect(() => {
+    if (splashVisible || currentName === 'ai' || currentName === 'assistant' || inWeb) return;
+    const block = lastVoice?.products;
+    if (busy || !block || !Array.isArray(block.products) || !block.products.length) return;
+    const ids = block.products
+      .map(p => p?.productId || p?._id || p?.title || '')
+      .join('|');
+    if (!ids) return;
+    // Timestamp + ids: a repeated search for the same products is a new turn
+    // and must open the sheet again, while closing it does not reopen it.
+    const key = `${lastVoice?.at || 0}:${ids}`;
+    if (seenProductsRef.current === key) return;
+    seenProductsRef.current = key;
+    setPickerProducts(block.products);
+  }, [lastVoice, busy, splashVisible, currentName, inWeb]);
+
   const confirmation = lastVoice?.confirmation || null;
   const authBlock = lastVoice?.authUrl || null;
+  const chatHandoff = lastVoice?.chatHandoff || null;
 
   // A plain reply should not stay over the app forever. Confirmations and a
   // Google sign-in action stay until the user acts on them.
   useEffect(() => {
-    if (!lastVoice?.text || confirmation || authBlock || busy) return undefined;
+    if (!lastVoice?.text || confirmation || authBlock || chatHandoff || busy) return undefined;
     const timer = setTimeout(() => dismissVoice(), 10000);
     return () => clearTimeout(timer);
-  }, [lastVoice, confirmation, authBlock, busy, dismissVoice]);
+  }, [lastVoice, confirmation, authBlock, chatHandoff, busy, dismissVoice]);
 
   // Hide on the launch splash, the AI screen (it has its own input), the
   // legacy assistant screen, and inside the WebView.
@@ -280,6 +305,24 @@ export default function AIModeButton({ extraContext } = {}) {
               </Small>
             </Pressable>
           )}
+
+          {!!chatHandoff?.sellerId && (
+            <Pressable
+              onPress={() => openSellerChat(chatHandoff)}
+              accessibilityRole="button"
+              accessibilityLabel="Chat the seller"
+              style={({ pressed }) => [
+                styles.googleBtn,
+                { backgroundColor: T.card, borderColor: T.emerald },
+                pressed && { opacity: 0.75 },
+              ]}
+            >
+              <Ionicons name="chatbubble-outline" size={16} color={T.emerald} />
+              <Small style={{ color: T.emerald, fontWeight: '800', marginLeft: 8 }}>
+                Chat the seller
+              </Small>
+            </Pressable>
+          )}
         </View>
       )}
 
@@ -312,6 +355,13 @@ export default function AIModeButton({ extraContext } = {}) {
         <Ionicons name={fabIcon} size={26} color="#fff" />
       </Pressable>
       </Animated.View>
+
+      <ProductPicker
+        visible={!!pickerProducts}
+        products={pickerProducts || []}
+        onClose={() => setPickerProducts(null)}
+        onSelect={selectProduct}
+      />
     </View>
   );
 }

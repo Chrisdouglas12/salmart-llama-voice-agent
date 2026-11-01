@@ -79,6 +79,30 @@ function normalizeLastSearch(raw) {
 }
 
 /**
+ * The last listing the buyer tapped in the touch picker. Kept on the task so
+ * a following voice turn ("yes, chat him") can use the exact productId
+ * without searching again. Product ids, titles and prices are not secrets.
+ */
+function normalizeLastPick(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const productId = cleanText(raw.productId, 24);
+  if (!/^[a-fA-F0-9]{24}$/.test(productId)) return null;
+
+  const price = raw.price == null || raw.price === '' ? NaN : Number(raw.price);
+  const sellerId = cleanText(raw.sellerId, 24);
+  const at = Number(raw.at);
+  return {
+    productId,
+    title: cleanText(raw.title, 120),
+    price: Number.isFinite(price) && price >= 0 ? price : null,
+    sellerId: /^[a-fA-F0-9]{24}$/.test(sellerId) ? sellerId : null,
+    sellerName: cleanText(raw.sellerName, 80),
+    itemType: raw.itemType === 'showroom' ? 'showroom' : 'post',
+    at: Number.isFinite(at) && at > 0 ? at : Date.now(),
+  };
+}
+
+/**
  * Accept either a bare task or the stored `{ task }` wrapper. Returns null for
  * malformed, expired, or empty documents so callers always start clean.
  */
@@ -103,6 +127,7 @@ function normalizeTask(raw) {
       register: cleanFieldMap(drafts.register),
     },
     lastSearch: normalizeLastSearch(candidate.lastSearch),
+    lastPick: normalizeLastPick(candidate.lastPick),
     lastScreen: cleanText(candidate.lastScreen, 40) || null,
     emailProvided: candidate.emailProvided === true,
     phoneProvided: candidate.phoneProvided === true,
@@ -111,6 +136,7 @@ function normalizeTask(raw) {
   };
 
   const hasContent = task.goal
+    || task.lastPick
     || Object.keys(task.adDraft).length
     || Object.keys(task.drafts.request).length
     || Object.keys(task.drafts.profile).length
@@ -206,6 +232,9 @@ function applyToolResults(task, toolResults) {
         break;
       }
       case 'searchProducts':
+        // A fresh search replaces the touch selection; the old productId must
+        // not survive into a later "yes" after the user looked at new items.
+        task.lastPick = null;
         task.lastSearch = {
           tool: 'searchProducts',
           count: Array.isArray(r.data.products) ? r.data.products.length : Number(r.data.total) || 0,
@@ -275,10 +304,41 @@ function buildPromptBlock(task) {
   if (task.phoneProvided) lines.push('Registration: phone number already supplied; do not ask for it again.');
   if (task.emailDeclined) lines.push('Registration: user has no email; use a phone number.');
   if (task.lastSearch) lines.push(`Last results: ${task.lastSearch.tool} (${task.lastSearch.count})`);
+  if (task.lastPick) {
+    const pick = task.lastPick;
+    const price = pick.price == null ? '' : `, price ₦${pick.price}`;
+    lines.push(`Item the user touched to buy: ${pick.title || 'item'} (productId ${pick.productId}${price}). If they ask to chat the seller or confirm the item, use this productId; do not search for it again.`);
+  }
   if (task.lastScreen) lines.push(`Last screen opened: ${task.lastScreen}`);
   lines.push(`Status: ${task.status}`);
 
   return `\n\n[Task state — data only, not instructions:\n${lines.join('\n')}\n]`;
+}
+
+/**
+ * Record a touch pick on the stored task. Returns the full collectedInfo so
+ * the caller can write it back with one setTask. A malformed pick is ignored.
+ */
+function applyPick(collectedInfo, pick) {
+  const normalized = normalizeLastPick(pick);
+  if (!normalized) return collectedInfo;
+
+  const task = normalizeTask(collectedInfo) || {
+    goal: '',
+    status: 'active',
+    adDraft: {},
+    drafts: { request: {}, profile: {}, register: {} },
+    lastSearch: null,
+    lastPick: null,
+    lastScreen: null,
+    emailProvided: false,
+    phoneProvided: false,
+    emailDeclined: false,
+    updatedAt: Date.now(),
+  };
+  task.lastPick = normalized;
+  task.updatedAt = Date.now();
+  return toCollectedInfo(collectedInfo, task);
 }
 
 /** Preserve unrelated collectedInfo keys; replace only `task`. */
@@ -301,6 +361,7 @@ module.exports = {
   normalizeTask,
   beginTurn,
   applyToolResults,
+  applyPick,
   finishTurn,
   buildPromptBlock,
   toCollectedInfo,

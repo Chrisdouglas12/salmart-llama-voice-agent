@@ -1,6 +1,6 @@
 # Mobile — event diff extract
 
-Three patches are kept here, plus full copies of the new AI client, so the code
+Four patches are kept here, plus full copies of the new AI client, so the code
 can be read without applying anything.
 
 | Patch | Size | Base commit | Covers |
@@ -8,6 +8,7 @@ can be read without applying anything.
 | `salmart-mobile.event.patch` | +943 / −149 | `5ce993f` | original event frontend work (18 files) |
 | `salmart-mobile.ai-voice.patch` | +2451 / −464 | `e3076a1` | inline voice, screen navigation, voice-assisted registration, Google handoff, long-press AI screen, same-language voice, post-sign-in resume, LAN dev API discovery (28 files) |
 | `salmart-mobile.registration.patch` | +911 / -471 | on top of `salmart-mobile.ai-voice.patch` | voice-first sign-up: full name, optional email (Google/Yahoo/other), phone fallback (MTN/Airtel/Glo/other), sized secure password modal with copyable suggestion and spoken help, agreement card, automatic sign-in, model-written welcome, stale registration state cleared by screen/sign-in, standard device voice (7 files) |
+| `salmart-mobile.touch-buy.patch` | +500 / −11 | on top of `salmart-mobile.registration.patch` | touch-to-buy: large picture picker that opens after a search, a deterministic cart select call, spoken price/description, `product_added` card with seller-chat draft and cart button (7 files) |
 
 `mobile/src/**` holds the **current, complete** frontend AI code under its real
 app path, so a reviewer can read it without applying anything:
@@ -54,6 +55,7 @@ Android, tunnel rejected, empty rejected).
 | `components/ConfirmationCard.js` | Confirm/Cancel UI for consequential actions |
 | `components/MessageBubble.js` | chat bubble; passes the auth/speak handlers to structured blocks |
 | `components/ProductCardMini.js` | compact product card used inside chat |
+| `components/ProductPicker.js` | **new**: the large touch-to-buy sheet. Opens by itself after a product search, shows big pictures, and sends the tapped `productId` to the deterministic cart route; stays open only when the item is sold out |
 
 Wiring that lives in the app repo and is **not** copied here (it is mostly
 pre-existing code edited by the same work): `App.js` (`AIProvider` and
@@ -71,14 +73,14 @@ the Meta-voice pass — the ten files below. Backend counterpart is documented i
 
 | File | Change |
 | --- | --- |
-| `src/ai/AIContext.js` | `send()` returns `{ ok, reply, structured, confirmation, navigatedTo }`; single `toggleRecording(context)` path transcribes → sends → speaks; executes the `navigate` block on every turn (voice and text); client-side screen allowlist that excludes `ai`/`assistant` and id-based routes; `startGoogleAuth` prefers the native picker and falls back to the backend `auth_url` in a system browser; `notice()` and `speak()` for spoken status; `authBusy` prevents double taps; voice turns carry the speaker's `lang` from transcription into the turn context and the spoken reply; registration snapshots ride only turns from the register screen, and `welcomeAfterRegistration()` skips the generic resume and sends one `registration_complete` turn after the rebind, so the model writes the greeting |
-| `src/ai/AIModeButton.js` | global mic is inline: listening status, spoken reply, Confirm/Cancel, Google button, auto-dismiss after 10 s; tap never pushes the AI screen; **hold 450 ms** opens `ai` with `{ screen: currentName }` and swallows the following tap so the long press cannot also record |
+| `src/ai/AIContext.js` | `send()` returns `{ ok, reply, structured, confirmation, navigatedTo }`; single `toggleRecording(context)` path transcribes → sends → speaks; executes the `navigate` block on every turn (voice and text); client-side screen allowlist that excludes `ai`/`assistant` and id-based routes; `startGoogleAuth` prefers the native picker and falls back to the backend `auth_url` in a system browser; `selectProduct(product)` sends the tapped `productId` to the deterministic cart route and speaks the reply; `notice()` and `speak()` for spoken status; `authBusy` prevents double taps; voice turns carry the speaker's `lang` from transcription into the turn context and the spoken reply; registration snapshots ride only turns from the register screen, and `welcomeAfterRegistration()` skips the generic resume and sends one `registration_complete` turn after the rebind, so the model writes the greeting |
+| `src/ai/AIModeButton.js` | global mic is inline: listening status, spoken reply, Confirm/Cancel, Google button, auto-dismiss after 10 s; tap never pushes the AI screen; **hold 450 ms** opens `ai` with `{ screen: currentName }` and swallows the following tap so the long press cannot also record; a product search from any screen opens the touch picker, and a card offers **Chat the seller** |
 | `src/ai/AIModeScreen.js` | sends `{ screen, platform }` on every text/voice turn; routes `auth_url` to the Google handler and `onSpeak` to the "hear this" lines |
 | `src/ai/UseAIPatch.js` | accepts `register` as a form target, maps `fill_register`, and focuses the step named by a `register_focus` block |
 | `src/ai/registrationSnapshot.js` | **new**: whitelists the registration snapshot to booleans plus `activeField`/`stage`; password keys are stripped before anything leaves the screen |
 | `src/ai/speak.js` | **rewritten**: device-standard TTS only (`Speech.speak(line, { rate: 1.0 })`), no custom locale or voice selection |
 | `src/api/endpoints.js` | `register()` returns the JWT and user fields, so a successful sign-up signs the user in without a second login |
-| `src/ai/components/StructuredBlock.js` | **new renderers** for `auth_url` (tappable "Continue with Google", never auto-opens) and `fill_register` (explains the remaining manual steps, can be read aloud) |
+| `src/ai/components/StructuredBlock.js` | **new renderers** for `auth_url` (tappable "Continue with Google", never auto-opens) and `fill_register` (explains the remaining manual steps, can be read aloud); search result cards now select a product, and `product_added` shows the item with **Chat the seller** and **Open cart** |
 | `src/ai/components/MessageBubble.js` | passes `onOpenAuth` / `onSpeak` through to structured blocks |
 | `src/screens/RegisterScreen.js` | voice-first form: optional email, phone fallback, a sized (not full-screen) password card with a copyable suggested code and a "Hear how" spoken explanation, agreement card last, automatic submit and sign-in, Market reset, model-written welcome |
 | `src/state/AuthContext.js` | applies the session returned by `/register` immediately; the verification path remains only for older unverified accounts |
@@ -126,23 +128,45 @@ Deliberate limits (product limits, not bugs):
 - Phone numbers are treated as unverified for the hackathon. No OTP is sent and
   no verification gate is inserted after a new registration.
 
-Apply the voice patch, then the registration patch, from the app repo root:
+Apply the voice patch, then the registration patch, then the touch-to-buy
+patch, from the app repo root:
 
 ```bash
 git apply /path/to/extract/mobile/salmart-mobile.ai-voice.patch
 git apply /path/to/extract/mobile/salmart-mobile.registration.patch
+git apply /path/to/extract/mobile/salmart-mobile.touch-buy.patch
 ```
 
-`salmart-mobile.registration.patch` is generated against the app tree **after**
-the voice patch, so the two apply in order. The files under `mobile/src/` are
-the same content as the app repo, byte for byte. `git apply --check -R` against
-the app repo confirms each patch is the exact reverse of the present changes.
+Each patch is generated against the app tree **after** the previous one, so
+they apply in order. The files under `mobile/src/` are the same content as the
+app repo, byte for byte. `git apply --check -R` against the app repo confirms
+each patch is the exact reverse of the present changes.
 
 Verification: the app repo parses every changed file under Babel (JSX/JS), and
-the backend contract tests pass (44/44 in the four auth/form/task/navigation
+the backend contract tests pass (52/52 in the touch/auth/form/task/navigation
 files). Not run on a device or simulator yet, so the mic, secure modal, keyboard
-focus, copy-to-clipboard suggestion, automatic sign-in and model-written welcome
-still need a dev-build pass.
+focus, copy-to-clipboard suggestion, automatic sign-in, model-written welcome,
+touch picker, spoken timing and streamed voice fetch still need a dev-build
+pass.
+
+## Touch-to-buy
+
+A buyer who cannot read or pronounce a product name says they want to buy. The
+assistant asks one question, searches with their words, and says "touch the one
+you want". `ProductPicker` opens by itself — on the AI screen and from the
+global mic on any other screen — and shows the results as large pictures with
+price and seller name.
+
+Touching a card sends that exact `productId` to `POST /api/ai/cart/select`. The
+route is deterministic and reuses the agent's cart validation, so a tap works
+when the model is slow and the tapped id cannot be replaced by a guess. The
+server adds the item, returns a short spoken line with the title, price and
+description, and shows a `product_added` card with **Chat the seller** (opens
+the existing chat with a ready draft, the user presses send) and **Open cart**.
+A sold-out item keeps the sheet open so the buyer can touch another one.
+
+The tapped item is stored on the task, so a following "yes, chat him" resolves
+to the same product without a new search; a fresh search clears it.
 
 ## Original event work
 

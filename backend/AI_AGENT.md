@@ -236,6 +236,7 @@ counters and percentiles only:
 | `POST` | `/api/ai/conversations` | soft | 40/min | create or resume a conversation |
 | `POST` | `/api/ai/conversations/rebind` | hard | 40/min | anonymous → authenticated, one-way |
 | `POST` | `/api/ai/turn` | soft | 30/min | one user message, run the agent |
+| `POST` | `/api/ai/cart/select` | hard | 60/min | add the exact product the buyer touched |
 | `POST` | `/api/ai/actions/:actionId/confirm` | hard | 60/min | run a confirmed consequential action |
 | `POST` | `/api/ai/actions/:actionId/cancel` | hard | 60/min | cancel a pending action (idempotent) |
 | `GET` | `/api/ai/tasks/:actionId` | hard | 60/min | read a pending action's state |
@@ -328,6 +329,54 @@ A turn that prepares a consequential action also returns a top-level block:
 }
 ```
 
+### `POST /api/ai/cart/select`
+
+The touch-to-buy path. After `searchProducts`, the phone opens a large picker.
+The buyer touches a product, and the app sends that exact id:
+
+```json
+{
+  "productId": "…",
+  "itemType": "post",
+  "conversationId": "…"
+}
+```
+
+The route is deterministic: it runs the same `cartTools.addToCart` validation
+as the agent tool (valid id, listing exists, not sold, not the buyer's own,
+cart size), then returns one short spoken line with the title, price and
+description. No model call means a tap works when the provider is slow and a
+tapped id can never be replaced by a guessed product.
+
+```json
+{
+  "success": true,
+  "reply": "I have added Black leather bag to your cart. It costs ₦18,500. …",
+  "structured": [
+    {
+      "type": "product_added",
+      "product": { "productId": "…", "title": "…", "price": 18500, "description": "…" },
+      "cartCount": 4,
+      "chat": {
+        "sellerId": "…", "sellerName": "Ada", "productId": "…",
+        "productTitle": "…", "imageUrl": "…", "price": 18500,
+        "draft": "Hi, I want to buy … Is it still available?"
+      }
+    }
+  ]
+}
+```
+
+`chat` is omitted when the listing has no reachable seller, is inactive, or
+the buyer is blocked. When present, the phone shows a **Chat the seller**
+button; the draft opens in the chat and the user still presses send. The route
+also stores the tapped product on the task (`lastPick`), so a following voice
+"yes, chat him" resolves to the same `productId`. A fresh search clears it.
+
+Failure codes: `BAD_PRODUCT` (400), `AUTH_REQUIRED` (401), `UNAVAILABLE` (409,
+sold/no seller), `CART_FAILED` (400/500). The picker stays open only for
+`UNAVAILABLE`, so the buyer can touch another item.
+
 ### `POST /api/ai/actions/:actionId/confirm`
 
 Requires the user who owns the pending action. The action is atomically
@@ -385,6 +434,7 @@ applied exactly once.
 | --- | --- | --- |
 | `product_results` | `{ products, total, hint }` | `searchProducts` |
 | `product_details` | `{ product }` | `getProductDetails` |
+| `product_added` | `{ product, cartCount, chat? }` | `POST /api/ai/cart/select` (touch-to-buy) |
 | `listing_list` | `{ listings, total }` | `getMyListings` |
 | `order_information` | `{ orders, total }` | `getMyOrders` |
 | `order_details` | `{ found, order }` | `getOrderDetails` |

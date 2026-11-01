@@ -18,18 +18,21 @@ import { Small, Tiny, T3 } from '../../ui/kit';
 
 function Unknown() { return null; }
 
-function ProductResults({ block, onOpenProduct }) {
+function ProductResults({ block, onOpenProduct, onSelectProduct }) {
   const { T } = useTheme();
   const products = Array.isArray(block.products) ? block.products : [];
   if (!products.length) return null;
+  // A search result is a buy choice: touching it adds that exact listing to
+  // the cart. Details and own listings still open the normal product screen.
+  const onPress = onSelectProduct || onOpenProduct;
   return (
     <View style={styles.wrap}>
       <Tiny style={{ color: T.inkMuted, marginBottom: 6 }}>
-        {block.total > 1 ? `${block.total} results · swipe for more` : '1 result'}
+        {block.total > 1 ? `${block.total} results · touch the one you want` : 'Touch the one you want'}
       </Tiny>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
         {products.map((p, i) => (
-          <ProductCardMini key={`${p.productId || i}`} product={p} onPress={onOpenProduct} />
+          <ProductCardMini key={`${p.productId || i}`} product={p} onPress={onPress} />
         ))}
       </ScrollView>
     </View>
@@ -246,9 +249,86 @@ function RegistrationFill({ block, onSpeak }) {
   );
 }
 
+/**
+ * Confirmation after a touch pick. The server has already written the cart
+ * row, so this block never claims more than that. The seller button opens the
+ * existing chat handoff with a ready draft; the user still presses send.
+ */
+function ProductAdded({ block, onOpenChat, onOpenCart }) {
+  const { T } = useTheme();
+  const p = block.product || {};
+  const chat = block.chat || null;
+  const photo = p.photo || null;
+
+  return (
+    <View style={styles.wrap}>
+      <View style={[styles.addedCard, { borderColor: T.border, backgroundColor: T.card }]}>
+        <View style={styles.row}>
+          <View style={[styles.addedThumb, { backgroundColor: T.bgSoft }]}>
+            {photo ? (
+              <Image source={{ uri: photo }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
+            ) : (
+              <Ionicons name="cube-outline" size={22} color={T.muted} />
+            )}
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Tiny style={{ color: T.emerald, fontWeight: '800', letterSpacing: 0.4 }}>
+              IN YOUR CART
+            </Tiny>
+            <T3 numberOfLines={2} style={{ color: T.ink, marginTop: 2 }}>{p.title || 'Item'}</T3>
+            <Small style={{ color: T.emerald, fontWeight: '800', marginTop: 2 }}>
+              ₦{Number(p.price || 0).toLocaleString('en-NG')}
+            </Small>
+          </View>
+        </View>
+
+        {!!p.description && (
+          <Small numberOfLines={3} style={{ color: T.inkMuted, lineHeight: 18, marginTop: 8 }}>
+            {p.description}
+          </Small>
+        )}
+
+        <View style={styles.addedActions}>
+          {!!chat?.sellerId && (
+            <Pressable
+              onPress={() => onOpenChat?.(chat)}
+              accessibilityRole="button"
+              accessibilityLabel="Chat the seller"
+              style={({ pressed }) => [
+                styles.addedBtn,
+                { borderColor: T.emerald },
+                pressed && { opacity: 0.8 },
+              ]}
+            >
+              <Ionicons name="chatbubble-outline" size={15} color={T.emerald} />
+              <Small style={{ color: T.emerald, fontWeight: '800' }}>Chat the seller</Small>
+            </Pressable>
+          )}
+          {!!onOpenCart && (
+            <Pressable
+              onPress={onOpenCart}
+              accessibilityRole="button"
+              accessibilityLabel="Open cart"
+              style={({ pressed }) => [
+                styles.addedBtn,
+                { borderColor: T.border },
+                pressed && { opacity: 0.8 },
+              ]}
+            >
+              <Ionicons name="cart-outline" size={15} color={T.ink} />
+              <Small style={{ color: T.ink, fontWeight: '800' }}>Open cart</Small>
+            </Pressable>
+          )}
+        </View>
+      </View>
+    </View>
+  );
+}
+
 const RENDERERS = Object.freeze({
   product_results:    ProductResults,
   product_details:    ProductDetails,
+  product_added:      ProductAdded,
   listing_list:       ListingList,
   order_information:  OrderInformation,
   order_details:      OrderInformation,
@@ -262,7 +342,8 @@ const RENDERERS = Object.freeze({
 });
 
 export default function StructuredBlock({
-  block, onOpenProduct, onPickMethod, onOpenAuth, onSpeak, onOpenChat,
+  block, onOpenProduct, onSelectProduct, onPickMethod, onOpenAuth, onSpeak,
+  onOpenChat, onOpenCart,
 }) {
   if (!block || typeof block !== 'object') return null;
   const R = RENDERERS[block.type];
@@ -271,10 +352,12 @@ export default function StructuredBlock({
     <R
       block={block}
       onOpenProduct={onOpenProduct}
+      onSelectProduct={onSelectProduct}
       onPickMethod={onPickMethod}
       onOpenAuth={onOpenAuth}
       onSpeak={onSpeak}
       onOpenChat={onOpenChat}
+      onOpenCart={onOpenCart}
     />
   );
 }
@@ -286,5 +369,23 @@ const styles = StyleSheet.create({
   option: {
     paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth, marginBottom: 8,
+  },
+  addedCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    padding: 10,
+  },
+  addedThumb: {
+    width: 58, height: 58, borderRadius: 10,
+    overflow: 'hidden', alignItems: 'center', justifyContent: 'center',
+  },
+  addedActions: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10,
+  },
+  addedBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: 999, borderWidth: 1,
+    minHeight: 38,
   },
 });

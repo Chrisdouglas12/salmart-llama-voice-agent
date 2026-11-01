@@ -11,6 +11,7 @@ import { useNav } from '../state/Navigation';
 import { useAI } from './AIContext';
 import { IconButton, Small, Tiny, T2, T3, Body } from '../ui/kit';
 import MessageBubble from './components/MessageBubble';
+import ProductPicker from './components/ProductPicker';
 
 /**
  * Full AI conversation screen.
@@ -32,11 +33,16 @@ export default function AIModeScreen({ route }) {
   const insets = useSafeAreaInsets();
   const nav = useNav();
   const {
-    messages, status, send, confirm, cancel, reset, isReady,
+    messages, status, send, selectProduct, confirm, cancel, reset, isReady,
     recording, transcribing, toggleRecording, startGoogleAuth, speak, openSellerChat,
   } = useAI();
 
   const [draft, setDraft] = useState('');
+  // The touch picker: opened automatically when a product search comes back.
+  // The key remembers which assistant message already opened it, so closing
+  // the sheet does not reopen it on the next render.
+  const [picker, setPicker] = useState(null);
+  const pickerSeenRef = useRef(null);
   const listRef = useRef(null);
 
   // Screen context tells the assistant where the user came from. Only
@@ -63,6 +69,21 @@ export default function AIModeScreen({ route }) {
   useEffect(() => {
     if (messages.length) scrollToEnd();
   }, [messages.length, scrollToEnd]);
+
+  // Open the large touch picker as soon as a search returns products. The
+  // buyer may not read or pronounce the name, so the pictures are the choice.
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'assistant') return;
+    if (pickerSeenRef.current === last.key) return;
+    const block = Array.isArray(last.structured)
+      ? last.structured.find(b => b?.type === 'product_results'
+        && Array.isArray(b.products) && b.products.length)
+      : null;
+    if (!block) return;
+    pickerSeenRef.current = last.key;
+    setPicker({ key: last.key, products: block.products });
+  }, [messages]);
 
   const onSend = useCallback(async (text) => {
     const clean = String(text ?? draft).trim();
@@ -95,6 +116,10 @@ export default function AIModeScreen({ route }) {
       productType: 'regular',
     });
   }, [nav]);
+
+  const onSelectProduct = useCallback((product) => selectProduct(product), [selectProduct]);
+
+  const onOpenCart = useCallback(() => nav.push('cart'), [nav]);
 
   const onPickMethod = useCallback((methodId) => {
     if (methodId === 'google') {
@@ -181,10 +206,12 @@ export default function AIModeScreen({ route }) {
               onConfirm={confirm}
               onCancel={cancel}
               onOpenProduct={onOpenProduct}
+              onSelectProduct={onSelectProduct}
               onPickMethod={onPickMethod}
               onOpenAuth={onOpenAuth}
               onSpeak={onSpeak}
               onOpenChat={openSellerChat}
+              onOpenCart={onOpenCart}
             />
           )}
           ListHeaderComponent={messages.length === 0 ? welcome : <View style={{ height: 4 }} />}
@@ -247,6 +274,13 @@ export default function AIModeScreen({ route }) {
           </View>
         </View>
       </KeyboardAvoidingView>
+
+      <ProductPicker
+        visible={!!picker}
+        products={picker?.products || []}
+        onClose={() => setPicker(null)}
+        onSelect={onSelectProduct}
+      />
     </SafeAreaView>
   );
 }

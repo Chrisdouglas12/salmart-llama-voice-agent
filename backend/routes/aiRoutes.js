@@ -10,6 +10,7 @@
  *   POST /api/ai/conversations           create or resume a conversation
  *   POST /api/ai/conversations/rebind    transition anonymous → authenticated
  *   POST /api/ai/turn                    send one user message, run the agent
+ *   POST /api/ai/cart/select             add a product the buyer touched
  *   POST /api/ai/actions/:id/confirm     confirm a pending consequential action
  *   POST /api/ai/actions/:id/cancel      cancel a pending consequential action
  *   GET  /api/ai/tasks/:id               read a pending action's state
@@ -22,6 +23,7 @@
  *   MUST treat unknown types as no-ops. Supported today:
  *     - 'product_results'    { products, total, hint }
  *     - 'product_details'    { product }
+ *     - 'product_added'      { product, cartCount, chat? }  ← touch-to-buy result
  *     - 'listing_list'       { listings, total }
  *     - 'order_information'  { orders, total }
  *     - 'order_details'      { found, order }
@@ -63,6 +65,9 @@ const { sanitizeHistory, toModelMessages } = require('../services/ai/history');
 const metrics = require('../services/ai/metrics');
 const { runTurn } = require('../services/ai/agentRunner');
 const { executeConfirmed } = require('../services/ai/toolExecutor');
+const cartTools = require('../services/ai/tools/cartTools');
+const messagingTools = require('../services/ai/tools/messagingTools');
+const touchBuy = require('../services/ai/touchBuy');
 const logger = require('../services/logger');
 
 const router = express.Router();
@@ -266,7 +271,8 @@ TASK MEMORY
 
 SELLER CHAT HANDOFF
 - When the user agrees to message a seller, call prepareSellerEnquiry with the
-  productId and a short draft. The app takes them straight to the chat with
+  productId and a short draft. After a touch pick, the task block carries the
+  productId of the item they touched — use it and do not search again. The app takes them straight to the chat with
   the draft WITH the product photo already filled in — there is no "Open chat"
   step, so never mention one. Tell them in one short sentence that the message
   is ready, to check it, and to tap the green arrow button at the bottom of
@@ -276,6 +282,15 @@ SELLER CHAT HANDOFF
   the buyer wants. Say so in one short sentence when relevant.
 
 BUYING AN ITEM
+- When the user says they want to buy something, ask ONE short question: what
+  do they want to buy? When they name it, call searchProducts with their words.
+  Do not read the list aloud, and never ask them to read or pronounce a name.
+  Say one short sentence: touch the one you want on the screen. Then stop.
+- The app opens a big picker and adds the item they touch to the cart by itself.
+  It also tells them the price and description. Never call addToCart right
+  after searchProducts in this flow — stop and let them touch. Do not repeat
+  the price yourself.
+- If the picker says the item is sold, tell them to touch another one.
 - When you have already found an item and the user asks how to buy it, do NOT
   repeat its name and price — they just saw it. Answer the question directly.
 - Offer this plan in at most two short sentences, then ask one question: you
@@ -731,6 +746,134 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     res.status(500).json({
       success: false, requestId,
       message: 'The assistant is temporarily unavailable. Please try again.',
+    });
+  }
+});
+
+// ─── POST /api/ai/cart/select ──────────────────────────────────────────────
+//
+// Touch-to-buy. The app opens a picker after a product search; the buyer taps
+// the item they want. This route is deliberately deterministic: it runs the
+// same cart validation as the addToCart tool, adds exactly that listing, and
+// returns one spoken line with the price and description. No model call means
+// a tap works even when the provider is slow, and a tapped id can never be
+// replaced by a different product the model guessed.
+router.post('/cart/select', hardAuth, actionLimiter, async (req, res) => {
+  const requestId = uuidv4();
+  try {
+    const { productId, itemType, conversationId } = req.body || {};
+    if (typeof productId !== 'string' || !/^[a-fA-F0-9]{24}$/.test(productId)) {
+      return res.status(400).json({
+        success: false, requestId,
+        code: 'BAD_PRODUCT',
+        message: 'That item could not be found. Touch another one.',
+      });
+    }
+    const type = itemType === 'showroom' ? 'showroom' : 'post';
+
+    let added;
+    try {
+      added = await cartTools.addToCart(
+        { userId: req.userId },
+        { productId, quantity: 1, itemType: type },
+      );
+    } catch (e) {
+      const unavailable = e.code === 'TOOL_FAILED'
+        && /sold|no longer available|no seller/i.test(String(e.message || ''));
+      return res.status(e.code === 'AUTH_REQUIRED' ? 401 : unavailable ? 409 : 400).json({
+        success: false,
+        requestId,
+        code: e.code === 'TOOL_FAILED' && unavailable ? 'UNAVAILABLE' : (e.code || 'CART_FAILED'),
+        message: e.message || 'I could not add that item to your cart. Touch another one.',
+      });
+    }
+
+    // The chat offer reuses the same pre-flight checks as the seller-enquiry
+    // tool: active listing, real seller, not the buyer, not blocked.
+    const draft = touchBuy.buildEnquiryDraft({ title: added.title, price: added.price });
+    let prepared = null;
+    try {
+      const enquiry = await messagingTools.prepareSellerEnquiry(
+        { userId: req.userId },
+        { productId, body: draft },
+      );
+      if (enquiry.found && enquiry.prepared) prepared = enquiry.prepared;
+    } catch (_e) {
+      prepared = null;
+    }
+
+    const reply = touchBuy.buildPickReply({
+      title: added.title,
+      price: added.price,
+      description: added.description,
+      hasSeller: !!prepared,
+    });
+
+    const product = {
+      productId: added.productId,
+      title: added.title,
+      price: added.price,
+      description: added.description,
+      photo: added.photo,
+      sellerId: prepared?.sellerId || added.sellerId || null,
+      sellerName: prepared?.sellerName || added.sellerName || null,
+      itemType: added.itemType,
+    };
+    const structured = [{
+      type: 'product_added',
+      product,
+      cartCount: added.cartCount,
+      ...(prepared ? {
+        chat: {
+          sellerId: prepared.sellerId,
+          sellerName: prepared.sellerName,
+          productId: prepared.productId,
+          productTitle: prepared.productTitle,
+          imageUrl: prepared.productImageUrl || null,
+          price: prepared.productPrice ?? null,
+          draft: prepared.body,
+        },
+      } : {}),
+    }];
+
+    // Remember the tapped item for the next voice turn, so "yes, chat him"
+    // resolves to this productId instead of another search. Best-effort: a
+    // missing conversation must never undo a successful cart write.
+    if (typeof conversationId === 'string' && conversationId) {
+      try {
+        const found = await store.getOrCreate({ conversationId, userId: req.userId });
+        if (found.doc) {
+          await store.setTask(conversationId, {
+            collectedInfo: taskState.applyPick(found.doc.collectedInfo, {
+              productId: product.productId,
+              title: product.title,
+              price: product.price,
+              sellerId: product.sellerId,
+              sellerName: product.sellerName,
+              itemType: product.itemType,
+              at: Date.now(),
+            }),
+          });
+        }
+      } catch (_e) { /* task memory is best-effort */ }
+    }
+
+    logger.info(`[aiRoutes] cart select ok user=${req.userId} product=${productId} requestId=${requestId}`);
+    return res.json({
+      success: true,
+      requestId,
+      reply,
+      structured,
+      product,
+      cartCount: added.cartCount,
+    });
+  } catch (err) {
+    logger.error(`[aiRoutes] cart select failed ${requestId}: ${err.message}`);
+    return res.status(500).json({
+      success: false,
+      requestId,
+      code: 'CART_FAILED',
+      message: 'I could not add that item to your cart. Please try again.',
     });
   }
 });

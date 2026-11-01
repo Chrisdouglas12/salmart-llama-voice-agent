@@ -1,0 +1,749 @@
+diff --git a/src/ai/AIContext.js b/src/ai/AIContext.js
+index 9d88d62..4bf7e2b 100644
+--- a/src/ai/AIContext.js
++++ b/src/ai/AIContext.js
+@@ -41,6 +41,7 @@ import { TAB_ROOTS } from '../state/routes';
+ import { runGoogleAuth } from '../utils/oauth';
+ import {
+   createConversation, rebindConversation, sendTurn, sendTurnStream,
++  selectProductToCart,
+   confirmAction as apiConfirm, cancelAction as apiCancel,
+ } from './api';
+ import { speakReply, queueSpeech, stopSpeaking } from './speak';
+@@ -452,6 +453,71 @@ export function AIProvider({ children }) {
+     })();
+   }, [welcomeTick, authReady, isAuthenticated, send]);
+ 
++  /**
++   * Touch-to-buy. The buyer tapped a product card; send that exact productId
++   * to the deterministic server route, queue the confirmation in the chat,
++   * and speak the price and description. No model call, so the confirmation
++   * arrives immediately and cannot drift to another product.
++   */
++  const selectProduct = useCallback(async (product) => {
++    const productId = product?.productId || product?._id;
++    if (!productId) {
++      return { ok: false, code: 'BAD_PRODUCT', message: 'That item could not be found.' };
++    }
++
++    if (!authRef.current.isAuthenticated) {
++      const line = 'Please sign in first, then touch the item again.';
++      setMessages(prev => [...prev, {
++        key: newKey(), role: 'assistant', kind: 'error', text: line, at: Date.now(),
++      }]);
++      setLastVoice({ text: line, kind: 'error', at: Date.now() });
++      await speakReply(line);
++      return { ok: false, code: 'AUTH_REQUIRED', message: line };
++    }
++
++    try {
++      const cid = conversationId || await ensureConversation().catch(() => null);
++      const res = await selectProductToCart({
++        productId,
++        itemType: product.itemType === 'showroom' ? 'showroom' : 'post',
++        conversationId: cid || undefined,
++      });
++      if (!res?.success) throw new Error(res?.message || 'Could not add it to your cart.');
++
++      const line = res.reply || 'I added it to your cart.';
++      const blocks = Array.isArray(res.structured) ? res.structured : [];
++      setMessages(prev => [...prev, {
++        key: newKey(),
++        role: 'assistant',
++        text: line,
++        structured: blocks,
++        at: Date.now(),
++      }]);
++      const added = blocks.find(b => b && b.type === 'product_added');
++      setLastVoice({
++        text: line,
++        kind: 'reply',
++        chatHandoff: added?.chat || null,
++        at: Date.now(),
++      });
++      await speakReply(line);
++      return { ok: true, ...res };
++    } catch (e) {
++      const code = e?.status === 401 ? 'AUTH_REQUIRED' : (e?.code || 'CART_FAILED');
++      const line = e?.status === 401
++        ? 'Please sign in first, then touch the item again.'
++        : e?.isNetwork
++          ? 'No internet connection. Please try again.'
++          : (e?.message || 'I could not add that item. Please touch another one.');
++      setMessages(prev => [...prev, {
++        key: newKey(), role: 'assistant', kind: 'error', text: line, at: Date.now(),
++      }]);
++      setLastVoice({ text: line, kind: 'error', at: Date.now() });
++      await speakReply(line);
++      return { ok: false, code, message: line };
++    }
++  }, [conversationId, ensureConversation]);
++
+   const confirm = useCallback(async (actionId) => {
+     try {
+       const res = await apiConfirm(actionId);
+@@ -706,6 +772,13 @@ export function AIProvider({ children }) {
+       const chatBlock = result.ok && Array.isArray(result.structured)
+         ? result.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId)
+         : null;
++      // A search returns products for the touch picker. The floating mic keeps
++      // the block so a voice turn started on Market opens the same sheet as a
++      // turn inside AI Mode.
++      const productBlock = result.ok && Array.isArray(result.structured)
++        ? result.structured.find(b => b && b.type === 'product_results'
++          && Array.isArray(b.products) && b.products.length)
++        : null;
+ 
+       setLastVoice({
+         text: line,
+@@ -713,6 +786,7 @@ export function AIProvider({ children }) {
+         confirmation: result.ok ? (result.confirmation || null) : null,
+         authUrl: authBlock || null,
+         chatHandoff: chatBlock || null,
++        products: productBlock || null,
+         at: Date.now(),
+       });
+       if (!result.spoken) await speakReply(line, heardLang);
+@@ -843,10 +917,10 @@ export function AIProvider({ children }) {
+   const value = useMemo(() => ({
+     conversationId, messages, status, error, isReady, recording, transcribing,
+     lastVoice, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
+-    send, confirm, cancel, reset, openSellerChat, micNudge, nudgeMic,
++    send, selectProduct, confirm, cancel, reset, openSellerChat, micNudge, nudgeMic,
+     startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
+   }), [
+-    conversationId, messages, status, error, isReady, send, confirm, cancel, reset,
++    conversationId, messages, status, error, isReady, send, selectProduct, confirm, cancel, reset,
+     recording, transcribing, toggleRecording, lastVoice, dismissVoice, confirmVoice, cancelVoice,
+     openSellerChat, micNudge, nudgeMic,
+     startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
+diff --git a/src/ai/AIModeButton.js b/src/ai/AIModeButton.js
+index 802e2d7..b01d902 100644
+--- a/src/ai/AIModeButton.js
++++ b/src/ai/AIModeButton.js
+@@ -8,6 +8,7 @@ import { useTheme } from '../theme/theme';
+ import { useNavActions, useNavSelector } from '../state/Navigation';
+ import { Small, Tiny } from '../ui/kit';
+ import { useAI } from './AIContext';
++import ProductPicker from './components/ProductPicker';
+ import { useSplashVisible } from '../state/splash';
+ 
+ /**
+@@ -49,10 +50,14 @@ export default function AIModeButton({ extraContext } = {}) {
+   const {
+     recording, transcribing, status, lastVoice,
+     toggleRecording, dismissVoice, confirmVoice, cancelVoice,
+-    startGoogleAuth, authBusy, micNudge,
++    startGoogleAuth, authBusy, micNudge, selectProduct, openSellerChat,
+   } = useAI();
+ 
+   const [actionBusy, setActionBusy] = useState(null);
++  // The touch picker lives here too, so a voice turn started on any screen
++  // shows the same large product sheet as the full AI conversation.
++  const [pickerProducts, setPickerProducts] = useState(null);
++  const seenProductsRef = useRef('');
+   const longPressedRef = useRef(false);
+   const splashVisible = useSplashVisible();
+   const sending = status === 'sending';
+@@ -98,16 +103,36 @@ export default function AIModeButton({ extraContext } = {}) {
+   const glowOpacity = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [0.34, 0.02] });
+   const glowScale = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.8] });
+ 
++  // A product search from the floating mic opens the touch picker on top of
++  // whatever screen the user is on. AI Mode has its own picker, so it is
++  // skipped here. The key prevents the same results reopening after a close.
++  useEffect(() => {
++    if (splashVisible || currentName === 'ai' || currentName === 'assistant' || inWeb) return;
++    const block = lastVoice?.products;
++    if (busy || !block || !Array.isArray(block.products) || !block.products.length) return;
++    const ids = block.products
++      .map(p => p?.productId || p?._id || p?.title || '')
++      .join('|');
++    if (!ids) return;
++    // Timestamp + ids: a repeated search for the same products is a new turn
++    // and must open the sheet again, while closing it does not reopen it.
++    const key = `${lastVoice?.at || 0}:${ids}`;
++    if (seenProductsRef.current === key) return;
++    seenProductsRef.current = key;
++    setPickerProducts(block.products);
++  }, [lastVoice, busy, splashVisible, currentName, inWeb]);
++
+   const confirmation = lastVoice?.confirmation || null;
+   const authBlock = lastVoice?.authUrl || null;
++  const chatHandoff = lastVoice?.chatHandoff || null;
+ 
+   // A plain reply should not stay over the app forever. Confirmations and a
+   // Google sign-in action stay until the user acts on them.
+   useEffect(() => {
+-    if (!lastVoice?.text || confirmation || authBlock || busy) return undefined;
++    if (!lastVoice?.text || confirmation || authBlock || chatHandoff || busy) return undefined;
+     const timer = setTimeout(() => dismissVoice(), 10000);
+     return () => clearTimeout(timer);
+-  }, [lastVoice, confirmation, authBlock, busy, dismissVoice]);
++  }, [lastVoice, confirmation, authBlock, chatHandoff, busy, dismissVoice]);
+ 
+   // Hide on the launch splash, the AI screen (it has its own input), the
+   // legacy assistant screen, and inside the WebView.
+@@ -280,6 +305,24 @@ export default function AIModeButton({ extraContext } = {}) {
+               </Small>
+             </Pressable>
+           )}
++
++          {!!chatHandoff?.sellerId && (
++            <Pressable
++              onPress={() => openSellerChat(chatHandoff)}
++              accessibilityRole="button"
++              accessibilityLabel="Chat the seller"
++              style={({ pressed }) => [
++                styles.googleBtn,
++                { backgroundColor: T.card, borderColor: T.emerald },
++                pressed && { opacity: 0.75 },
++              ]}
++            >
++              <Ionicons name="chatbubble-outline" size={16} color={T.emerald} />
++              <Small style={{ color: T.emerald, fontWeight: '800', marginLeft: 8 }}>
++                Chat the seller
++              </Small>
++            </Pressable>
++          )}
+         </View>
+       )}
+ 
+@@ -312,6 +355,13 @@ export default function AIModeButton({ extraContext } = {}) {
+         <Ionicons name={fabIcon} size={26} color="#fff" />
+       </Pressable>
+       </Animated.View>
++
++      <ProductPicker
++        visible={!!pickerProducts}
++        products={pickerProducts || []}
++        onClose={() => setPickerProducts(null)}
++        onSelect={selectProduct}
++      />
+     </View>
+   );
+ }
+diff --git a/src/ai/AIModeScreen.js b/src/ai/AIModeScreen.js
+index bf694b1..8d27e0d 100644
+--- a/src/ai/AIModeScreen.js
++++ b/src/ai/AIModeScreen.js
+@@ -11,6 +11,7 @@ import { useNav } from '../state/Navigation';
+ import { useAI } from './AIContext';
+ import { IconButton, Small, Tiny, T2, T3, Body } from '../ui/kit';
+ import MessageBubble from './components/MessageBubble';
++import ProductPicker from './components/ProductPicker';
+ 
+ /**
+  * Full AI conversation screen.
+@@ -32,11 +33,16 @@ export default function AIModeScreen({ route }) {
+   const insets = useSafeAreaInsets();
+   const nav = useNav();
+   const {
+-    messages, status, send, confirm, cancel, reset, isReady,
++    messages, status, send, selectProduct, confirm, cancel, reset, isReady,
+     recording, transcribing, toggleRecording, startGoogleAuth, speak, openSellerChat,
+   } = useAI();
+ 
+   const [draft, setDraft] = useState('');
++  // The touch picker: opened automatically when a product search comes back.
++  // The key remembers which assistant message already opened it, so closing
++  // the sheet does not reopen it on the next render.
++  const [picker, setPicker] = useState(null);
++  const pickerSeenRef = useRef(null);
+   const listRef = useRef(null);
+ 
+   // Screen context tells the assistant where the user came from. Only
+@@ -64,6 +70,21 @@ export default function AIModeScreen({ route }) {
+     if (messages.length) scrollToEnd();
+   }, [messages.length, scrollToEnd]);
+ 
++  // Open the large touch picker as soon as a search returns products. The
++  // buyer may not read or pronounce the name, so the pictures are the choice.
++  useEffect(() => {
++    const last = messages[messages.length - 1];
++    if (!last || last.role !== 'assistant') return;
++    if (pickerSeenRef.current === last.key) return;
++    const block = Array.isArray(last.structured)
++      ? last.structured.find(b => b?.type === 'product_results'
++        && Array.isArray(b.products) && b.products.length)
++      : null;
++    if (!block) return;
++    pickerSeenRef.current = last.key;
++    setPicker({ key: last.key, products: block.products });
++  }, [messages]);
++
+   const onSend = useCallback(async (text) => {
+     const clean = String(text ?? draft).trim();
+     if (!clean || sending) return;
+@@ -96,6 +117,10 @@ export default function AIModeScreen({ route }) {
+     });
+   }, [nav]);
+ 
++  const onSelectProduct = useCallback((product) => selectProduct(product), [selectProduct]);
++
++  const onOpenCart = useCallback(() => nav.push('cart'), [nav]);
++
+   const onPickMethod = useCallback((methodId) => {
+     if (methodId === 'google') {
+       // Ask the assistant for the Google sign-in URL. The auth_url block it
+@@ -181,10 +206,12 @@ export default function AIModeScreen({ route }) {
+               onConfirm={confirm}
+               onCancel={cancel}
+               onOpenProduct={onOpenProduct}
++              onSelectProduct={onSelectProduct}
+               onPickMethod={onPickMethod}
+               onOpenAuth={onOpenAuth}
+               onSpeak={onSpeak}
+               onOpenChat={openSellerChat}
++              onOpenCart={onOpenCart}
+             />
+           )}
+           ListHeaderComponent={messages.length === 0 ? welcome : <View style={{ height: 4 }} />}
+@@ -247,6 +274,13 @@ export default function AIModeScreen({ route }) {
+           </View>
+         </View>
+       </KeyboardAvoidingView>
++
++      <ProductPicker
++        visible={!!picker}
++        products={picker?.products || []}
++        onClose={() => setPicker(null)}
++        onSelect={onSelectProduct}
++      />
+     </SafeAreaView>
+   );
+ }
+diff --git a/src/ai/api.js b/src/ai/api.js
+index 5efc05b..6853187 100644
+--- a/src/ai/api.js
++++ b/src/ai/api.js
+@@ -122,6 +122,17 @@ export async function sendTurnStream({ conversationId, message, anonymousId, con
+   return done;
+ }
+ 
++/**
++ * POST /api/ai/cart/select — the touch-to-buy path.
++ *
++ * The app sends the exact productId the buyer touched; the server runs the
++ * same cart validation as addToCart and returns one spoken line, the product,
++ * and an optional seller-chat handoff. Requires auth.
++ */
++export function selectProductToCart({ productId, itemType, conversationId } = {}) {
++  return apiPost('/api/ai/cart/select', { productId, itemType, conversationId }, { retries: 0 });
++}
++
+ /** POST /api/ai/actions/:id/confirm. Returns 200, 400, 404, 409 or 410. */
+ export function confirmAction(actionId) {
+   return apiPost(`/api/ai/actions/${encodeURIComponent(actionId)}/confirm`, {}, { retries: 0 });
+diff --git a/src/ai/components/MessageBubble.js b/src/ai/components/MessageBubble.js
+index afc5b90..c019255 100644
+--- a/src/ai/components/MessageBubble.js
++++ b/src/ai/components/MessageBubble.js
+@@ -9,7 +9,8 @@ import ConfirmationCard from './ConfirmationCard';
+ import StructuredBlock from './StructuredBlock';
+ 
+ export default function MessageBubble({
+-  message, onConfirm, onCancel, onOpenProduct, onPickMethod, onOpenAuth, onSpeak, onOpenChat,
++  message, onConfirm, onCancel, onOpenProduct, onSelectProduct, onPickMethod,
++  onOpenAuth, onSpeak, onOpenChat, onOpenCart,
+ }) {
+   const styles = useStyles();
+   const { T } = useTheme();
+@@ -46,10 +47,12 @@ export default function MessageBubble({
+                   key={`${block.type || 'block'}-${i}`}
+                   block={block}
+                   onOpenProduct={onOpenProduct}
++                  onSelectProduct={onSelectProduct}
+                   onPickMethod={onPickMethod}
+                   onOpenAuth={onOpenAuth}
+                   onSpeak={onSpeak}
+                   onOpenChat={onOpenChat}
++                  onOpenCart={onOpenCart}
+                 />
+               ))}
+             </View>
+diff --git a/src/ai/components/ProductPicker.js b/src/ai/components/ProductPicker.js
+new file mode 100644
+index 0000000..8683589
+--- /dev/null
++++ b/src/ai/components/ProductPicker.js
+@@ -0,0 +1,216 @@
++import React, { useCallback, useEffect, useMemo, useState } from 'react';
++import {
++  ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, View,
++} from 'react-native';
++import { Image } from 'expo-image';
++import { Ionicons } from '@expo/vector-icons';
++import { useSafeAreaInsets } from 'react-native-safe-area-context';
++
++import { createThemed, useTheme } from '../../theme/theme';
++import { Small, Tiny, T3 } from '../../ui/kit';
++
++/**
++ * Zero-literacy product picker.
++ *
++ * The assistant answers a product search by opening this sheet. The buyer
++ * does not need to read or pronounce a name: they touch the picture they
++ * want. The parent sends the exact productId to the deterministic cart
++ * route, which speaks the price and description.
++ *
++ * The sheet stays open after a failure the buyer can fix by touching another
++ * card (sold out). A sign-in or cart error closes it and leaves the spoken
++ * explanation in the chat.
++ */
++
++const money = n => (n == null ? '' : `₦${Number(n).toLocaleString('en-NG')}`);
++
++function fingerprint(product) {
++  return String(product?.productId || product?._id || product?.title || '');
++}
++
++export default function ProductPicker({ visible, products, onClose, onSelect }) {
++  const { T } = useTheme();
++  const styles = useStyles();
++  const insets = useSafeAreaInsets();
++  const [pickingId, setPickingId] = useState(null);
++  const [error, setError] = useState('');
++
++  const list = useMemo(
++    () => (Array.isArray(products) ? products.filter(Boolean) : []),
++    [products],
++  );
++
++  // A new search resets the in-sheet status.
++  useEffect(() => {
++    if (visible) {
++      setPickingId(null);
++      setError('');
++    }
++  }, [visible, list.length]);
++
++  const pick = useCallback(async (product) => {
++    if (pickingId) return;
++    const id = fingerprint(product);
++    setPickingId(id);
++    setError('');
++    try {
++      const result = await onSelect?.(product);
++      if (result?.ok) {
++        onClose?.();
++      } else if (result?.code === 'UNAVAILABLE') {
++        // Sold out: keep the sheet open so the buyer can touch another one.
++        setError(result.message || 'That one is not available. Touch another one.');
++      } else {
++        onClose?.();
++      }
++    } catch (_e) {
++      setError('That one could not be added. Touch another one.');
++    } finally {
++      setPickingId(null);
++    }
++  }, [onSelect, onClose, pickingId]);
++
++  if (!visible) return null;
++
++  return (
++    <Modal
++      visible
++      transparent
++      animationType="slide"
++      onRequestClose={onClose}
++      statusBarTranslucent
++    >
++      <View style={styles.backdrop}>
++        <Pressable
++          style={styles.backdropFill}
++          onPress={onClose}
++          accessibilityRole="button"
++          accessibilityLabel="Close the product picker"
++        />
++        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) + 8 }]}>
++          <View style={styles.handle} />
++          <View style={styles.header}>
++            <View style={{ flex: 1 }}>
++              <T3 style={{ color: T.ink, fontWeight: '800' }}>Touch the one you want</T3>
++              <Small style={{ color: T.inkMuted, marginTop: 3, lineHeight: 18 }}>
++                You do not need to read or say its name. Just touch the picture.
++              </Small>
++            </View>
++            <Pressable
++              onPress={onClose}
++              accessibilityRole="button"
++              accessibilityLabel="Close"
++              style={({ pressed }) => [styles.close, pressed && { opacity: 0.7 }]}
++            >
++              <Ionicons name="close" size={20} color={T.ink} />
++            </Pressable>
++          </View>
++
++          {!!error && (
++            <View style={[styles.error, { borderColor: T.dangerBorder, backgroundColor: T.dangerSoft }]}>
++              <Small style={{ color: T.danger, fontWeight: '700' }}>{error}</Small>
++            </View>
++          )}
++
++          <ScrollView
++            contentContainerStyle={styles.grid}
++            showsVerticalScrollIndicator={false}
++            keyboardShouldPersistTaps="handled"
++          >
++            {list.map((p, i) => {
++              const id = fingerprint(p) || String(i);
++              const busy = pickingId === id;
++              const photo = p.photo || (Array.isArray(p.photos) ? p.photos[0] : null);
++              return (
++                <Pressable
++                  key={id}
++                  onPress={() => pick(p)}
++                  disabled={!!pickingId}
++                  accessibilityRole="button"
++                  accessibilityLabel={p.title || 'Product'}
++                  accessibilityHint="Adds this item to your cart"
++                  style={({ pressed }) => [
++                    styles.card,
++                    { borderColor: T.border, backgroundColor: T.card },
++                    pressed && { opacity: 0.9 },
++                    busy && { opacity: 0.75 },
++                  ]}
++                >
++                  <View style={[styles.thumb, { backgroundColor: T.bgSoft }]}>
++                    {photo ? (
++                      <Image source={{ uri: photo }} style={styles.img} contentFit="cover" />
++                    ) : (
++                      <Ionicons name="cube-outline" size={30} color={T.muted} />
++                    )}
++                    {busy && (
++                      <View style={styles.busy}>
++                        <ActivityIndicator color="#fff" />
++                      </View>
++                    )}
++                  </View>
++                  <View style={styles.body}>
++                    <T3 numberOfLines={2} style={{ color: T.ink, lineHeight: 19 }}>
++                      {p.title || 'Listing'}
++                    </T3>
++                    <Small style={{ color: T.emerald, fontWeight: '800', marginTop: 4, fontSize: 16 }}>
++                      {money(p.price)}
++                    </Small>
++                    {!!p.sellerName && (
++                      <Tiny numberOfLines={1} style={{ color: T.muted, marginTop: 2 }}>
++                        {p.sellerName}
++                      </Tiny>
++                    )}
++                  </View>
++                </Pressable>
++              );
++            })}
++          </ScrollView>
++        </View>
++      </View>
++    </Modal>
++  );
++}
++
++const useStyles = createThemed(({ T }) => StyleSheet.create({
++  backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.45)' },
++  backdropFill: { ...StyleSheet.absoluteFillObject },
++  sheet: {
++    maxHeight: '84%',
++    backgroundColor: T.bg,
++    borderTopLeftRadius: 24,
++    borderTopRightRadius: 24,
++    paddingHorizontal: 16,
++    paddingTop: 8,
++    ...T.shadow.lg,
++  },
++  handle: {
++    alignSelf: 'center', width: 42, height: 4, borderRadius: 2,
++    backgroundColor: T.border, marginBottom: 10,
++  },
++  header: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 8 },
++  close: {
++    width: 36, height: 36, borderRadius: 18,
++    alignItems: 'center', justifyContent: 'center', backgroundColor: T.bgSoft,
++  },
++  error: {
++    borderWidth: StyleSheet.hairlineWidth, borderRadius: 12,
++    paddingHorizontal: 12, paddingVertical: 10, marginBottom: 8,
++  },
++  grid: {
++    flexDirection: 'row', flexWrap: 'wrap',
++    justifyContent: 'space-between', gap: 12, paddingBottom: 8,
++  },
++  card: {
++    width: '48%', borderRadius: T.radius.lg,
++    borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden',
++    ...T.shadow.sm,
++  },
++  thumb: { height: 132, alignItems: 'center', justifyContent: 'center' },
++  img: { width: '100%', height: '100%' },
++  busy: {
++    ...StyleSheet.absoluteFillObject,
++    backgroundColor: 'rgba(0,0,0,0.35)',
++    alignItems: 'center', justifyContent: 'center',
++  },
++  body: { padding: 10 },
++}));
+diff --git a/src/ai/components/StructuredBlock.js b/src/ai/components/StructuredBlock.js
+index c51cf62..3f9a246 100644
+--- a/src/ai/components/StructuredBlock.js
++++ b/src/ai/components/StructuredBlock.js
+@@ -18,18 +18,21 @@ import { Small, Tiny, T3 } from '../../ui/kit';
+ 
+ function Unknown() { return null; }
+ 
+-function ProductResults({ block, onOpenProduct }) {
++function ProductResults({ block, onOpenProduct, onSelectProduct }) {
+   const { T } = useTheme();
+   const products = Array.isArray(block.products) ? block.products : [];
+   if (!products.length) return null;
++  // A search result is a buy choice: touching it adds that exact listing to
++  // the cart. Details and own listings still open the normal product screen.
++  const onPress = onSelectProduct || onOpenProduct;
+   return (
+     <View style={styles.wrap}>
+       <Tiny style={{ color: T.inkMuted, marginBottom: 6 }}>
+-        {block.total > 1 ? `${block.total} results · swipe for more` : '1 result'}
++        {block.total > 1 ? `${block.total} results · touch the one you want` : 'Touch the one you want'}
+       </Tiny>
+       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
+         {products.map((p, i) => (
+-          <ProductCardMini key={`${p.productId || i}`} product={p} onPress={onOpenProduct} />
++          <ProductCardMini key={`${p.productId || i}`} product={p} onPress={onPress} />
+         ))}
+       </ScrollView>
+     </View>
+@@ -246,9 +249,86 @@ function RegistrationFill({ block, onSpeak }) {
+   );
+ }
+ 
++/**
++ * Confirmation after a touch pick. The server has already written the cart
++ * row, so this block never claims more than that. The seller button opens the
++ * existing chat handoff with a ready draft; the user still presses send.
++ */
++function ProductAdded({ block, onOpenChat, onOpenCart }) {
++  const { T } = useTheme();
++  const p = block.product || {};
++  const chat = block.chat || null;
++  const photo = p.photo || null;
++
++  return (
++    <View style={styles.wrap}>
++      <View style={[styles.addedCard, { borderColor: T.border, backgroundColor: T.card }]}>
++        <View style={styles.row}>
++          <View style={[styles.addedThumb, { backgroundColor: T.bgSoft }]}>
++            {photo ? (
++              <Image source={{ uri: photo }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
++            ) : (
++              <Ionicons name="cube-outline" size={22} color={T.muted} />
++            )}
++          </View>
++          <View style={{ flex: 1, minWidth: 0 }}>
++            <Tiny style={{ color: T.emerald, fontWeight: '800', letterSpacing: 0.4 }}>
++              IN YOUR CART
++            </Tiny>
++            <T3 numberOfLines={2} style={{ color: T.ink, marginTop: 2 }}>{p.title || 'Item'}</T3>
++            <Small style={{ color: T.emerald, fontWeight: '800', marginTop: 2 }}>
++              ₦{Number(p.price || 0).toLocaleString('en-NG')}
++            </Small>
++          </View>
++        </View>
++
++        {!!p.description && (
++          <Small numberOfLines={3} style={{ color: T.inkMuted, lineHeight: 18, marginTop: 8 }}>
++            {p.description}
++          </Small>
++        )}
++
++        <View style={styles.addedActions}>
++          {!!chat?.sellerId && (
++            <Pressable
++              onPress={() => onOpenChat?.(chat)}
++              accessibilityRole="button"
++              accessibilityLabel="Chat the seller"
++              style={({ pressed }) => [
++                styles.addedBtn,
++                { borderColor: T.emerald },
++                pressed && { opacity: 0.8 },
++              ]}
++            >
++              <Ionicons name="chatbubble-outline" size={15} color={T.emerald} />
++              <Small style={{ color: T.emerald, fontWeight: '800' }}>Chat the seller</Small>
++            </Pressable>
++          )}
++          {!!onOpenCart && (
++            <Pressable
++              onPress={onOpenCart}
++              accessibilityRole="button"
++              accessibilityLabel="Open cart"
++              style={({ pressed }) => [
++                styles.addedBtn,
++                { borderColor: T.border },
++                pressed && { opacity: 0.8 },
++              ]}
++            >
++              <Ionicons name="cart-outline" size={15} color={T.ink} />
++              <Small style={{ color: T.ink, fontWeight: '800' }}>Open cart</Small>
++            </Pressable>
++          )}
++        </View>
++      </View>
++    </View>
++  );
++}
++
+ const RENDERERS = Object.freeze({
+   product_results:    ProductResults,
+   product_details:    ProductDetails,
++  product_added:      ProductAdded,
+   listing_list:       ListingList,
+   order_information:  OrderInformation,
+   order_details:      OrderInformation,
+@@ -262,7 +342,8 @@ const RENDERERS = Object.freeze({
+ });
+ 
+ export default function StructuredBlock({
+-  block, onOpenProduct, onPickMethod, onOpenAuth, onSpeak, onOpenChat,
++  block, onOpenProduct, onSelectProduct, onPickMethod, onOpenAuth, onSpeak,
++  onOpenChat, onOpenCart,
+ }) {
+   if (!block || typeof block !== 'object') return null;
+   const R = RENDERERS[block.type];
+@@ -271,10 +352,12 @@ export default function StructuredBlock({
+     <R
+       block={block}
+       onOpenProduct={onOpenProduct}
++      onSelectProduct={onSelectProduct}
+       onPickMethod={onPickMethod}
+       onOpenAuth={onOpenAuth}
+       onSpeak={onSpeak}
+       onOpenChat={onOpenChat}
++      onOpenCart={onOpenCart}
+     />
+   );
+ }
+@@ -287,4 +370,22 @@ const styles = StyleSheet.create({
+     paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12,
+     borderWidth: StyleSheet.hairlineWidth, marginBottom: 8,
+   },
++  addedCard: {
++    borderWidth: StyleSheet.hairlineWidth,
++    borderRadius: 14,
++    padding: 10,
++  },
++  addedThumb: {
++    width: 58, height: 58, borderRadius: 10,
++    overflow: 'hidden', alignItems: 'center', justifyContent: 'center',
++  },
++  addedActions: {
++    flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10,
++  },
++  addedBtn: {
++    flexDirection: 'row', alignItems: 'center', gap: 6,
++    paddingHorizontal: 12, paddingVertical: 8,
++    borderRadius: 999, borderWidth: 1,
++    minHeight: 38,
++  },
+ });
+\ No newline at end of file

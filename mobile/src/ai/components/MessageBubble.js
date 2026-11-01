@@ -9,7 +9,8 @@ import ConfirmationCard from './ConfirmationCard';
 import StructuredBlock from './StructuredBlock';
 
 export default function MessageBubble({
-  message, onConfirm, onCancel, onOpenProduct, onPickMethod, onOpenAuth, onSpeak, onOpenChat,
+  message, onConfirm, onCancel, onOpenProduct, onSelectProduct, onPickMethod,
+  onOpenAuth, onSpeak, onOpenChat, onOpenCart,
 }) {
   const styles = useStyles();
   const { T } = useTheme();
@@ -46,10 +47,12 @@ export default function MessageBubble({
                   key={`${block.type || 'block'}-${i}`}
                   block={block}
                   onOpenProduct={onOpenProduct}
+                  onSelectProduct={onSelectProduct}
                   onPickMethod={onPickMethod}
                   onOpenAuth={onOpenAuth}
                   onSpeak={onSpeak}
                   onOpenChat={onOpenChat}
+                  onOpenCart={onOpenCart}
                 />
               ))}
             </View>

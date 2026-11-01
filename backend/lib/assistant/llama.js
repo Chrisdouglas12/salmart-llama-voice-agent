@@ -233,6 +233,7 @@ async function chatCompletion({
 } = {}) {
   // If an earlier turn proved this id is dead, go straight to the one that
   // worked instead of spending a 404 on every message.
+  const callStarted = Date.now();
   const requestedModel = model;
   const activeModel = workingModelFor.get(requestedModel) || requestedModel;
   const body = {
@@ -248,9 +249,9 @@ async function chatCompletion({
     body.tool_choice = toolChoice || "auto";
   }
 
-  const fetchChat = (payload) => postJson(`${config.meta.baseUrl}/chat/completions`, payload, {
+  const fetchChat = (payload, ms = timeoutMs) => postJson(`${config.meta.baseUrl}/chat/completions`, payload, {
     apiKey: config.meta.apiKey,
-    timeoutMs,
+    timeoutMs: ms,
     label: "muse chat",
   });
 
@@ -317,8 +318,10 @@ async function chatCompletion({
     // near-miss.
     const retryTokens = Math.min(Math.max(maxTokens * 3, 2400), MAX_ANSWER_TOKENS);
     const retryModel = data?.model || usedModel;
+    // Stay inside this call's original deadline, so a retry cannot double it.
+    const retryMs = Math.max(1000, timeoutMs - (Date.now() - callStarted));
     console.warn(`[muse chat] no answer in ${maxTokens} tokens (reasoning used the budget); retrying with ${retryTokens}`);
-    data = await fetchChat({ ...body, model: retryModel, max_tokens: retryTokens });
+    data = await fetchChat({ ...body, model: retryModel, max_tokens: retryTokens }, retryMs);
     ({ choice, message } = readAnswer(data));
   }
 

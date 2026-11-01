@@ -138,7 +138,7 @@ export default function AIModeButton({ extraContext } = {}) {
   // legacy assistant screen, and inside the WebView.
   if (splashVisible || currentName === 'ai' || currentName === 'assistant' || inWeb) return null;
 
-  const showCard = busy || !!lastVoice?.text || !!confirmation || !!authBlock;
+  const showCard = busy || !!lastVoice?.text || !!confirmation || !!authBlock || !!chatHandoff;
 
   const statusLabel = recording
     ? 'Listening…'

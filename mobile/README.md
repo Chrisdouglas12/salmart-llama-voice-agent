@@ -8,7 +8,7 @@ can be read without applying anything.
 | `salmart-mobile.event.patch` | +943 / −149 | `5ce993f` | original event frontend work (18 files) |
 | `salmart-mobile.ai-voice.patch` | +2451 / −464 | `e3076a1` | inline voice, screen navigation, voice-assisted registration, Google handoff, long-press AI screen, same-language voice, post-sign-in resume, LAN dev API discovery (28 files) |
 | `salmart-mobile.registration.patch` | +911 / -471 | on top of `salmart-mobile.ai-voice.patch` | voice-first sign-up: full name, optional email (Google/Yahoo/other), phone fallback (MTN/Airtel/Glo/other), sized secure password modal with copyable suggestion and spoken help, agreement card, automatic sign-in, model-written welcome, stale registration state cleared by screen/sign-in, standard device voice (7 files) |
-| `salmart-mobile.touch-buy.patch` | +500 / −11 | on top of `salmart-mobile.registration.patch` | touch-to-buy: large picture picker that opens after a search, a deterministic cart select call, spoken price/description, `product_added` card with seller-chat draft and cart button (7 files) |
+| `salmart-mobile.touch-buy.patch` | +501 / −12 | on top of `salmart-mobile.registration.patch` | touch-to-buy: large picture picker that opens after a search, a deterministic cart select call, spoken price/description, `product_added` card with seller-chat draft and cart button (7 files) |
 
 `mobile/src/**` holds the **current, complete** frontend AI code under its real
 app path, so a reviewer can read it without applying anything:

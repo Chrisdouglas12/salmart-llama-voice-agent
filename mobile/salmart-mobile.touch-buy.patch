@@ -118,7 +118,7 @@ index 9d88d62..4bf7e2b 100644
      openSellerChat, micNudge, nudgeMic,
      startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
 diff --git a/src/ai/AIModeButton.js b/src/ai/AIModeButton.js
-index 802e2d7..b01d902 100644
+index 802e2d7..fb471ed 100644
 --- a/src/ai/AIModeButton.js
 +++ b/src/ai/AIModeButton.js
 @@ -8,6 +8,7 @@ import { useTheme } from '../theme/theme';
@@ -145,7 +145,7 @@ index 802e2d7..b01d902 100644
    const longPressedRef = useRef(false);
    const splashVisible = useSplashVisible();
    const sending = status === 'sending';
-@@ -98,16 +103,36 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -98,22 +103,42 @@ export default function AIModeButton({ extraContext } = {}) {
    const glowOpacity = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [0.34, 0.02] });
    const glowScale = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.8] });
  
@@ -184,6 +184,13 @@ index 802e2d7..b01d902 100644
  
    // Hide on the launch splash, the AI screen (it has its own input), the
    // legacy assistant screen, and inside the WebView.
+   if (splashVisible || currentName === 'ai' || currentName === 'assistant' || inWeb) return null;
+ 
+-  const showCard = busy || !!lastVoice?.text || !!confirmation || !!authBlock;
++  const showCard = busy || !!lastVoice?.text || !!confirmation || !!authBlock || !!chatHandoff;
+ 
+   const statusLabel = recording
+     ? 'Listening…'
 @@ -280,6 +305,24 @@ export default function AIModeButton({ extraContext } = {}) {
                </Small>
              </Pressable>

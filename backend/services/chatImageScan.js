@@ -3,33 +3,35 @@
 /**
  * services/chatImageScan.js
  *
- * Closes the photo hole in chat fraud filtering: account/phone numbers sent
- * as PICTURES skip every text filter. For image messages the server reads
- * the picture with the SAME Meta vision model the assistant already uses
- * (lib/assistant/llama.js#visionJSON — no new provider), transcribes visible
- * text, and runs it through the existing text filter
+ * Photo support for the chat fraud filter. Account and phone numbers sent as
+ * pictures would otherwise skip the text filter. For image messages the
+ * server reads the picture with the Meta vision model already used by the
+ * assistant (lib/assistant/llama.js#visionJSON), transcribes the visible text
+ * and runs it through the existing text filter
  * (routes/chatContentFilter.server.js#scanMessage).
  *
- * Cost control (Meta credit is finite — every scanned photo is one vision
- * call, kept tiny: minimal reasoning, 300 max tokens):
- *   - CHAT_IMAGE_SCAN=false disables photo scanning entirely (text filters
- *     keep working). Default: enabled.
- *   - Only http(s) image URLs under MAX_BYTES are fetched; anything else is
- *     skipped, never blocked.
- *   - Fail-OPEN: a vision error, timeout, or oversize image never blocks a
- *     message. Fraud scanning must not break legitimate chat.
+ * Cost control: every scan is one vision call, so each call uses minimal
+ * reasoning and 300 max tokens.
+ * - CHAT_IMAGE_SCAN=true re-enables photo scanning; it is OFF by default
+ *   because the vision wait was delaying photo sends. Text filters keep
+ *   working either way.
+ * - Only http(s) image URLs under MAX_BYTES are fetched. Anything else is
+ *   skipped, never blocked.
+ * - Errors fail open: a vision error, timeout or oversize image never blocks a
+ *   message. Fraud scanning must not break legitimate chat.
  *
- * Latency: scans run AFTER the message is saved (fire-and-forget). A dirty
- * picture is visible for seconds, then retracted for everyone via the same
- * `messageDeletedForEveryone` event the client already handles — instead of
- * holding every innocent photo hostage to a 30s vision call.
+ * Timing: a scan runs after the message is saved (fire-and-forget). A bad
+ * picture is visible for a few seconds, then retracted for everyone through
+ * the `messageDeletedForEveryone` event the client already handles. Holding
+ * every photo until a slow vision call finished would delay innocent messages.
  */
 
 const { scanMessage } = require('../routes/chatContentFilter.server.js');
 const { visionJSON } = require('../lib/assistant/llama.js');
+const Message = require('../models/messageSchema.js');
 const logger = require('./logger');
 
-const ENABLED = process.env.CHAT_IMAGE_SCAN !== 'false';
+const ENABLED = process.env.CHAT_IMAGE_SCAN === 'true';
 const FETCH_TIMEOUT_MS = 15000;
 const MAX_BYTES = 3 * 1024 * 1024;
 
@@ -81,8 +83,8 @@ async function scanChatImage(url) {
     if (!ocrText || /^notext$/i.test(ocrText)) {
       return { blocked: false, categories: [], message: null, ocrText: '', skipped: 'no_text' };
     }
-    // The OCR text goes through the SAME pipeline as typed chat — including
-    // slang numerals ("sero hate tiri…") and the digit-run heuristic.
+    // The OCR text goes through the same pipeline as typed chat, including
+    // slang numerals ("sero hate tiri...") and the digit-run heuristic.
     const result = scanMessage(ocrText);
     if (result.blocked) {
       logger.warn(`[chatImageScan] blocked photo — ${result.categories.join(',')} | ocr="${ocrText.slice(0, 120)}"`);
@@ -95,4 +97,30 @@ async function scanChatImage(url) {
   }
 }
 
-module.exports = { scanChatImage, OCR_PROMPT, ENABLED };
+module.exports = { scanChatImage, retractFraudPhoto, OCR_PROMPT, ENABLED };
+
+/**
+ * Post-send safety net: OCR an already-saved image message and retract it for
+ * everyone when it is dirty. Used by the socket and REST send paths for
+ * clients too old to pre-scan. `notify(result)` delivers the sender notice
+ * (a socket emit, or nothing for REST because the next fetch omits the
+ * message). Errors are swallowed.
+ */
+async function retractFraudPhoto({ io, room, messageId, url, notify }) {
+  let result;
+  try {
+    result = await scanChatImage(url);
+  } catch (_e) {
+    return;
+  }
+  if (!result || !result.blocked) return;
+  try {
+    await Message.deleteOne({ _id: messageId });
+  } catch (_e) { /* already gone */ }
+  try {
+    io.to(room).emit('messageDeletedForEveryone', { messageId: String(messageId) });
+  } catch (_e) { /* sockets are best-effort */ }
+  try {
+    if (typeof notify === 'function') await notify(result);
+  } catch (_e) { /* notice is best-effort */ }
+}

@@ -49,8 +49,15 @@ async function postJson(url, body, { apiKey, timeoutMs, label }) {
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
-    markMetaDown(`${label}: network error (${e.message})`);
-    throw new LlamaError(`${label}: network error (${e.message})`, { cause: e });
+    // A single slow request is that turn's problem. Pausing Meta for every
+    // user because one call hit its deadline would turn a slow turn into an
+    // outage, so only real network errors trip the shared cooldown.
+    const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError";
+    if (!timedOut) markMetaDown(`${label}: network error (${e.message})`);
+    throw new LlamaError(
+      `${label}: ${timedOut ? `timed out after ${timeoutMs}ms` : `network error (${e.message})`}`,
+      { cause: e },
+    );
   }
 
   const text = await res.text();
@@ -221,6 +228,7 @@ async function chatCompletion({
   temperature = 0.2,
   maxTokens = 1600,
   reasoningEffort = config.meta.reasoningEffort,
+  timeoutMs = config.meta.timeoutMs,
   model = config.meta.brainModel,
 } = {}) {
   // If an earlier turn proved this id is dead, go straight to the one that
@@ -242,7 +250,7 @@ async function chatCompletion({
 
   const fetchChat = (payload) => postJson(`${config.meta.baseUrl}/chat/completions`, payload, {
     apiKey: config.meta.apiKey,
-    timeoutMs: config.meta.timeoutMs,
+    timeoutMs,
     label: "muse chat",
   });
 
@@ -304,7 +312,10 @@ async function chatCompletion({
   // failing the turn.
   const empty = !messageText(message) && !message.tool_calls?.length;
   if (empty && choice.finish_reason === "length" && maxTokens < MAX_ANSWER_TOKENS) {
-    const retryTokens = Math.min(maxTokens * 2, MAX_ANSWER_TOKENS);
+    // A short interactive budget can be spent on reasoning alone. One bigger
+    // retry still beats failing the turn, so give it room rather than another
+    // near-miss.
+    const retryTokens = Math.min(Math.max(maxTokens * 3, 2400), MAX_ANSWER_TOKENS);
     const retryModel = data?.model || usedModel;
     console.warn(`[muse chat] no answer in ${maxTokens} tokens (reasoning used the budget); retrying with ${retryTokens}`);
     data = await fetchChat({ ...body, model: retryModel, max_tokens: retryTokens });

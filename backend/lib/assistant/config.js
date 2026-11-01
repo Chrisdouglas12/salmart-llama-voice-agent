@@ -18,6 +18,12 @@ function cleanModel(v) {
   return clean;
 }
 
+// A bad numeric env must not turn into `max_tokens: NaN` (serialised as null).
+function positiveInt(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
 const DEFAULT_BRAIN_MODEL = "muse-spark-1.3";
 // The previous version Meta still serves. It must differ from the primary:
 // when both were "muse-spark-1.3" a single bad MODEL_BRAIN left no retry path.
@@ -128,7 +134,15 @@ const config = {
     guardModel: cleanModel(process.env.MODEL_GUARD),
     // none/minimal/low/medium/high/xhigh/max. "none" is rejected by Muse.
     reasoningEffort: process.env.META_REASONING_EFFORT || "low",
-    timeoutMs: Number(process.env.META_TIMEOUT_MS || 45000),
+    // Interactive voice turns are short answers, not essays. Muse counts its
+    // thinking against max_tokens, so a small budget plus minimal reasoning is
+    // what keeps one model call in the low seconds instead of the teens.
+    turnReasoningEffort: process.env.META_TURN_REASONING_EFFORT || "minimal",
+    turnMaxTokens: positiveInt(process.env.META_TURN_MAX_TOKENS, 800),
+    // A spoken turn must not hang for a minute. This caps one turn call; the
+    // runner also trims it to the wall-clock time it has left.
+    turnTimeoutMs: positiveInt(process.env.META_TURN_TIMEOUT_MS, 22000),
+    timeoutMs: Number(process.env.META_TIMEOUT_MS || 30000),
     configured: metaConfigured,
   },
 

@@ -67,6 +67,14 @@ const logger = require('../services/logger');
 
 const router = express.Router();
 
+// Recent turns replayed to the model. Ten user/assistant exchanges are enough
+// for corrections like "make it 70k" while keeping every voice turn's prefill
+// small. Clamped to at least 2: `slice(-0)` would replay the whole transcript.
+const HISTORY_ENV = Number(process.env.META_HISTORY_MESSAGES);
+const HISTORY_MESSAGES = Number.isFinite(HISTORY_ENV) && HISTORY_ENV >= 2
+  ? Math.floor(HISTORY_ENV)
+  : 20;
+
 // ─── Rate limits ────────────────────────────────────────────────────────────
 const conversationLimiter = rateLimit({
   windowMs: 60_000, max: 40, standardHeaders: true, legacyHeaders: false,
@@ -474,7 +482,11 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     // later turn. Orphaned pairs are dropped and counted, so one bad turn
     // cannot break the whole conversation, and conversations that already
     // contain such a pair recover on the next turn.
-    const recent = found.doc.messages.slice(-60);
+    //
+    // The tail is short on purpose. The live task, auth, listing and screen
+    // blocks below carry the state the model actually needs, so re-reading a
+    // long transcript only adds prefill time to every voice turn.
+    const recent = found.doc.messages.slice(-HISTORY_MESSAGES);
     const firstUser = recent.findIndex(m => m.role === 'user');
     const { messages: clean, dropped } = sanitizeHistory(firstUser >= 0 ? recent.slice(firstUser) : []);
     if (dropped > 0) {
@@ -644,6 +656,8 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
         }
       }
     }
+
+    logger.info(`[aiRoutes] turn ok: requestId=${requestId} totalMs=${Date.now() - turnStarted} llmMs=${result.timings?.llmMs} llmCalls=${result.timings?.llmCalls} stop=${result.stopReason}`);
 
     const response = {
       success: true,

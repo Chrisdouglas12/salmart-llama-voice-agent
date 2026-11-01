@@ -14,6 +14,7 @@
  */
 
 const { chatCompletion } = require('../../lib/assistant/llama');
+const { config } = require('../../lib/assistant/config');
 
 /**
  * @param {object} opts
@@ -22,7 +23,7 @@ const { chatCompletion } = require('../../lib/assistant/llama');
  * @param {string} opts.requestId
  * @returns {{kind:'final'|'tool_calls', text:string|null, toolCalls:Array, raw:any}}
  */
-async function chat({ messages, tools = [], requestId }) {
+async function chat({ messages, tools = [], requestId, maxTokens, reasoningEffort, timeoutMs }) {
   const started = Date.now();
   const openaiTools = tools.map(t => ({
     type: 'function',
@@ -41,7 +42,13 @@ async function chat({ messages, tools = [], requestId }) {
       tools: openaiTools.length ? openaiTools : undefined,
       toolChoice: openaiTools.length ? 'auto' : undefined,
       temperature: 0.2,
-      maxTokens: 2000,
+      maxTokens: maxTokens || config.meta.turnMaxTokens,
+      reasoningEffort: reasoningEffort || config.meta.turnReasoningEffort,
+      // Never wait longer than the turn's own deadline.
+      timeoutMs: Math.min(
+        Math.max(Number(timeoutMs) || config.meta.turnTimeoutMs, 1000),
+        config.meta.turnTimeoutMs,
+      ),
     }));
   } catch (err) {
     // One trace line per failed model call: requestId ties it to the
@@ -52,7 +59,9 @@ async function chat({ messages, tools = [], requestId }) {
 
   const msg = raw?.choices?.[0]?.message || {};
   const rawCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
-  console.log(`[metaProvider] chat ok: requestId=${requestId} model=${model || '?'} ms=${Date.now() - started} kind=${rawCalls.length ? 'tool_calls' : 'final'} toolCalls=${rawCalls.length}`);
+  const usage = raw?.usage || {};
+  const reasoning = usage.completion_tokens_details?.reasoning_tokens;
+  console.log(`[metaProvider] chat ok: requestId=${requestId} model=${model || '?'} ms=${Date.now() - started} kind=${rawCalls.length ? 'tool_calls' : 'final'} toolCalls=${rawCalls.length} completion=${usage.completion_tokens ?? '?'} reasoning=${reasoning ?? '?'}`);
 
   if (rawCalls.length === 0) {
     return { kind: 'final', text: (msg.content || '').trim(), toolCalls: [], raw };

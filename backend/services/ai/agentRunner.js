@@ -16,9 +16,12 @@ const metaProvider = require('./metaProvider');
 const toolExecutor = require('./toolExecutor');
 const { toolsForContext, toModelDefs } = require('./toolRegistry');
 
-const MAX_ITERATIONS = 4;
+// A spoken turn should finish in seconds, so the loop is deliberately short.
+// Two tool rounds plus the final answer fit; a third round would mean the model
+// is looping, and the user is better served by the next question.
+const MAX_ITERATIONS = 3;
 const MAX_TOOL_CALLS = 6;
-const WALL_CLOCK_MS  = 45_000;
+const WALL_CLOCK_MS  = 25_000;
 
 async function runTurn({ ctx, messages, signal }) {
   const started = Date.now();
@@ -29,6 +32,7 @@ async function runTurn({ ctx, messages, signal }) {
   let toolCallCount = 0;
   let llmMs = 0;
   let toolMs = 0;
+  let llmCalls = 0;
   const seenCalls = new Set();
 
   const contextTools = toolsForContext({
@@ -36,7 +40,8 @@ async function runTurn({ ctx, messages, signal }) {
     allowedPermissions: ['product:read', 'seller:own', 'message:own', 'order:own'],
   });
   const toolDefs = toModelDefs(contextTools);
-  ctx.logger?.info?.(`[agentRunner] turn start: requestId=${ctx.requestId} msgs=${(messages || []).length} tools=${toolDefs.length} auth=${!!ctx.isAuthenticated}`);
+  const promptChars = (messages || []).reduce((n, m) => n + String(m.content || '').length, 0);
+  ctx.logger?.info?.(`[agentRunner] turn start: requestId=${ctx.requestId} msgs=${(messages || []).length} chars=${promptChars} tools=${toolDefs.length} auth=${!!ctx.isAuthenticated}`);
 
   const modelMessages = [...messages];
   let finalText = '';
@@ -47,8 +52,18 @@ async function runTurn({ ctx, messages, signal }) {
 
     let resp;
     const llmStarted = Date.now();
+    llmCalls++;
+    // Hand the remaining wall-clock budget to the provider call, so a stuck
+    // request cannot outlive the turn.
+    const remainingMs = WALL_CLOCK_MS - (Date.now() - started);
+    if (remainingMs < 1500) { stopReason = 'timeout'; break; }
     try {
-      resp = await metaProvider.chat({ messages: modelMessages, tools: toolDefs, requestId: ctx.requestId });
+      resp = await metaProvider.chat({
+        messages: modelMessages,
+        tools: toolDefs,
+        requestId: ctx.requestId,
+        timeoutMs: remainingMs,
+      });
     } catch (err) {
       stopReason = 'error';
       finalText = 'The assistant is temporarily unavailable. Please try again.';
@@ -138,11 +153,11 @@ async function runTurn({ ctx, messages, signal }) {
     finalText = 'I was not able to complete that. Could you rephrase or add a bit more detail?';
   }
 
-  ctx.logger?.info?.(`[agentRunner] turn end: requestId=${ctx.requestId} stop=${stopReason} llmMs=${llmMs} toolMs=${toolMs} toolCalls=${toolCallCount} totalMs=${Date.now() - started}`);
+  ctx.logger?.info?.(`[agentRunner] turn end: requestId=${ctx.requestId} stop=${stopReason} llmMs=${llmMs} toolMs=${toolMs} llmCalls=${llmCalls} toolCalls=${toolCallCount} totalMs=${Date.now() - started}`);
 
   return {
     finalText, turns: newMessages, toolLog, toolResults, stopReason, pendingConfirmation,
-    timings: { llmMs, toolMs, totalMs: Date.now() - started },
+    timings: { llmMs, toolMs, llmCalls, totalMs: Date.now() - started },
   };
 }
 

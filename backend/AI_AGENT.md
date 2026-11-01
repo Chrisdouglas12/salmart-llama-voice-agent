@@ -83,17 +83,20 @@ fail loudly at boot by design.
 1. The client calls `POST /api/ai/conversations` once and keeps the returned
    `conversationId` (and `anonymousId` while signed out).
 2. Each message calls `POST /api/ai/turn`.
-3. `aiRoutes.js` replays at most the last 60 stored messages, starting at the
-   first `user` message, then runs them through `sanitizeHistory`: any
-   assistant `tool_calls` without all its `tool` responses (left by a
-   timed-out or failed turn) is dropped with a warning, because the provider
-   rejects the whole turn with `400 Missing tool response` otherwise. The
-   same filter runs before persisting a turn, and replay-time filtering
-   self-heals conversations poisoned before the fix shipped.
+3. `aiRoutes.js` replays at most the last 20 stored messages (override with
+   `META_HISTORY_MESSAGES`), starting at the first `user` message, then runs
+   them through `sanitizeHistory`: any assistant `tool_calls` without all its
+   `tool` responses (left by a timed-out or failed turn) is dropped with a
+   warning, because the provider rejects the whole turn with
+   `400 Missing tool response` otherwise. The same filter runs before
+   persisting a turn, and replay-time filtering self-heals conversations
+   poisoned before the fix shipped. The short tail keeps voice-turn prefill
+   small; the task, auth, listing and screen blocks carry the live state.
 4. `agentRunner.js` calls the model with the tools allowed for the caller's
    auth state, then executes requested tools until it gets a final answer.
-   Hard limits: 4 model iterations, 6 tool calls, 45 seconds wall clock. It
-   returns `timings.llmMs` and `timings.toolMs` alongside the stop reason.
+   Hard limits: 3 model iterations, 6 tool calls, 25 seconds wall clock. It
+   returns `timings.llmMs`, `timings.toolMs`, `timings.llmCalls` and
+   `timings.totalMs` alongside the stop reason.
    Inside the provider client, a 404 `model_not_found` is retried once with a
    served id, and an empty `finish_reason: "length"` answer is retried once
    with a larger token budget (reasoning tokens count against `max_tokens`).
@@ -109,6 +112,45 @@ fail loudly at boot by design.
    `services/ai/structuredBlocks.js`, persists any `fill_*` blocks to
    `AIPendingFormPatch`, records one allowlisted metrics row, and returns the
    reply.
+
+## Voice turn latency
+
+A voice turn has two serial halves, and the logs measure both separately:
+
+| Half | Log line | Measured (30 Oct, real phone) |
+| --- | --- | --- |
+| Speech to text | `[assistant] transcribe ok ... ms=` | 3–10 s, median ~4.7 s |
+| Agent turn | `[agentRunner] turn end ... llmMs toolMs totalMs` | 2–15 s, median ~6.4 s |
+| End to end | pair the `/transcribe` request line with `turn end` | median ~12.6 s |
+
+The agent turn was the controllable half, so it now:
+
+- runs at `reasoning_effort=minimal` (`META_TURN_REASONING_EFFORT`) instead of
+  `low` — Muse counts thinking against `max_tokens`, so this is the single
+  biggest cut;
+- caps the answer at 800 tokens (`META_TURN_MAX_TOKENS`) instead of 2000;
+- replays 20 recent messages instead of 60 (`META_HISTORY_MESSAGES`);
+- allows 3 model iterations and a 25 s wall clock instead of 4 and 45 s;
+- caps one model call at 22 s (`META_TURN_TIMEOUT_MS`) and hands it only the
+  wall-clock time left, so a stuck request cannot outlive the turn. A timeout
+  is treated as that turn's failure, not as Meta being down for everyone.
+
+One model call logs its own line, `[metaProvider] chat ok ... completion=...
+reasoning=...`, so a slow turn can be attributed to thinking, output length, or
+the provider itself. A turn that needs a tool makes two model calls; that is
+expected, and the second one is the spoken sentence.
+
+Speech-to-text is Meta Muse Voice Transcribe. Its latency is the provider's
+mic-to-text service (plus one ffmpeg conversion on the server) and is not
+tunable from this repo without moving to streaming ASR. On a slow clip it is
+now the larger half of the wait even after the agent cuts.
+
+To confirm a change on the live server, read one pair of lines:
+
+```text
+[assistant] transcribe ok: provider=meta model=muse-voice-transcribe-1.0 ms=4200
+[agentRunner] turn end: ... llmMs=3100 toolMs=0 llmCalls=2 totalMs=3150
+```
 
 ## Task memory
 
@@ -645,8 +687,12 @@ Indexes are declared in the schemas and are created by Mongoose on connect.
 | `META_API_BASE` | `lib/assistant/config.js` | default `https://api.meta.ai/v1` |
 | `MODEL_BRAIN` | `lib/assistant/config.js` | default `muse-spark-1.3`; the agent's model. Quoted values are stripped (with a one-time warning), and a 404 "model not found" walks every remaining candidate id (fallback env, known ids including `-contributor` variants, then the provider's `/models` list), so a stale deploy env cannot take chat down. The legacy `/api/assistant/status` reports the active id under `chat`. |
 | `MODEL_BRAIN_FALLBACK` | `lib/assistant/config.js` | optional; model used for the one-shot 404 retry. Default `muse-spark-1.2` (deliberately different from the primary). Must be an id Meta currently serves |
-| `META_REASONING_EFFORT` | `lib/assistant/config.js` | default `low`; `none` is rejected |
-| `META_TIMEOUT_MS` | `lib/assistant/config.js` | default 45,000 |
+| `META_REASONING_EFFORT` | `lib/assistant/config.js` | default `low`; `none` is rejected. Legacy `/api/assistant` paths use this |
+| `META_TURN_REASONING_EFFORT` | `lib/assistant/config.js` | default `minimal`; reasoning effort for `/api/ai` turns |
+| `META_TURN_MAX_TOKENS` | `lib/assistant/config.js` | default 800; answer-plus-reasoning budget per turn call |
+| `META_TURN_TIMEOUT_MS` | `lib/assistant/config.js` | default 22,000; one turn call is trimmed to the wall-clock time left. A timeout does not pause Meta for other users |
+| `META_HISTORY_MESSAGES` | `routes/aiRoutes.js` | default 20 (minimum 2); recent stored messages replayed to the model |
+| `META_TIMEOUT_MS` | `lib/assistant/config.js` | default 30,000 |
 | `META_COOLDOWN_MS` | `lib/assistant/config.js` | legacy provider recovery interval; the `/api/ai` path calls Meta directly |
 | `DEMO_MODE` | `lib/assistant/config.js` | legacy assistant `auto`/`live`/`mock`; `/api/ai` has no mock brain and requires a real key |
 | `APP_BASE_URL` | `services/ai/tools/authTools.js` | public origin used in the Google sign-in URL |

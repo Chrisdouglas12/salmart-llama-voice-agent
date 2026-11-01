@@ -296,6 +296,15 @@ async function prepareRegistration(_ctx, args) {
     throw e;
   }
 
+  // Read after the patch the phone currently holds. Captured before the ctx is
+  // updated below so a number supplied for the first time can be read back
+  // exactly once instead of on every later turn.
+  const snap = _ctx?.registration && typeof _ctx.registration === 'object'
+    ? _ctx.registration
+    : {};
+  const phoneWasKnown = !!(_ctx?.phoneProvided || snap.phone === true);
+  const phoneJustFilled = !!fields.phoneNumber && !phoneWasKnown;
+
   // Keep the same-turn context current so a beginAuthHelp call that follows in
   // this turn does not ask for a field that was just supplied. Only booleans
   // and names are mirrored here; the phone and email values stay in `fields`.
@@ -324,9 +333,6 @@ async function prepareRegistration(_ctx, args) {
   // What the register screen holds after this patch, computed the same way on
   // every turn. The reply after a fill therefore names the real next step and
   // can never claim a saved field is still missing.
-  const snap = _ctx?.registration && typeof _ctx.registration === 'object'
-    ? _ctx.registration
-    : {};
   const draft = _ctx?.registerDraft && typeof _ctx.registerDraft === 'object'
     ? _ctx.registerDraft
     : {};
@@ -339,6 +345,7 @@ async function prepareRegistration(_ctx, args) {
   const declined = noEmail || !!_ctx?.emailDeclined || snap.emailDeclined === true;
   const passwordSet = !!_ctx?.passwordSet || snap.password === true;
   const agreed = !!_ctx?.agreed || snap.agreed === true;
+  const confirmed = !!_ctx?.confirmed || snap.confirmed === true || snap.submitted === true;
 
   if (noEmail) note += ' They have no email, so ask for their phone number next.';
 
@@ -347,8 +354,9 @@ async function prepareRegistration(_ctx, args) {
   if (!hasEmail && !hasPhone && !declined) remaining.push('email or phone number');
   if (!passwordSet) remaining.push('secret code (on the screen, never in chat)');
   if (!agreed) remaining.push('agree to the terms (on the screen)');
+  if (!confirmed) remaining.push('confirm the details (on the screen, then they create it)');
   const nextAction = remaining[0] || 'create account';
-  const nextAsk = !hasName
+  const laterAsk = !hasName
     ? 'What is your full name, first and last?'
     : (remaining.includes('email or phone number')
       ? 'Do you have an email address, or should we use a phone number instead?'
@@ -356,7 +364,27 @@ async function prepareRegistration(_ctx, args) {
         ? 'Now tap the secret code box and type the code you want. I will not see it.'
         : (!agreed
           ? 'Now read the agreement and tick the box, then tell me when it is done.'
-          : 'Tap Create account when you are ready.')));
+          : (!confirmed
+            ? 'Check the name and the number on the screen, then tap Create my account.'
+            : 'The account is being created now.'))));
+
+  // A phone number spoken by the user is read back once, before anything else.
+  // Digits are never guessed: the model only repeats what the tool accepted.
+  // Spacing the groups keeps text-to-speech from reading one huge number.
+  const spokenPhone = fields.phoneNumber
+    ? `${fields.phoneNumber.slice(0, 4)} ${fields.phoneNumber.slice(4, 7)} ${fields.phoneNumber.slice(7)}`
+    : '';
+  const readBack = phoneJustFilled
+    ? `I heard ${spokenPhone}. Is that correct?`
+    : null;
+  const nextAsk = readBack || laterAsk;
+
+  const tail = readBack
+    ? `Read the number back exactly once and stop: "${readBack}" `
+      + 'Do not ask the next question until they answer. If they say it is wrong, ask for the number again and call prepareRegistration with the corrected one.'
+    : remaining.length
+      ? `The only thing left is: ${remaining.join(', ')}. Say or ask only: "${nextAsk}"`
+      : 'Everything is done. They create the account on the screen themselves.';
 
   return {
     fields,
@@ -364,10 +392,10 @@ async function prepareRegistration(_ctx, args) {
     remaining,
     nextAction,
     nextAsk,
-    note: `${note} Saved: ${Object.keys(fields).join(', ') || 'nothing'}. `
-      + (remaining.length
-        ? `The only thing left is: ${remaining.join(', ')}. Say or ask only: "${nextAsk}"`
-        : 'Everything on this form is done. Tell them to tap Create account.'),
+    ...(readBack ? { readBack } : {}),
+    // Safe to show and speak as-is. The full `note` is for the model only.
+    say: readBack,
+    note: `${note} Saved: ${Object.keys(fields).join(', ') || 'nothing'}. ${tail}`,
     ...(noEmail ? { emailDeclined: true } : {}),
     // These are never part of `fields`, so the model can never report that it
     // filled a password or accepted the agreement for the user.

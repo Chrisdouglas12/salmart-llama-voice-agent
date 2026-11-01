@@ -799,6 +799,38 @@ index bf694b1..23ae1ca 100644
      </SafeAreaView>
    );
  }
+diff --git a/src/ai/UseAIPatch.js b/src/ai/UseAIPatch.js
+index 302cdba..a3a6cd5 100644
+--- a/src/ai/UseAIPatch.js
++++ b/src/ai/UseAIPatch.js
+@@ -43,11 +43,12 @@ const BLOCK_TO_TARGET = {
+   fill_profile: 'editProfile',
+   fill_register: 'register',
+   register_focus: 'register',
++  create_account: 'register',
+   open_picker: 'createAd',
+ };
+ 
+ // Steps the register screen is allowed to open by itself.
+-const REGISTER_FOCUS = new Set(['fullName', 'firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement']);
++const REGISTER_FOCUS = new Set(['fullName', 'firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement', 'confirm']);
+ 
+ export function useAIPatch(target) {
+   if (!VALID_TARGETS.has(target)) {
+@@ -95,6 +96,13 @@ export function useAIPatch(target) {
+         setPatch({ fields: {}, request: { kind: b.kind, auto: b.auto === true }, say: b.say || null, source: 'turn' });
+         return;
+       }
++      // The user said yes to the spoken summary: open the confirmation card.
++      // Creating the account still needs their tap on it.
++      if (b.type === 'create_account') {
++        lastSeenMsgKeyRef.current = latest.key;
++        setPatch({ fields: {}, request: { kind: 'createAccount' }, say: null, source: 'turn' });
++        return;
++      }
+       if (!b.fields || typeof b.fields !== 'object') continue;
+ 
+       lastSeenMsgKeyRef.current = latest.key;
 diff --git a/src/ai/api.js b/src/ai/api.js
 index 5efc05b..eb3ffd7 100644
 --- a/src/ai/api.js
@@ -821,6 +853,23 @@ index 5efc05b..eb3ffd7 100644
  /** POST /api/ai/actions/:id/confirm. Returns 200, 400, 404, 409 or 410. */
  export function confirmAction(actionId) {
    return apiPost(`/api/ai/actions/${encodeURIComponent(actionId)}/confirm`, {}, { retries: 0 });
+diff --git a/src/ai/authOutcome.js b/src/ai/authOutcome.js
+index 8109a61..a053ed5 100644
+--- a/src/ai/authOutcome.js
++++ b/src/ai/authOutcome.js
+@@ -11,6 +11,12 @@
+ // Must match lib/assistant/authGuidance.js on the backend.
+ const VALID = new Set([
+   'email_exists',
++  'phone_exists',
++  'registration_invalid',
++  'registration_failed',
++  'invalid_phone',
++  'weak_password',
++  'missing_identifier',
+   'invalid_password',
+   'no_account',
+   'google_only',
 diff --git a/src/ai/components/MessageBubble.js b/src/ai/components/MessageBubble.js
 index afc5b90..c019255 100644
 --- a/src/ai/components/MessageBubble.js
@@ -1239,6 +1288,38 @@ index c51cf62..82b9eb6 100644
 +  },
  });
 \ No newline at end of file
+diff --git a/src/ai/liveScreen.js b/src/ai/liveScreen.js
+new file mode 100644
+index 0000000..b03acf7
+--- /dev/null
++++ b/src/ai/liveScreen.js
+@@ -0,0 +1,26 @@
++/**
++ * The route the user is actually looking at.
++ *
++ * AIProvider sits above every screen, so it cannot read the top screen's route
++ * params from the screen itself. A tiny non-rendering mirror (NavMirror in
++ * AIContext) writes the live route here on every navigation, and every turn
++ * reads it at send time. Keeping this outside React state means navigation
++ * never re-renders the AI provider or its consumers.
++ *
++ * Only the route name and its params are kept; the params object is already the
++ * one the navigation stack owns, so nothing is copied or serialized per turn.
++ */
++
++let live = { name: null, params: {}, panel: null };
++
++export function setLiveScreen(name, params, panel) {
++  live = {
++    name: name ? String(name).slice(0, 120) : null,
++    params: params && typeof params === 'object' ? params : {},
++    panel: panel ? String(panel).slice(0, 120) : null,
++  };
++}
++
++export function getLiveScreen() {
++  return live;
++}
 diff --git a/src/ai/models.js b/src/ai/models.js
 new file mode 100644
 index 0000000..5b7a3c1
@@ -1262,3 +1343,31 @@ index 0000000..5b7a3c1
 +  if (voice) return `Muse ${voice[1].toLowerCase()}`;
 +  return raw;
 +}
+diff --git a/src/ai/registrationSnapshot.js b/src/ai/registrationSnapshot.js
+index 312f4a9..9fba104 100644
+--- a/src/ai/registrationSnapshot.js
++++ b/src/ai/registrationSnapshot.js
+@@ -10,6 +10,10 @@
+ 
+ let snapshot = null;
+ 
++// The only string values allowed in a snapshot. Everything else must be a
++// boolean, so no typed value (name, email, phone) can leave the screen.
++const TEXT_KEYS = new Set(['activeField', 'stage', 'errorField', 'errorCode']);
++
+ /** Replace the pending snapshot. Only safe flags and step names are kept. */
+ export function reportRegistrationSnapshot(flags) {
+   if (!flags || typeof flags !== 'object' || Array.isArray(flags)) {
+@@ -19,9 +23,11 @@ export function reportRegistrationSnapshot(flags) {
+   const clean = {};
+   for (const [key, value] of Object.entries(flags).slice(0, 24)) {
+     if (!/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(key)) continue;
++    // Reserved names: a boolean called `confirm` could be mistaken for consent,
++    // and a password value must never travel. Only `confirmed` is read.
+     if (key === 'password' || key === 'passwordValue' || key === 'confirm') continue;
+     if (typeof value === 'boolean') clean[key] = value;
+-    else if ((key === 'activeField' || key === 'stage') && typeof value === 'string' && value.length <= 40) {
++    else if (TEXT_KEYS.has(key) && typeof value === 'string' && value.length <= 40) {
+       clean[key] = value;
+     }
+   }

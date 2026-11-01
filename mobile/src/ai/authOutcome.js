@@ -11,6 +11,12 @@
 // Must match lib/assistant/authGuidance.js on the backend.
 const VALID = new Set([
   'email_exists',
+  'phone_exists',
+  'registration_invalid',
+  'registration_failed',
+  'invalid_phone',
+  'weak_password',
+  'missing_identifier',
   'invalid_password',
   'no_account',
   'google_only',

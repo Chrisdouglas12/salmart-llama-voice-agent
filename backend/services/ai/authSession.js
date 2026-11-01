@@ -93,6 +93,7 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task, registrat
   let emailDeclined = !!(task && task.emailDeclined) || snap.emailDeclined === true;
   const passwordSet = snap.password === true;
   const agreed = snap.agreed === true;
+  const confirmed = snap.confirmed === true;
   const registerDraft = (task && task.drafts && task.drafts.register) || {};
 
   const flags = () => ({
@@ -101,6 +102,7 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task, registrat
     emailDeclined,
     passwordSet,
     agreed,
+    confirmed,
   });
 
   for (const r of toolResults || []) {
@@ -153,6 +155,7 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task, registrat
             emailDeclined: false,
             passwordSet: false,
             agreed: false,
+            confirmed: false,
             attempts: 0,
             updatedAt: Date.now(),
           };

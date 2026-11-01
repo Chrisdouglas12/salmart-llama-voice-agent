@@ -147,7 +147,17 @@ function buildStructured(toolResults) {
         if (r.data.fields) drafts.profile.push({ fields: r.data.fields, say: r.data.note || null });
         break;
       case 'prepareRegistration':
-        if (r.data.fields) drafts.register.push({ fields: r.data.fields, say: r.data.note || null });
+        if (r.data.fields) {
+          // `say` is the short, user-safe line (a phone read-back). `note` is
+          // the model's instruction text and must never be shown on screen.
+          drafts.register.push({ fields: r.data.fields, say: r.data.say || null });
+        }
+        break;
+
+      // The user said yes to the spoken summary. The phone opens (or reopens)
+      // the confirmation card; the account is only created by the tap on it.
+      case 'confirmRegistration':
+        push({ type: 'create_account', target: 'register', summary: r.data.summary || null });
         break;
 
       // The server-owned plan names the next registration step. The screen

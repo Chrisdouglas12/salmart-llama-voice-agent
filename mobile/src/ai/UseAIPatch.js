@@ -43,11 +43,12 @@ const BLOCK_TO_TARGET = {
   fill_profile: 'editProfile',
   fill_register: 'register',
   register_focus: 'register',
+  create_account: 'register',
   open_picker: 'createAd',
 };
 
 // Steps the register screen is allowed to open by itself.
-const REGISTER_FOCUS = new Set(['fullName', 'firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement']);
+const REGISTER_FOCUS = new Set(['fullName', 'firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement', 'confirm']);
 
 export function useAIPatch(target) {
   if (!VALID_TARGETS.has(target)) {
@@ -93,6 +94,13 @@ export function useAIPatch(target) {
         if (b.kind !== 'photo' && b.kind !== 'camera' && b.kind !== 'digitalFile') continue;
         lastSeenMsgKeyRef.current = latest.key;
         setPatch({ fields: {}, request: { kind: b.kind, auto: b.auto === true }, say: b.say || null, source: 'turn' });
+        return;
+      }
+      // The user said yes to the spoken summary: open the confirmation card.
+      // Creating the account still needs their tap on it.
+      if (b.type === 'create_account') {
+        lastSeenMsgKeyRef.current = latest.key;
+        setPatch({ fields: {}, request: { kind: 'createAccount' }, say: null, source: 'turn' });
         return;
       }
       if (!b.fields || typeof b.fields !== 'object') continue;

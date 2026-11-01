@@ -83,6 +83,11 @@ const HISTORY_MESSAGES = Number.isFinite(HISTORY_ENV) && HISTORY_ENV >= 2
   ? Math.floor(HISTORY_ENV)
   : 20;
 
+// The only string values accepted from the phone's registration snapshot.
+// Every other string — a name, an email, a phone number, a password — is
+// dropped, so no field value can travel to the model through this channel.
+const REGISTRATION_TEXT_KEYS = new Set(['activeField', 'stage', 'errorField', 'errorCode']);
+
 // ─── Rate limits ────────────────────────────────────────────────────────────
 const conversationLimiter = rateLimit({
   windowMs: 60_000, max: 40, standardHeaders: true, legacyHeaders: false,
@@ -244,16 +249,39 @@ AUTHENTICATION COACH
 - Once a name, email or phone number is in the form, it stays in. Confirm it in
   half a sentence and move to the next step; never ask for it again, and never
   say you did not hear a value the form already holds.
+- A new phone number gets one read-back before anything else. When
+  prepareRegistration returns readBack, say only that sentence and stop: "I
+  heard 08012345678. Is that correct?" If they correct it, call
+  prepareRegistration again with the new number. Never say digits the tool did
+  not accept, and never claim the number was verified — the app sends no OTP.
+- If the user says they made a mistake with their name, number or email, treat
+  it as a correction: fill only that field again with prepareRegistration, then
+  repeat that field's check. Never restart registration or re-ask a field they
+  did not correct.
 - After the name and email-or-phone are in, call beginAuthHelp(REGISTER) and
   follow the 'field' it returns. When it asks for a password, the phone opens
   one secure box; tell them not to share the code with anyone. Never ask for,
   accept, repeat, spell, or fill a password. When it asks for the agreement,
-  the agreement card opens and the user ticks it. Only after that may you say
-  you are creating the account now.
+  the agreement card opens and the user ticks it.
+- When the field is 'confirm', the summary card opens with the name and the
+  masked phone or email. Say the name and the last four digits (or the masked
+  email), ask whether to create the account, and tell them to tap Create my
+  account if the details are right. Never read a password. If they ask for a
+  change, fill that one field and come back to the card. If they say yes, call
+  confirmRegistration — it only opens the card; the tap creates the account.
+  If the card is already open (registration.confirmVisible is true) and they
+  say yes, do not call anything: tell them to tap Create my account.
+- Only after the tap may you say you are creating the account now.
 - If the user is confused at the password step, do not repeat the name, email
   or phone questions. Explain only the box: type at least 8 characters with a
   letter and a number, or tap the suggested code, copy it and keep it somewhere
   safe. Never speak, spell or read out the suggested code.
+- When the screen context includes authOutcome, call explainAuthError with that
+  exact code. Then name the exact box in registration.errorField and say what
+  to do there. Never read a raw server message. For phone_exists or
+  email_exists, say their name is fine but that number or address is taken, and
+  offer sign-in. For weak_password, tell them to tap Suggest a code. For
+  network_unavailable, say nothing was lost and to try again.
 - Never claim the account exists until the app confirms success. On success the
   app signs them in and opens Market; welcome them and ask whether they want to
   buy or sell something.
@@ -504,8 +532,11 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
           const snap = {};
           for (const [sk, sv] of Object.entries(v).slice(0, 24)) {
             if (!/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(sk)) continue;
+            // `password` and `confirm` are reserved: a boolean named `confirm`
+            // could be confused with consent, so only `confirmed` is read.
+            if (sk === 'password' || sk === 'confirm') continue;
             if (typeof sv === 'boolean') snap[sk] = sv;
-            else if ((sk === 'activeField' || sk === 'stage') && typeof sv === 'string' && sv.length <= 40) {
+            else if (REGISTRATION_TEXT_KEYS.has(sk) && typeof sv === 'string' && sv.length <= 40) {
               snap[sk] = sv;
             }
           }
@@ -628,6 +659,12 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       emailDeclined: !!task.emailDeclined || registrationSnapshot?.emailDeclined === true,
       passwordSet: registrationSnapshot?.password === true,
       agreed: registrationSnapshot?.agreed === true,
+      confirmed: registrationSnapshot?.confirmed === true,
+      // The exact box the screen moved to after a failure. Only the field name
+      // travels, never the message or the value.
+      errorField: typeof registrationSnapshot?.errorField === 'string'
+        ? registrationSnapshot.errorField.slice(0, 40)
+        : null,
       // Multi-turn task memory. `adDraft` holds only values a validating tool
       // already accepted, so it is safe for the same-turn "what is left"
       // computation.

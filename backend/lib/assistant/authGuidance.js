@@ -1,17 +1,19 @@
 /* lib/assistant/authGuidance.js
  *
- * Spoken guidance for authentication moments. Pure data + one pure function:
- * no database, no network, no secrets, so it is unit-testable everywhere.
+ * Spoken guidance for authentication moments. Pure data and one pure
+ * function: no database, no network, no secrets, so it can be unit-tested
+ * anywhere.
  *
- * Each entry maps a real backend/screen outcome (never a model invention) to
- * ONE short spoken sentence plus the screen that fixes it. The model must
- * call navigateToScreen itself — this module only supplies the words.
+ * Each entry maps a real backend or screen outcome to one short spoken
+ * sentence plus the screen that fixes it. The model still calls
+ * navigateToScreen itself; this module only supplies the words.
  *
- * Security rules enforced by shape, not by trust:
- * - Input is a closed allowlist of outcome codes. Free-text errors from the
- *   backend never reach the model verbatim (they could contain emails).
- * - Nothing here asks for, repeats, or fills a password. Ever.
- * - `nextScreen` is validated against the same allowlist the navigator uses.
+ * Security rules:
+ * - Input is a fixed allowlist of outcome codes. Free-text backend errors
+ *   never reach the model verbatim because they could contain email
+ *   addresses.
+ * - Nothing here asks for, repeats or fills a password.
+ * - `nextScreen` is checked against the same allowlist the navigator uses.
  */
 
 'use strict';
@@ -23,6 +25,39 @@ const GUIDANCE = {
   email_exists: {
     say: 'You already have an account with that email. Let us sign you in instead.',
     nextScreen: 'signin',
+  },
+  // POST /register -> phone number already registered. The name does not
+  // matter: two people can share a name, but one number is one account.
+  phone_exists: {
+    say: 'That phone number already has an account. Your name can stay the same, but use a different number — or let us sign you in instead.',
+    nextScreen: 'signin',
+  },
+  // POST /register -> the form itself is incomplete or invalid. The screen
+  // focuses the exact field, so the model only needs to name it.
+  registration_invalid: {
+    say: 'Something on the form needs fixing. I have moved you to the exact box — fix it and try again.',
+    nextScreen: null,
+  },
+  // POST /register -> server-side failure after validation.
+  registration_failed: {
+    say: 'Creating the account did not work just now. Nothing was lost — check the connection and try again.',
+    nextScreen: null,
+  },
+  // POST /register -> the code is too short or too simple. The secure box has
+  // a suggested code the user can take instead of typing a new one.
+  weak_password: {
+    say: 'That secret code is not strong enough. In the code box, tap Suggest a code, then Use this code — it is already safe.',
+    nextScreen: null,
+  },
+  // POST /register -> neither an email nor a phone number was filled.
+  missing_identifier: {
+    say: 'We still need one way to find your account. Give me an email address, or a phone number instead.',
+    nextScreen: null,
+  },
+  // POST /register -> the number is not a valid Nigerian mobile number.
+  invalid_phone: {
+    say: 'That number did not look complete. Give me all 11 digits, starting with zero, and say them slowly.',
+    nextScreen: null,
   },
   // POST /login -> "Invalid password"
   invalid_password: {

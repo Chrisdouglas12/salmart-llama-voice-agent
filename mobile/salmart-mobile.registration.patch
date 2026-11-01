@@ -1,5 +1,5 @@
 diff --git a/src/ai/AIContext.js b/src/ai/AIContext.js
-index b6b543d..de3f23d 100644
+index b6b543d..0004dc9 100644
 --- a/src/ai/AIContext.js
 +++ b/src/ai/AIContext.js
 @@ -1,26 +1,24 @@
@@ -44,66 +44,23 @@ index b6b543d..de3f23d 100644
   */
  
  import React, {
-@@ -38,22 +36,31 @@ import {
- import { apiUpload } from '../api/client';
- 
- import { useAuth } from '../state/AuthContext';
--import { useNavActions } from '../state/Navigation';
-+import { useNavActions, useNavSelector } from '../state/Navigation';
- import { TAB_ROOTS } from '../state/routes';
- import { runGoogleAuth } from '../utils/oauth';
- import {
--  createConversation, rebindConversation, sendTurn,
-+  createConversation, rebindConversation, sendTurn, sendTurnStream,
-+  selectProductToCart,
-   confirmAction as apiConfirm, cancelAction as apiCancel,
- } from './api';
--import { speakReply, stopSpeaking } from './speak';
-+import { speakReply, queueSpeech, stopSpeaking } from './speak';
+@@ -48,12 +46,12 @@ import {
+ import { speakReply, stopSpeaking } from './speak';
  import { takeAuthOutcome } from './authOutcome';
  import { peekFormSnapshot } from './formSnapshot';
 +import { peekRegistrationSnapshot, takeRegistrationSnapshot } from './registrationSnapshot';
-+import { getLiveScreen, setLiveScreen } from './liveScreen';
  
  const ANON_KEY = 'salmart:ai:anonymousId';
  
 -// Server-side allowlist mirror (services/ai/tools/navigationTools.js). The
 -// server only emits `navigate` for these keys; the client re-checks so a
 -// malformed/forged response can never push an unknown or AI route.
-+// Screens whose whole purpose is getting the user signed in. A conversation
-+// that was last used here is about registration, not shopping: once the account
-+// exists it must not be resumed, or the server replays its registration goal.
-+const AUTH_SCREENS = new Set([
-+  'signin', 'register', 'verifyEmail', 'passwordReset', 'completeProfile',
-+]);
-+
 +// Mirrors the server allowlist in services/ai/tools/navigationTools.js. The
 +// client checks again so a malformed response cannot open an unknown screen.
  const NAVIGABLE_SCREENS = new Set([
    'market', 'requests', 'alerts', 'messages', 'deals', 'profile',
    'search', 'cart', 'referral', 'createAd', 'createRequest', 'editProfile',
-@@ -78,6 +85,20 @@ function referralFromUrl(url) {
-   }
- }
- 
-+/**
-+ * Mirrors the live route into `liveScreen` without re-rendering the provider.
-+ *
-+ * Rendered inside AIProvider (which itself sits inside NavigationProvider), it
-+ * subscribes to the route and writes it to the module store. Returning null
-+ * keeps navigation changes from touching the provider's render tree.
-+ */
-+function NavMirror() {
-+  const current = useNavSelector(s => s.current);
-+  const panel = useNavSelector(s => s.currentPanel);
-+  setLiveScreen(current?.name, current?.params, panel);
-+  return null;
-+}
-+
- export function AIProvider({ children }) {
-   const { ready: authReady, isAuthenticated, adoptWebSession } = useAuth();
-   const nav = useNavActions();
-@@ -89,16 +110,19 @@ export function AIProvider({ children }) {
+@@ -89,16 +87,15 @@ export function AIProvider({ children }) {
    const [isReady, setIsReady] = useState(false);
    const [recording, setRecording] = useState(false);
    const [transcribing, setTranscribing] = useState(false);
@@ -112,10 +69,6 @@ index b6b543d..de3f23d 100644
 +  // Latest content for the global mic card. `confirmation` keeps the turn's
 +  // Confirm/Cancel actions available inline.
    const [lastVoice, setLastVoice] = useState(null);
-+  // Real model ids reported by the server (never hardcoded): `stt` from the
-+  // transcription response, `brain` from the turn that wrote the reply. The
-+  // card header names whichever model is actually working right now.
-+  const [models, setModels] = useState({ stt: null, brain: null });
    const [authBusy, setAuthBusy] = useState(false);
 -  // Attention nudge for the mic FAB (welcome pulse, "Tap to talk"). Never
 -  // records — it only animates the existing button. Cleared on record.
@@ -130,13 +83,7 @@ index b6b543d..de3f23d 100644
    const SILENCE_DB = -35;
    const SILENCE_MS = 1200;
    const LISTEN_GRACE_MS = 1500;
-@@ -110,17 +134,37 @@ export function AIProvider({ children }) {
- 
-   const anonRef = useRef(null);
-   const convRef = useRef(null);
-+  // The language the buyer last spoke (yor/hau/ibo), so the model-written
-+  // touch reply answers in the same language. Null means English/Pidgin.
-+  const lastLangRef = useRef(null);
+@@ -113,13 +110,23 @@ export function AIProvider({ children }) {
    const authBusyRef = useRef(false);
    const messagesRef = useRef([]);
    messagesRef.current = messages;
@@ -162,17 +109,9 @@ index b6b543d..de3f23d 100644
 +  // Screen context from the last turn, used to avoid opening the chat when the
 +  // user is already in that thread.
    const lastContextRef = useRef(null);
-+  // The route the last turn ran on. An auth-screen turn means the conversation
-+  // is a registration flow, which must not be carried across sign-in.
-+  const lastTurnScreenRef = useRef(null);
-+  // True when the anonymous conversation was used on an auth screen. Checked on
-+  // the false→true auth transition to decide between rebinding and starting a
-+  // clean authenticated conversation.
-+  const preAuthFlowRef = useRef(false);
  
    const ensureConversation = useCallback(async () => {
-     if (convRef.current) return convRef.current;
-@@ -147,8 +191,8 @@ export function AIProvider({ children }) {
+@@ -147,8 +154,8 @@ export function AIProvider({ children }) {
      return res.conversationId;
    }, []);
  
@@ -183,43 +122,13 @@ index b6b543d..de3f23d 100644
    useEffect(() => {
      if (!authReady) return undefined;
      let mounted = true;
-@@ -174,18 +218,54 @@ export function AIProvider({ children }) {
+@@ -174,18 +181,25 @@ export function AIProvider({ children }) {
      if (isAuthenticated) {
        const anonymousId = anonRef.current;
        const cid = convRef.current;
 -      if (!anonymousId || !cid) return;
 -      // Only resume when the user was actually talking before signing in —
 -      // a manual sign-in with no AI history must stay silent.
-+      // A conversation used on an auth screen belongs to the registration flow.
-+      // Continuing it once the account exists makes the server replay its
-+      // "what is your email?" goal instead of answering the user's new request,
-+      // so drop it and start a clean authenticated conversation instead.
-+      const live = getLiveScreen();
-+      // The route the AI was last used on is the reliable signal; the screen
-+      // showing at this instant may already have flipped to the panel behind
-+      // SessionGate, which would otherwise discard a genuine shopping chat.
-+      const staleAuthFlow = skipResumeRef.current
-+        || preAuthFlowRef.current
-+        || AUTH_SCREENS.has(lastTurnScreenRef.current);
-+      skipResumeRef.current = false;
-+      preAuthFlowRef.current = false;
-+      lastTurnScreenRef.current = null;
-+      resumeRef.current = false;
-+
-+      if (staleAuthFlow) {
-+        convRef.current = null;
-+        anonRef.current = null;
-+        setConversationId(null);
-+        setMessages([]);
-+        setStatus('idle');
-+        setError(null);
-+        AsyncStorage.removeItem(ANON_KEY).catch(() => {});
-+        rebindPromiseRef.current = (async () => {
-+          try { await ensureConversation(); } catch (_e) { /* surfaced on first send */ }
-+        })();
-+        return;
-+      }
-+
 +      if (!anonymousId || !cid) {
 +        // Nothing to rebind. A registration greeting still runs on the new
 +        // signed-in conversation.
@@ -235,7 +144,9 @@ index b6b543d..de3f23d 100644
            await rebindConversation({ conversationId: cid, anonymousId });
            anonRef.current = null;
            AsyncStorage.removeItem(ANON_KEY).catch(() => {});
-           if (hadConversation) resumeRef.current = true;
+-          if (hadConversation) resumeRef.current = true;
++          if (hadConversation && !skipResumeRef.current) resumeRef.current = true;
++          skipResumeRef.current = false;
          } catch (_e) {
 -          // 404 = lost / mismatched — start clean rather than leave it stuck.
 +          // 404 means the anonymous id was lost or belongs to another
@@ -243,7 +154,7 @@ index b6b543d..de3f23d 100644
            convRef.current = null;
            anonRef.current = null;
            setConversationId(null);
-@@ -194,6 +274,7 @@ export function AIProvider({ children }) {
+@@ -194,6 +208,7 @@ export function AIProvider({ children }) {
          }
        })();
      } else {
@@ -251,14 +162,7 @@ index b6b543d..de3f23d 100644
        convRef.current = null;
        anonRef.current = null;
        setConversationId(null);
-@@ -202,15 +283,17 @@ export function AIProvider({ children }) {
-       setError(null);
-       setLastVoice(null);
-       stopSpeaking();
-+      resumeRef.current = false;
-+      preAuthFlowRef.current = false;
-+      lastTurnScreenRef.current = null;
-       AsyncStorage.removeItem(ANON_KEY).catch(() => {});
+@@ -206,11 +221,10 @@ export function AIProvider({ children }) {
      }
    }, [authReady, isAuthenticated, ensureConversation]);
  
@@ -274,145 +178,8 @@ index b6b543d..de3f23d 100644
    const runNavigation = useCallback((structured) => {
      const blocks = Array.isArray(structured) ? structured : [];
      let target = null;
-@@ -227,87 +310,185 @@ export function AIProvider({ children }) {
-     return target.target;
-   }, [nav]);
- 
--  const send = useCallback(async (text, context) => {
-+  // Shared tail of every successful turn: queue the assistant message, then
-+  // run navigation and the seller-chat handoff. Used by the single-reply path
-+  // and the streamed path alike, so both behave identically once the turn data
-+  // is in.
-+  const finishTurn = useCallback((res, context) => {
-+    const reply = res.reply || '';
-+    // Remember which real models answered, so the card can name them.
-+    if (res?.models && (res.models.brain || res.models.stt)) {
-+      setModels(prev => ({
-+        stt: res.models.stt || prev.stt,
-+        brain: res.models.brain || prev.brain,
-+      }));
-+    }
-+    setMessages(prev => [...prev, {
-+      key: newKey(),
-+      role: 'assistant',
-+      text: reply,
-+      structured: res.structured || null,
-+      confirmation: res.confirmation_required || null,
-+      at: Date.now(),
-+    }]);
-+    setStatus('idle');
-+
-+    // Move after the assistant message is queued, so a screen that mounts
-+    // because of this call already sees its fill_* patch.
-+    const navigatedTo = runNavigation(res.structured);
-+
-+    // Seller-chat handoff: the user agreed to message the seller, so carry
-+    // them to the chat with the draft pre-filled, unless they are already in
-+    // that thread (context.chatPartnerId matches). The block carries ids and
-+    // display text only, and the id shape is checked again here.
-+    let handoffTo = null;
-+    if (Array.isArray(res.structured)) {
-+      const h = res.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId);
-+      if (h
-+        && /^[a-fA-F0-9]{24}$/.test(String(h.sellerId))
-+        && String(context?.chatPartnerId || '') !== String(h.sellerId)) {
-+        handoffTo = 'chat';
-+        nav.push('chat', {
-+          partnerId: String(h.sellerId),
-+          ...(h.sellerName ? { name: String(h.sellerName).slice(0, 80) } : {}),
-+          ...(h.draft ? { draft: String(h.draft).slice(0, 500) } : {}),
-+          ...((h.productId || h.imageUrl || h.productTitle) ? {
-+            product: {
-+              ...(h.productId ? { productId: String(h.productId) } : {}),
-+              ...(h.productTitle ? { title: String(h.productTitle).slice(0, 120) } : {}),
-+              ...(h.imageUrl ? { imageUrl: String(h.imageUrl).slice(0, 2048) } : {}),
-+              ...(typeof h.price === 'number' ? { price: h.price } : {}),
-+            },
-+          } : {}),
-+        });
-+      }
-+    }
-+
-+    return {
-+      ok: true,
-+      reply,
-+      structured: res.structured || null,
-+      confirmation: res.confirmation_required || null,
-+      navigatedTo: handoffTo || navigatedTo,
-+    };
-+  }, [runNavigation, nav]);
-+
-+  // Streams one turn: each sentence renders in the chat and is spoken the
-+  // moment it arrives, so the user hears the answer starting while the turn
-+  // still completes. Returns null when nothing was heard, so the caller runs
-+  // the single-reply path instead. A partial stream keeps what was heard and
-+  // finishes the turn from it rather than failing.
-+  const sendStreamedTurn = useCallback(async ({ cid, clean, anonId, turnContext, context }) => {
-+    const streamKey = newKey();
-+    let full = '';
-+    let heard = 0;
-+    setMessages(prev => [...prev, { key: streamKey, role: 'assistant', text: '', streaming: true, at: Date.now() }]);
-+    try {
-+      const res = await sendTurnStream({
-+        conversationId: cid,
-+        message: clean,
-+        anonymousId: anonId,
-+        context: turnContext,
-+        onSentence: (sentence) => {
-+          heard += 1;
-+          full = full ? `${full} ${sentence}` : sentence;
-+          setMessages(prev => prev.map(m => (
-+            m.key === streamKey ? { ...m, text: full } : m
-+          )));
-+          queueSpeech(sentence);
-+        },
-+      });
-+      if (!res?.success) throw new Error(res?.message || 'turn_failed');
-+      // Swap the live placeholder for the exact server text, then run the
-+      // shared tail (navigation, handoff) once.
-+      setMessages(prev => prev.filter(m => m.key !== streamKey));
-+      const out = finishTurn(res, context);
-+      return { ...out, spoken: true };
-+    } catch (_e) {
-+      if (!heard) {
-+        setMessages(prev => prev.filter(m => m.key !== streamKey));
-+        return null;
-+      }
-+      setMessages(prev => prev.map(m => (
-+        m.key === streamKey ? { ...m, streaming: false } : m
-+      )));
-+      setStatus('idle');
-+      return { ok: true, reply: full, structured: null, confirmation: null, navigatedTo: null, spoken: true, partial: true };
-+    }
-+  }, [finishTurn]);
-+
-+  const send = useCallback(async (text, context, opts) => {
-     const clean = String(text || '').trim();
-     if (!clean) return { ok: false, code: 'empty', message: 'I did not catch that.' };
-     if (status === 'sending') {
-       return { ok: false, code: 'busy', message: 'One moment — I am still working on the last request.' };
-     }
--    lastContextRef.current = context || null;
-+    const live = getLiveScreen();
-+    const authed = authRef.current.isAuthenticated;
-+    // The screen the user is looking at right now, not the one a screen passed
-+    // in when it opened. `screen` stays the caller's hint (where the user came
-+    // from, for AI Mode); `activeScreen` is the live truth.
-+    const activeScreen = live.name || context?.screen || null;
-+
-+    // Every turn tells the server the real auth state and route, so a signed-in
-+    // user is never asked to sign in again and a question asked on Checkout is
-+    // not answered as if the user were still on Market.
-+    const baseContext = {
-+      ...(context || {}),
-+      platform: Platform.OS,
-+      authState: authed ? 'signed_in' : 'guest',
-+      authed,
-+      ...(activeScreen ? { activeScreen } : {}),
-+    };
-+    lastContextRef.current = baseContext;
-+    lastTurnScreenRef.current = activeScreen;
-+    if (activeScreen && AUTH_SCREENS.has(activeScreen)) preAuthFlowRef.current = true;
+@@ -236,14 +250,22 @@ export function AIProvider({ children }) {
+     lastContextRef.current = context || null;
  
      // Carry a real auth outcome code from the screen (401/403/429/offline)
 -    // into this turn. Only the closed code travels, never the server text.
@@ -423,108 +190,45 @@ index b6b543d..de3f23d 100644
      const listing = peekFormSnapshot();
 -    const turnContext = (authOutcome || listing)
 -      ? { ...(context || {}), ...(authOutcome ? { authOutcome } : {}), ...(listing ? { listing } : {}) }
--      : (context || undefined);
--    if (authOutcome || listing) lastContextRef.current = turnContext;
 +    // Registration flags belong to the register screen. Once the user moves
 +    // away, the old form state must not ride along with an unrelated turn.
 +    const registration = context?.screen === 'register' ? peekRegistrationSnapshot() : null;
-+    const turnContext = {
-+      ...baseContext,
-+      ...(authOutcome ? { authOutcome } : {}),
-+      ...(listing ? { listing } : {}),
-+      ...(registration ? { registration } : {}),
-+    };
++    const turnContext = (authOutcome || listing || registration)
++      ? {
++        ...(context || {}),
++        ...(authOutcome ? { authOutcome } : {}),
++        ...(listing ? { listing } : {}),
++        ...(registration ? { registration } : {}),
++      }
+       : (context || undefined);
+-    if (authOutcome || listing) lastContextRef.current = turnContext;
 +    if (authOutcome || listing || registration) lastContextRef.current = turnContext;
  
      setStatus('sending');
      setError(null);
--    setMessages(prev => [...prev, { key: newKey(), role: 'user', text: clean, at: Date.now() }]);
-+    // A voice-unclear continuation is not something the user said, so it must
-+    // not appear as a user bubble.
-+    if (!opts?.hidden) {
-+      setMessages(prev => [...prev, { key: newKey(), role: 'user', text: clean, at: Date.now() }]);
-+    }
+@@ -270,14 +292,14 @@ export function AIProvider({ children }) {
+       }]);
+       setStatus('idle');
  
-     try {
-       const cid = await ensureConversation();
-+      const anonId = authRef.current.isAuthenticated ? undefined : (anonRef.current || undefined);
-+      // A streamed turn speaks each sentence the moment it arrives, so the
-+      // user hears the answer starting while the turn is still completing.
-+      // Anything unexpected falls back to the single-reply path below.
-+      if (opts?.streamSpeech && typeof sendTurnStream === 'function') {
-+        const streamed = await sendStreamedTurn({
-+          cid, clean, anonId, turnContext, context,
-+        });
-+        if (streamed) return streamed;
-+      }
-       const res = await sendTurn({
-         conversationId: cid,
-         message: clean,
--        anonymousId: authRef.current.isAuthenticated ? undefined : (anonRef.current || undefined),
-+        anonymousId: anonId,
-         context: turnContext,
-       });
-       if (!res?.success) throw new Error(res?.message || 'turn_failed');
- 
--      const reply = res.reply || '';
--      setMessages(prev => [...prev, {
--        key: newKey(),
--        role: 'assistant',
--        text: reply,
--        structured: res.structured || null,
--        confirmation: res.confirmation_required || null,
--        at: Date.now(),
--      }]);
--      setStatus('idle');
--
 -      // Move only after the assistant message is queued, so a screen that
 -      // mounts because of this call already sees its fill_* patch.
--      const navigatedTo = runNavigation(res.structured);
--
--      // Seller-chat handoff: the user agreed to message the seller, so carry
++      // Move after the assistant message is queued, so a screen that mounts
++      // because of this call already sees its fill_* patch.
+       const navigatedTo = runNavigation(res.structured);
+ 
+       // Seller-chat handoff: the user agreed to message the seller, so carry
 -      // them to the chat with the draft pre-filled — unless they are already
 -      // standing in that exact thread (context.chatPartnerId matches).
 -      // The block carries only ids + display text; re-check the id shape.
--      let handoffTo = null;
--      if (Array.isArray(res.structured)) {
--        const h = res.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId);
--        if (h
--          && /^[a-fA-F0-9]{24}$/.test(String(h.sellerId))
--          && String(context?.chatPartnerId || '') !== String(h.sellerId)) {
--          handoffTo = 'chat';
--          nav.push('chat', {
--            partnerId: String(h.sellerId),
--            ...(h.sellerName ? { name: String(h.sellerName).slice(0, 80) } : {}),
--            ...(h.draft ? { draft: String(h.draft).slice(0, 500) } : {}),
--            ...((h.productId || h.imageUrl || h.productTitle) ? {
--              product: {
--                ...(h.productId ? { productId: String(h.productId) } : {}),
--                ...(h.productTitle ? { title: String(h.productTitle).slice(0, 120) } : {}),
--                ...(h.imageUrl ? { imageUrl: String(h.imageUrl).slice(0, 2048) } : {}),
--                ...(typeof h.price === 'number' ? { price: h.price } : {}),
--              },
--            } : {}),
--          });
--        }
--      }
--
--      return {
--        ok: true,
--        reply,
--        structured: res.structured || null,
--        confirmation: res.confirmation_required || null,
--        navigatedTo: handoffTo || navigatedTo,
--      };
-+      return finishTurn(res, context);
-     } catch (e) {
-       setError(e);
-       setStatus('error');
-@@ -317,13 +498,13 @@ export function AIProvider({ children }) {
-       setMessages(prev => [...prev, { key: newKey(), role: 'assistant', kind: 'error', text: human, at: Date.now() }]);
-       return { ok: false, code: 'error', error: e, message: human };
++      // them to the chat with the draft pre-filled, unless they are already in
++      // that thread (context.chatPartnerId matches). The block carries ids and
++      // display text only, and the id shape is checked again here.
+       let handoffTo = null;
+       if (Array.isArray(res.structured)) {
+         const h = res.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId);
+@@ -319,11 +341,11 @@ export function AIProvider({ children }) {
      }
--  }, [status, ensureConversation, runNavigation, nav]);
-+  }, [status, ensureConversation, runNavigation, nav, finishTurn, sendStreamedTurn]);
+   }, [status, ensureConversation, runNavigation, nav]);
  
 -  // Resume the pre-auth intention once, right after a rebind that followed a
 -  // real conversation. The line is truthful (they did just sign in) and the
@@ -539,7 +243,7 @@ index b6b543d..de3f23d 100644
    useEffect(() => {
      if (!resumeRef.current || !authReady || !isAuthenticated) return;
      resumeRef.current = false;
-@@ -339,6 +520,108 @@ export function AIProvider({ children }) {
+@@ -339,6 +361,35 @@ export function AIProvider({ children }) {
      })();
    }, [authReady, isAuthenticated, send]);
  
@@ -572,83 +276,10 @@ index b6b543d..de3f23d 100644
 +    })();
 +  }, [welcomeTick, authReady, isAuthenticated, send]);
 +
-+  /**
-+   * Touch-to-buy. The buyer tapped a product card; send that exact productId
-+   * to the deterministic server route, queue the confirmation in the chat,
-+   * and speak the price and description. No model call, so the confirmation
-+   * arrives immediately and cannot drift to another product.
-+   */
-+  const selectProduct = useCallback(async (product) => {
-+    const productId = product?.productId || product?._id;
-+    if (!productId) {
-+      return { ok: false, code: 'BAD_PRODUCT', message: 'That item could not be found.' };
-+    }
-+
-+    if (!authRef.current.isAuthenticated) {
-+      const line = 'Please sign in first, then touch the item again.';
-+      setMessages(prev => [...prev, {
-+        key: newKey(), role: 'assistant', kind: 'error', text: line, at: Date.now(),
-+      }]);
-+      setLastVoice({ text: line, kind: 'error', at: Date.now() });
-+      await speakReply(line);
-+      return { ok: false, code: 'AUTH_REQUIRED', message: line };
-+    }
-+
-+    try {
-+      const cid = conversationId || await ensureConversation().catch(() => null);
-+      const res = await selectProductToCart({
-+        productId,
-+        itemType: product.itemType === 'showroom' ? 'showroom' : 'post',
-+        conversationId: cid || undefined,
-+        lang: lastLangRef.current || undefined,
-+      });
-+      if (!res?.success) throw new Error(res?.message || 'Could not add it to your cart.');
-+
-+      // The tap reply names its real author too (null when the template spoke).
-+      if (res?.models && (res.models.brain || res.models.stt)) {
-+        setModels(prev => ({
-+          stt: res.models.stt || prev.stt,
-+          brain: res.models.brain || prev.brain,
-+        }));
-+      }
-+      const line = res.reply || 'I added it to your cart.';
-+      const blocks = Array.isArray(res.structured) ? res.structured : [];
-+      setMessages(prev => [...prev, {
-+        key: newKey(),
-+        role: 'assistant',
-+        text: line,
-+        structured: blocks,
-+        at: Date.now(),
-+      }]);
-+      const added = blocks.find(b => b && b.type === 'product_added');
-+      setLastVoice({
-+        text: line,
-+        kind: 'reply',
-+        chatHandoff: added?.chat || null,
-+        at: Date.now(),
-+      });
-+      await speakReply(line);
-+      return { ok: true, ...res };
-+    } catch (e) {
-+      const code = e?.status === 401 ? 'AUTH_REQUIRED' : (e?.code || 'CART_FAILED');
-+      const line = e?.status === 401
-+        ? 'Please sign in first, then touch the item again.'
-+        : e?.isNetwork
-+          ? 'No internet connection. Please try again.'
-+          : (e?.message || 'I could not add that item. Please touch another one.');
-+      setMessages(prev => [...prev, {
-+        key: newKey(), role: 'assistant', kind: 'error', text: line, at: Date.now(),
-+      }]);
-+      setLastVoice({ text: line, kind: 'error', at: Date.now() });
-+      await speakReply(line);
-+      return { ok: false, code, message: line };
-+    }
-+  }, [conversationId, ensureConversation]);
-+
    const confirm = useCallback(async (actionId) => {
      try {
        const res = await apiConfirm(actionId);
-@@ -350,8 +633,8 @@ export function AIProvider({ children }) {
+@@ -350,8 +401,8 @@ export function AIProvider({ children }) {
          cleared.push({ key: newKey(), role: 'assistant', text: 'Done. That action is complete.', at: Date.now() });
          return cleared;
        });
@@ -659,7 +290,7 @@ index b6b543d..de3f23d 100644
        if (r.sellerId
          && /^[a-fA-F0-9]{24}$/.test(String(r.sellerId))
          && String(lastContextRef.current?.chatPartnerId || '') !== String(r.sellerId)) {
-@@ -386,9 +669,10 @@ export function AIProvider({ children }) {
+@@ -386,9 +437,10 @@ export function AIProvider({ children }) {
      return { ok: true };
    }, []);
  
@@ -673,7 +304,7 @@ index b6b543d..de3f23d 100644
    const confirmVoice = useCallback(async (actionId) => {
      const res = await confirm(actionId);
      const sentToSeller = res?.ok && res?.result?.sellerId;
-@@ -420,21 +704,33 @@ export function AIProvider({ children }) {
+@@ -420,21 +472,33 @@ export function AIProvider({ children }) {
      if (shouldSpeak) await speakReply(line);
    }, []);
  
@@ -715,18 +346,7 @@ index b6b543d..de3f23d 100644
     */
    const startGoogleAuth = useCallback(async ({ url, platform } = {}) => {
      if (authBusyRef.current) return { ok: false, code: 'busy' };
-@@ -447,6 +743,10 @@ export function AIProvider({ children }) {
- 
-     authBusyRef.current = true;
-     setAuthBusy(true);
-+    // This conversation is now about getting signed in. If it succeeds, the
-+    // anonymous conversation must not be rebound: the server would keep its
-+    // registration goal and ask the new account for the same details again.
-+    preAuthFlowRef.current = true;
-     try {
-       const { status, params } = await runGoogleAuth({
-         forceAccountPicker: true,
-@@ -486,8 +786,8 @@ export function AIProvider({ children }) {
+@@ -486,8 +550,8 @@ export function AIProvider({ children }) {
        await speakReply(line);
        return { ok: false, code: 'incomplete' };
      } catch (e) {
@@ -737,7 +357,7 @@ index b6b543d..de3f23d 100644
        // by the backend before it reached this block.
        if (url) {
          try {
-@@ -532,14 +832,7 @@ export function AIProvider({ children }) {
+@@ -532,14 +596,7 @@ export function AIProvider({ children }) {
    useEffect(() => () => { stopSpeaking(); }, []);
  
    /**
@@ -753,7 +373,7 @@ index b6b543d..de3f23d 100644
     * speak. Shared by the manual second tap and the silence auto-stop.
     */
    const stopVoiceTurn = useCallback(async (context) => {
-@@ -548,54 +841,86 @@ export function AIProvider({ children }) {
+@@ -548,54 +605,54 @@ export function AIProvider({ children }) {
      let heardLang = null;
      try {
        await audioRecorder.stop();
@@ -776,6 +396,8 @@ index b6b543d..de3f23d 100644
 -          await speakReply(line, heardLang);
 -          return;
 -        }
+-
+-        // Show "Thinking…" rather than "Transcribing…" while the turn runs.
 +      // Leave the recording audio session so the reply plays on the speaker.
 +      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
 +      const uri = audioRecorder.uri;
@@ -785,22 +407,11 @@ index b6b543d..de3f23d 100644
 +      form.append('audio', { uri, name: 'voice.m4a', type: 'audio/m4a' });
 +      const res = await apiUpload('/api/assistant/transcribe', form);
 +      const transcript = String(res?.text || '').trim();
-+      // The real transcription model id travels with the response; the card
-+      // header names it while listening on the next turns.
-+      if (res?.model) {
-+        setModels(prev => ({ ...prev, stt: String(res.model) }));
-+      }
 +      // The reply, in text and voice, follows the speaker's language.
 +      heardLang = (res && typeof res.lang === 'string' && res.lang !== 'eng') ? res.lang : null;
-+      lastLangRef.current = heardLang;
- 
--        // Show "Thinking…" rather than "Transcribing…" while the turn runs.
++
 +      if (!res?.success || !transcript) {
-+        // Nothing usable was heard. A canned "I did not hear you" is wrong
-+        // here: the phone number or price may already be filled, and asking
-+        // again makes the assistant look deaf. Hand the turn to the model with
-+        // the real form state so it says what is done and asks only the next
-+        // missing thing.
++        const line = 'I could not catch that. Please try again.';
          setTranscribing(false);
 -        const turnContext = { ...(context || {}), ...(heardLang ? { lang: heardLang } : {}) };
 -        const result = await send(transcript, turnContext);
@@ -826,30 +437,16 @@ index b6b543d..de3f23d 100644
 -          chatHandoff: chatBlock || null,
 -          at: Date.now(),
 -        });
-+        const unclearContext = {
-+          ...(context || {}),
-+          event: 'voice_unclear',
-+          ...(heardLang ? { lang: heardLang } : {}),
-+        };
-+        const continued = await send('(silence)', unclearContext, { streamSpeech: true, hidden: true })
-+          .catch(() => null);
-+        if (continued && continued.ok) return;
-+
-+        // The turn itself failed (offline, session expired): only now fall back
-+        // to a spoken retry line.
-+        const line = continued?.message || 'I could not catch that. Please try again.';
 +        setLastVoice({ text: line, kind: 'error', at: Date.now() });
          await speakReply(line, heardLang);
 -      } catch (e) {
 +        return;
 +      }
 +
-+      // The card shows "Thinking…" while the turn runs. The turn streams: each
-+      // sentence speaks as it arrives, so `spoken` means there is nothing
-+      // left to say at the end.
++      // The card shows "Thinking…" while the turn runs.
 +      setTranscribing(false);
 +      const turnContext = { ...(context || {}), ...(heardLang ? { lang: heardLang } : {}) };
-+      const result = await send(transcript, turnContext, { streamSpeech: true });
++      const result = await send(transcript, turnContext);
 +      const line = result.ok
 +        ? (result.reply || 'Done.')
 +        : (result.message || 'The assistant is temporarily unavailable. Please try again.');
@@ -863,13 +460,6 @@ index b6b543d..de3f23d 100644
 +      const chatBlock = result.ok && Array.isArray(result.structured)
 +        ? result.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId)
 +        : null;
-+      // A search returns products for the touch picker. The floating mic keeps
-+      // the block so a voice turn started on Market opens the same sheet as a
-+      // turn inside AI Mode.
-+      const productBlock = result.ok && Array.isArray(result.structured)
-+        ? result.structured.find(b => b && b.type === 'product_results'
-+          && Array.isArray(b.products) && b.products.length)
-+        : null;
 +
 +      setLastVoice({
 +        text: line,
@@ -877,15 +467,14 @@ index b6b543d..de3f23d 100644
 +        confirmation: result.ok ? (result.confirmation || null) : null,
 +        authUrl: authBlock || null,
 +        chatHandoff: chatBlock || null,
-+        products: productBlock || null,
 +        at: Date.now(),
 +      });
-+      if (!result.spoken) await speakReply(line, heardLang);
++      await speakReply(line, heardLang);
 +    } catch (e) {
          const line = e?.status === 401
            ? 'Your session has expired. Please sign in again.'
            : e?.isNetwork
-@@ -611,13 +936,13 @@ export function AIProvider({ children }) {
+@@ -611,13 +668,13 @@ export function AIProvider({ children }) {
      [audioRecorder, send],
    );
  
@@ -904,7 +493,7 @@ index b6b543d..de3f23d 100644
    useEffect(() => {
      if (!recording) return undefined;
      const startedAt = Date.now();
-@@ -658,12 +983,12 @@ export function AIProvider({ children }) {
+@@ -658,12 +715,12 @@ export function AIProvider({ children }) {
    }, [recording, audioRecorder, stopVoiceTurn, SILENCE_DB, SILENCE_MS, LISTEN_GRACE_MS, MAX_LISTEN_MS]);
  
    /**
@@ -922,7 +511,7 @@ index b6b543d..de3f23d 100644
     */
    const toggleRecording = useCallback(async (context) => {
      if (transcribing) return;
-@@ -673,14 +998,14 @@ export function AIProvider({ children }) {
+@@ -673,14 +730,14 @@ export function AIProvider({ children }) {
        return;
      }
  
@@ -939,7 +528,7 @@ index b6b543d..de3f23d 100644
        await stopSpeaking();
        await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
        await audioRecorder.prepareToRecordAsync();
-@@ -694,16 +1019,19 @@ export function AIProvider({ children }) {
+@@ -694,14 +751,14 @@ export function AIProvider({ children }) {
      }
    }, [recording, transcribing, send, audioRecorder, stopVoiceTurn]);
  
@@ -955,51 +544,26 @@ index b6b543d..de3f23d 100644
 -  // product card. The user presses send in the chat — nothing auto-sends here.
 +  // Seller-chat handoff: open ChatScreen with the AI draft and product card
 +  // pre-filled. The user presses send in the chat; nothing is auto-sent.
-+  // The floating voice card is dismissed first so it never covers the
-+  // product preview or the composer on the chat screen.
    const openSellerChat = useCallback((handoff) => {
      if (!handoff?.sellerId) return;
-+    setLastVoice(null);
      nav.push('chat', {
-       partnerId: String(handoff.sellerId),
-       ...(handoff.sellerName ? { name: String(handoff.sellerName).slice(0, 80) } : {}),
-@@ -717,21 +1045,26 @@ export function AIProvider({ children }) {
-         },
-       } : {}),
-     });
--  }, [nav]);
-+  }, [nav, dismissVoice]);
- 
-   const value = useMemo(() => ({
+@@ -723,12 +780,12 @@ export function AIProvider({ children }) {
      conversationId, messages, status, error, isReady, recording, transcribing,
--    lastVoice, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
--    send, confirm, cancel, reset, openSellerChat, micNudge, nudgeMic,
+     lastVoice, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
+     send, confirm, cancel, reset, openSellerChat, micNudge, nudgeMic,
 -    startGoogleAuth, authBusy, notice, speak,
-+    lastVoice, models, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
-+    send, selectProduct, confirm, cancel, reset, openSellerChat, micNudge, nudgeMic,
 +    startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
    }), [
--    conversationId, messages, status, error, isReady, send, confirm, cancel, reset,
--    recording, transcribing, toggleRecording, lastVoice, dismissVoice, confirmVoice, cancelVoice,
-+    conversationId, messages, status, error, isReady, send, selectProduct, confirm, cancel, reset,
-+    recording, transcribing, toggleRecording, lastVoice, models, dismissVoice, confirmVoice, cancelVoice,
+     conversationId, messages, status, error, isReady, send, confirm, cancel, reset,
+     recording, transcribing, toggleRecording, lastVoice, dismissVoice, confirmVoice, cancelVoice,
      openSellerChat, micNudge, nudgeMic,
 -    startGoogleAuth, authBusy, notice, speak,
 +    startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
    ]);
  
--  return <AIContext.Provider value={value}>{children}</AIContext.Provider>;
-+  return (
-+    <AIContext.Provider value={value}>
-+      <NavMirror />
-+      {children}
-+    </AIContext.Provider>
-+  );
- }
- 
- export function useAI() {
+   return <AIContext.Provider value={value}>{children}</AIContext.Provider>;
 diff --git a/src/ai/UseAIPatch.js b/src/ai/UseAIPatch.js
-index 49f621c..a3a6cd5 100644
+index 49f621c..302cdba 100644
 --- a/src/ai/UseAIPatch.js
 +++ b/src/ai/UseAIPatch.js
 @@ -1,36 +1,28 @@
@@ -1054,7 +618,7 @@ index 49f621c..a3a6cd5 100644
   */
  
  import { useCallback, useEffect, useRef, useState } from 'react';
-@@ -42,16 +34,22 @@ import { drainFormPatch } from './api';
+@@ -42,16 +34,21 @@ import { drainFormPatch } from './api';
  
  const VALID_TARGETS = new Set(['createAd', 'createRequest', 'editProfile', 'register']);
  
@@ -1069,17 +633,16 @@ index 49f621c..a3a6cd5 100644
    fill_profile: 'editProfile',
    fill_register: 'register',
 +  register_focus: 'register',
-+  create_account: 'register',
    open_picker: 'createAd',
  };
  
 +// Steps the register screen is allowed to open by itself.
-+const REGISTER_FOCUS = new Set(['fullName', 'firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement', 'confirm']);
++const REGISTER_FOCUS = new Set(['fullName', 'firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement']);
 +
  export function useAIPatch(target) {
    if (!VALID_TARGETS.has(target)) {
      throw new Error(`useAIPatch: unknown target "${target}"`);
-@@ -71,8 +69,8 @@ export function useAIPatch(target) {
+@@ -71,8 +68,8 @@ export function useAIPatch(target) {
  
    // ── Source 1: fresh turn results ──────────────────────────────────────────
    // Scan the newest assistant message once for a fill_* block matching this
@@ -1090,7 +653,7 @@ index 49f621c..a3a6cd5 100644
    useEffect(() => {
      if (!messages.length) return;
      const latest = messages[messages.length - 1];
-@@ -83,6 +81,14 @@ export function useAIPatch(target) {
+@@ -83,6 +80,14 @@ export function useAIPatch(target) {
      for (const b of blocks) {
        if (!b || typeof b !== 'object') continue;
        if (BLOCK_TO_TARGET[b.type] !== target) continue;
@@ -1105,21 +668,7 @@ index 49f621c..a3a6cd5 100644
        // Picker requests carry a kind, not fields.
        if (b.type === 'open_picker') {
          if (b.kind !== 'photo' && b.kind !== 'camera' && b.kind !== 'digitalFile') continue;
-@@ -90,6 +96,13 @@ export function useAIPatch(target) {
-         setPatch({ fields: {}, request: { kind: b.kind, auto: b.auto === true }, say: b.say || null, source: 'turn' });
-         return;
-       }
-+      // The user said yes to the spoken summary: open the confirmation card.
-+      // Creating the account still needs their tap on it.
-+      if (b.type === 'create_account') {
-+        lastSeenMsgKeyRef.current = latest.key;
-+        setPatch({ fields: {}, request: { kind: 'createAccount' }, say: null, source: 'turn' });
-+        return;
-+      }
-       if (!b.fields || typeof b.fields !== 'object') continue;
- 
-       lastSeenMsgKeyRef.current = latest.key;
-@@ -102,9 +115,9 @@ export function useAIPatch(target) {
+@@ -102,9 +107,9 @@ export function useAIPatch(target) {
    }, [messages, target]);
  
    // ── Source 2: backend drain ───────────────────────────────────────────────
@@ -1132,7 +681,7 @@ index 49f621c..a3a6cd5 100644
    const tryDrain = useCallback(async () => {
      if (!isAuthenticated) return;
      if (drainedRef.current) return;
-@@ -116,8 +129,8 @@ export function useAIPatch(target) {
+@@ -116,8 +121,8 @@ export function useAIPatch(target) {
          setPatch({ fields: res.patch.fields, say: res.patch.say || null, source: 'drain' });
        }
      } catch (_e) {
@@ -1143,7 +692,7 @@ index 49f621c..a3a6cd5 100644
        drainedRef.current = false;
      }
    }, [isAuthenticated, target, patch]);
-@@ -127,7 +140,7 @@ export function useAIPatch(target) {
+@@ -127,7 +132,7 @@ export function useAIPatch(target) {
      // eslint-disable-next-line react-hooks/exhaustive-deps
    }, [isAuthenticated, target]);
  
@@ -1154,10 +703,10 @@ index 49f621c..a3a6cd5 100644
        if (next !== 'active') return;
 diff --git a/src/ai/registrationSnapshot.js b/src/ai/registrationSnapshot.js
 new file mode 100644
-index 0000000..9fba104
+index 0000000..312f4a9
 --- /dev/null
 +++ b/src/ai/registrationSnapshot.js
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,41 @@
 +/**
 + * Registration snapshot sent with the next AI turn.
 + *
@@ -1170,10 +719,6 @@ index 0000000..9fba104
 +
 +let snapshot = null;
 +
-+// The only string values allowed in a snapshot. Everything else must be a
-+// boolean, so no typed value (name, email, phone) can leave the screen.
-+const TEXT_KEYS = new Set(['activeField', 'stage', 'errorField', 'errorCode']);
-+
 +/** Replace the pending snapshot. Only safe flags and step names are kept. */
 +export function reportRegistrationSnapshot(flags) {
 +  if (!flags || typeof flags !== 'object' || Array.isArray(flags)) {
@@ -1183,11 +728,9 @@ index 0000000..9fba104
 +  const clean = {};
 +  for (const [key, value] of Object.entries(flags).slice(0, 24)) {
 +    if (!/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(key)) continue;
-+    // Reserved names: a boolean called `confirm` could be mistaken for consent,
-+    // and a password value must never travel. Only `confirmed` is read.
 +    if (key === 'password' || key === 'passwordValue' || key === 'confirm') continue;
 +    if (typeof value === 'boolean') clean[key] = value;
-+    else if (TEXT_KEYS.has(key) && typeof value === 'string' && value.length <= 40) {
++    else if ((key === 'activeField' || key === 'stage') && typeof value === 'string' && value.length <= 40) {
 +      clean[key] = value;
 +    }
 +  }
@@ -1206,7 +749,7 @@ index 0000000..9fba104
 +  return value;
 +}
 diff --git a/src/ai/speak.js b/src/ai/speak.js
-index 365e647..75f30b8 100644
+index 365e647..5d60ea7 100644
 --- a/src/ai/speak.js
 +++ b/src/ai/speak.js
 @@ -1,73 +1,13 @@
@@ -1287,28 +830,23 @@ index 365e647..75f30b8 100644
  /** Stop any speech before recording or a new reply. */
  export async function stopSpeaking() {
    try {
-@@ -76,35 +16,34 @@ export async function stopSpeaking() {
+@@ -76,10 +16,10 @@ export async function stopSpeaking() {
  }
  
  /**
 - * Speak one assistant reply in the speaker's language, preferring a
 - * Nigerian voice where the phone has one. Resolves once playback starts.
-+ * Queue one sentence behind any speech already playing. Used while a streamed
-+ * reply is still arriving: the first sentence starts at once and the rest
-+ * follow without gaps or cut-offs. Never stops current speech — use
-+ * speakReply for a fresh reply that must interrupt.
++ * Speak one assistant reply with the device's default voice. Resolves once
++ * playback starts.
   */
 -export async function speakReply(text, lang) {
-+export function queueSpeech(text) {
++export async function speakReply(text) {
    const line = String(text || '').trim();
    if (!line) return;
  
--  // A fresh reply always interrupts the previous one.
-   try {
--    Speech.stop();
-+    Speech.speak(line, { rate: 1.0 });
+@@ -88,23 +28,7 @@ export async function speakReply(text, lang) {
+     Speech.stop();
    } catch (_e) { /* speech is optional */ }
-+}
  
 -  const key = Object.prototype.hasOwnProperty.call(DEVICE_LANG, lang) ? lang : 'eng';
 -  let voice = null;
@@ -1317,14 +855,7 @@ index 365e647..75f30b8 100644
 -  } catch (_e) {
 -    voice = null;
 -  }
-+/**
-+ * Speak one assistant reply with the device's default voice. Resolves once
-+ * playback starts.
-+ */
-+export async function speakReply(text) {
-+  const line = String(text || '').trim();
-+  if (!line) return;
- 
+-
 -  const options = { rate: 1.0 };
 -  if (voice?.identifier) {
 -    options.voice = voice.identifier;
@@ -1332,11 +863,7 @@ index 365e647..75f30b8 100644
 -  } else {
 -    options.language = DEVICE_LANG[key];
 -  }
-+  // A fresh reply always interrupts the previous one.
-+  try {
-+    Speech.stop();
-+  } catch (_e) { /* speech is optional */ }
- 
+-
    try {
 -    Speech.speak(line, options);
 +    Speech.speak(line, { rate: 1.0 });
@@ -1391,7 +918,7 @@ index 0613df1..6bc958e 100644
  export async function scanChatImageUrl(imageUrl, opts) {
    const d = await apiPost('/api/messages/scan-image', { imageUrl }, { retries: 0, timeout: 90000, ...opts });
 diff --git a/src/screens/RegisterScreen.js b/src/screens/RegisterScreen.js
-index 184e003..a559134 100644
+index 184e003..41c4c2b 100644
 --- a/src/screens/RegisterScreen.js
 +++ b/src/screens/RegisterScreen.js
 @@ -1,18 +1,20 @@
@@ -1462,7 +989,7 @@ index 184e003..a559134 100644
  /** Pull a referral code out of route params, accepting every web alias. */
  function pickRef(params) {
    if (!params) return '';
-@@ -64,19 +62,114 @@ function pickRef(params) {
+@@ -64,19 +62,74 @@ function pickRef(params) {
    return '';
  }
  
@@ -1500,44 +1027,6 @@ index 184e003..a559134 100644
 +  'palm', 'gold', 'star', 'moon', 'bird', 'fish', 'tree', 'rain',
 +];
 +
-+/** Last four digits only, so the spoken summary never reads a full number. */
-+function maskPhone(value) {
-+  const digits = String(value || '').replace(/\D/g, '');
-+  if (!digits) return '';
-+  if (digits.length <= 4) return digits;
-+  return `ending ${digits.slice(-4)}`;
-+}
-+
-+/** First two letters of the mailbox plus the domain: jo***@gmail.com. */
-+function maskEmail(value) {
-+  const [local = '', domain = ''] = String(value || '').trim().split('@');
-+  if (!domain) return '';
-+  if (local.length <= 2) return `${local}***@${domain}`;
-+  return `${local.slice(0, 2)}***@${domain}`;
-+}
-+
-+/**
-+ * One sentence the assistant can say before anything is created. It names the
-+ * name and the masked contact, and never mentions the password.
-+ */
-+function spokenSummary({ fullName, phoneNumber, email }) {
-+  const name = String(fullName || '').trim();
-+  const contact = phoneNumber.trim()
-+    ? `your phone number ${maskPhone(phoneNumber)}`
-+    : (email.trim() ? `your email ${maskEmail(email)}` : '');
-+  if (name && contact) return `Your name is ${name}, and ${contact}. Should I create your account?`;
-+  if (name) return `Your name is ${name}. Should I create your account?`;
-+  if (contact) return `I have ${contact}. Should I create your account?`;
-+  return 'Check your details on the screen. Should I create your account?';
-+}
-+
-+/** The existing agreement text, in a form that can be read aloud. */
-+const AGREEMENT_SPOKEN =
-+  'This is the Salmart agreement. Salmart is a marketplace where people buy and sell. '
-+  + 'By ticking the box, you accept Salmart\'s Terms and Privacy Policy. '
-+  + 'Tap the box that says I accept and want to use Salmart. '
-+  + 'Your account cannot be created until you accept.';
-+
 +/**
 + * A readable code made from two words and a number, generated on the phone.
 + * It never leaves the device through the assistant; the user decides whether
@@ -1548,9 +1037,7 @@ index 184e003..a559134 100644
 +  try {
 +    bytes = Crypto.getRandomBytes(8);
 +  } catch (_e) {
-+    // No secure randomness on this device. Do not fall back to Math.random:
-+    // a guessable sign-in code is worse than letting the user type their own.
-+    return '';
++    bytes = Array.from({ length: 8 }, () => Math.floor(Math.random() * 256));
 +  }
 +  const word = i => PASSWORD_WORDS[bytes[i] % PASSWORD_WORDS.length];
 +  let first = word(0);
@@ -1580,7 +1067,7 @@ index 184e003..a559134 100644
    });
    const [agreed, setAgreed] = useState(false);
    const [busy, setBusy] = useState(false);
-@@ -86,15 +179,35 @@ export default function RegisterScreen({ route }) {
+@@ -86,15 +139,22 @@ export default function RegisterScreen({ route }) {
    const [sentTo, setSentTo] = useState(null);
    const [resendBusy, setResendBusy] = useState(false);
    const [resendNote, setResendNote] = useState('');
@@ -1591,11 +1078,6 @@ index 184e003..a559134 100644
 +  const [activeField, setActiveField] = useState(null);
 +  const [passwordOpen, setPasswordOpen] = useState(false);
 +  const [agreementOpen, setAgreementOpen] = useState(false);
-+  const [confirmOpen, setConfirmOpen] = useState(false);
-+  const [confirmed, setConfirmed] = useState(false);
-+  const [keyboardOpen, setKeyboardOpen] = useState(false);
-+  const [lastError, setLastError] = useState('');
-+  const [errorField, setErrorField] = useState(null);
 +  const [submitted, setSubmitted] = useState(false);
 +  const [suggestion, setSuggestion] = useState('');
 +  const [copied, setCopied] = useState(false);
@@ -1611,43 +1093,10 @@ index 184e003..a559134 100644
 +  const passwordValueRef = useRef('');
 +  passwordValueRef.current = form.password;
 +  const submitLockRef = useRef(false);
-+  // Which fields the user typed themselves. The assistant uses this to avoid
-+  // overwriting a value that was entered by hand.
-+  const manualRef = useRef({ fullName: false, email: false, phoneNumber: false });
-+  // Set when the agreement is opened by the assistant's turn: its spoken reply
-+  // already explains the step, so the screen does not speak over it.
-+  const silentAgreementRef = useRef(false);
-+  // The decline consequence is said once, not on every close.
-+  const declineExplainedRef = useRef(false);
  
    // Referral: the code arrives either in the route params (a deep link like
    // …/#/register?ref=CODE) or from the persisted pending code. When it comes
-@@ -106,8 +219,24 @@ export default function RegisterScreen({ route }) {
-   const [refFromLink, setRefFromLink] = useState(false);
- 
-   const set = useCallback((key, value) => {
-+    manualRef.current[key] = true;
-     setForm(f => ({ ...f, [key]: value }));
-     setErrs(e => (e[key] ? { ...e, [key]: '' } : e));
-+    // The user is fixing something: the old error no longer describes the form.
-+    setError('');
-+    setLastError('');
-+    setErrorField(null);
-+  }, []);
-+
-+  // The keyboard is a real state of this screen, so the assistant knows whether
-+  // the user is typing or looking at the form.
-+  useEffect(() => {
-+    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardOpen(true));
-+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardOpen(false));
-+    return () => {
-+      show.remove();
-+      hide.remove();
-+    };
-   }, []);
- 
-   useEffect(() => {
-@@ -133,17 +262,61 @@ export default function RegisterScreen({ route }) {
+@@ -133,17 +193,49 @@ export default function RegisterScreen({ route }) {
      setRefFromLink(false);
    }, []);
  
@@ -1673,18 +1122,6 @@ index 184e003..a559134 100644
 +      setCopied(false);
 +    }
 +  }, []);
-+
-+  // Open the last card: a spoken summary plus the one button that creates the
-+  // account. Nothing is submitted from here; the user taps Create my account.
-+  // `announce` is false when an AI turn opened it, because that reply is
-+  // already being spoken.
-+  const openConfirmCard = useCallback(({ announce = true } = {}) => {
-+    setAgreementOpen(false);
-+    setPasswordOpen(false);
-+    Keyboard.dismiss();
-+    setConfirmOpen(true);
-+    if (announce) notice(spokenSummary(form), { speak: true });
-+  }, [form, notice]);
 +
 +  const useSuggestion = useCallback((code) => {
 +    set('password', code);
@@ -1714,7 +1151,7 @@ index 184e003..a559134 100644
      }));
      if (f.referrer) {
        setReferrer(String(f.referrer));
-@@ -151,109 +324,345 @@ export default function RegisterScreen({ route }) {
+@@ -151,109 +243,172 @@ export default function RegisterScreen({ route }) {
        setRefFromLink(false);
      }
      setError('');
@@ -1726,21 +1163,11 @@ index 184e003..a559134 100644
 +      setAiNote('Create your secret code in the box. Do not share it with anyone.');
 +    } else if (focus === 'agreement') {
 +      setAiNote('Read the agreement and tick the box if you accept.');
-+    } else if (focus === 'confirm') {
-+      setAiNote('Check the name and the number, then tap Create my account.');
 +    }
 +
-+    if (aiPatch.request?.kind === 'createAccount') {
-+      // The model only opens the card. The tap creates the account, and the
-+      // turn's own reply already spoke the summary.
-+      openConfirmCard({ announce: false });
-+    } else if (focus === 'password') setPasswordOpen(true);
-+    else if (focus === 'agreement') {
-+      silentAgreementRef.current = true;
-+      setAgreementOpen(true);
-+    } else if (focus === 'confirm') {
-+      openConfirmCard({ announce: false });
-+    } else if (focus === 'fullName' || focus === 'firstName' || focus === 'lastName') fullNameRef.current?.focus?.();
++    if (focus === 'password') setPasswordOpen(true);
++    else if (focus === 'agreement') setAgreementOpen(true);
++    else if (focus === 'fullName' || focus === 'firstName' || focus === 'lastName') fullNameRef.current?.focus?.();
 +    else if (focus === 'email') emailRef.current?.focus?.();
 +    else if (focus === 'phone' || focus === 'phoneNumber') phoneRef.current?.focus?.();
 +
@@ -1749,8 +1176,7 @@ index 184e003..a559134 100644
 -    if (target === 'firstName') firstRef.current?.focus?.();
 -    else if (target === 'lastName') lastRef.current?.focus?.();
 -    else if (target === 'email') emailRef.current?.focus?.();
--  }, [aiPatch, ackAiPatch]);
-+  }, [aiPatch, ackAiPatch, openConfirmCard]);
+   }, [aiPatch, ackAiPatch]);
  
 -  // Read the remaining manual steps aloud, in the same order as the form.
 -  const readSignupSteps = useCallback(() => {
@@ -1766,18 +1192,31 @@ index 184e003..a559134 100644
 -      );
 -    } catch (_e) { /* speech is optional */ }
 -  }, []);
-+  // When the agreement card opens, say what it is and where to press. This is
-+  // the step users go quiet on: the card alone does not explain itself aloud.
-+  // An AI turn that opened the card already said its own sentence, so it is
-+  // skipped once to avoid two voices.
++  // Report only safe flags. The password is reduced to a single boolean and is
++  // never part of the snapshot the assistant receives.
++  const hasPassword = form.password.length > 0;
++  const passwordSet = hasPassword && !passwordError(form.password);
 +  useEffect(() => {
-+    if (!agreementOpen) return;
-+    if (silentAgreementRef.current) {
-+      silentAgreementRef.current = false;
-+      return;
-+    }
-+    notice(AGREEMENT_SPOKEN, { speak: true });
-+  }, [agreementOpen, notice]);
++    const parts = splitFullName(form.fullName);
++    reportRegistrationSnapshot({
++      fullName: !!(parts.firstName && parts.lastName),
++      firstName: !!parts.firstName,
++      lastName: !!parts.lastName,
++      email: !!form.email.trim(),
++      phone: !!form.phoneNumber.trim(),
++      emailDeclined: !form.email.trim() && !!form.phoneNumber.trim(),
++      password: passwordSet,
++      agreed,
++      submitting: busy,
++      submitted,
++      failed: !!error,
++      activeField: activeField || '',
++      stage: agreed ? 'ready' : (passwordSet ? 'agreement' : 'collecting'),
++    });
++  }, [
++    form.fullName, form.email, form.phoneNumber,
++    passwordSet, agreed, busy, submitted, error, activeField,
++  ]);
  
 -  const speakPassword = useCallback(value => {
 -    const pw = String(value || spokenPassword || '');
@@ -1807,61 +1246,21 @@ index 184e003..a559134 100644
 -  useEffect(() => () => {
 -    try { Speech.stop(); } catch (_e) { /* speech is optional */ }
 -  }, []);
-+  // Report only safe flags. The password is reduced to a single boolean and is
-+  // never part of the snapshot the assistant receives.
-+  const hasPassword = form.password.length > 0;
-+  const passwordSet = hasPassword && !passwordError(form.password);
-+  useEffect(() => {
-+    const parts = splitFullName(form.fullName);
-+    reportRegistrationSnapshot({
-+      fullName: !!(parts.firstName && parts.lastName),
-+      firstName: !!parts.firstName,
-+      lastName: !!parts.lastName,
-+      email: !!form.email.trim(),
-+      phone: !!form.phoneNumber.trim(),
-+      emailDeclined: !form.email.trim() && !!form.phoneNumber.trim(),
-+      password: passwordSet,
-+      agreed,
-+      // The spoken summary was shown and the user has not changed a value
-+      // since. Submission itself is reported separately by `submitting`.
-+      confirmed,
-+      confirmVisible: confirmOpen,
-+      termsVisible: agreementOpen,
-+      passwordVisible: passwordOpen,
-+      submitting: busy,
-+      keyboardOpen,
-+      submitted,
-+      failed: !!error,
-+      manuallyEdited: Object.values(manualRef.current).some(Boolean),
-+      activeField: activeField || '',
-+      ...(errorField ? { errorField } : {}),
-+      ...(lastError ? { errorCode: lastError } : {}),
-+      stage: confirmed
-+        ? 'ready'
-+        : (agreed ? 'confirm' : (passwordSet ? 'agreement' : 'collecting')),
-+    });
-+  }, [
-+    form.fullName, form.email, form.phoneNumber,
-+    passwordSet, agreed, confirmed, confirmOpen, agreementOpen, passwordOpen,
-+    busy, keyboardOpen, submitted, error, activeField, errorField, lastError,
-+  ]);
-+
 +  // Leaving this screen ends its form state; a later turn on another screen
 +  // must not inherit these flags.
 +  useEffect(() => () => { takeRegistrationSnapshot(); }, []);
-+
+ 
+-  const validate = useCallback(() => {
 +  // Read the remaining steps aloud, in the same order as the form.
 +  const readSignupSteps = useCallback(() => {
 +    speak(
 +      'This is the create account screen. Tell me your full name. '
 +      + 'Then I will ask if you have an email. If you do not, a phone number is fine. '
 +      + 'Then a small box opens for your secret code. Do not share that code with anyone. '
-+      + 'Last, read the agreement and tick the box. Then a small card shows your name and number one more time, '
-+      + 'and you tap Create my account. I will take you to Market.'
++      + 'Last, read the agreement and tick the box. I will create your account and take you to Market.'
 +    );
 +  }, [speak]);
- 
--  const validate = useCallback(() => {
++
 +  const validate = useCallback(({ confirmedAgreement = false } = {}) => {
      const e = {};
 -    if (!form.firstName.trim()) e.firstName = 'Required.';
@@ -1894,45 +1293,17 @@ index 184e003..a559134 100644
      return Object.keys(e).length === 0;
    }, [form, agreed]);
  
-+  // The first box that would stop a submission, in the same order as the form.
-+  // Used both by validation and by the assistant when it names the fix.
-+  const firstInvalidField = useCallback(() => {
-+    if (!form.fullName.trim() || !splitFullName(form.fullName).lastName) return 'fullName';
-+    if ((!form.email.trim() && !form.phoneNumber.trim())
-+      || (form.email.trim() && !EMAIL_RE.test(form.email.trim()))) return 'email';
-+    if (form.phoneNumber.trim() && !PHONE_RE.test(form.phoneNumber.trim())) return 'phoneNumber';
-+    if (passwordError(form.password)) return 'password';
-+    if (!agreed) return 'agreement';
-+    return null;
-+  }, [form, agreed]);
-+
-   const submit = useCallback(async () => {
+-  const submit = useCallback(async () => {
++  const submit = useCallback(async ({ confirmedAgreement = false } = {}) => {
      setError('');
 -    if (!validate()) return;
-+    setLastError('');
-+    setErrorField(null);
 +    if (submitLockRef.current || busy) return;
-+    if (!validate()) {
++    if (!validate({ confirmedAgreement })) {
 +      setAgreementOpen(false);
-+      setConfirmOpen(false);
-+      // Point the assistant at the exact box that failed, so the next thing
-+      // the user hears names the right place instead of a vague retry.
-+      const firstBad = firstInvalidField();
-+      if (firstBad) setActiveField(firstBad);
-+      setErrorField(firstBad || null);
-+      setLastError('registration_invalid');
-+      reportAuthOutcome('registration_invalid');
-+      const line = firstBad === 'agreement'
-+        ? 'Please accept the terms to continue.'
-+        : 'Please check the highlighted box, then try again.';
-+      setError(line);
-+      notice(line, { speak: true });
 +      return;
 +    }
 +
 +    submitLockRef.current = true;
-+    setConfirmed(true);
-+    setConfirmOpen(false);
 +    // Registration signs the user in on purpose. The generic resume turn is
 +    // skipped and the assistant writes the welcome instead.
 +    welcomeAfterRegistration();
@@ -1976,76 +1347,26 @@ index 184e003..a559134 100644
 -        setError('An account already uses that email. Try signing in instead.');
 -        reportAuthOutcome('email_exists');
 -      } else if (e?.isNetwork) {
--        setError('No internet connection. Check your network and try again.');
--        reportAuthOutcome('network_unavailable');
 +      submitLockRef.current = false;
-+      // The summary is no longer trusted once the server refuses: let the user
-+      // confirm again after the fix.
-+      setConfirmed(false);
 +      // Nothing was signed in, so let a later real sign-in resume normally.
 +      welcomeAfterRegistration(false);
-+      // Route every failure through the outcome code the server sent
-+      // (phone_exists, email_exists, invalid_email, invalid_phone,
-+      // weak_password, registration_failed, …). The next AI turn reads that
-+      // code and explains what went wrong plus the exact fix, speaking it
-+      // aloud; the screen focuses the failing box at the same time.
-+      const code = String(e?.code || '').toLowerCase();
-+      const field = e?.data?.field || e?.field || null;
-+      let line = '';
-+      let focus = null;
-+      let outcome = code || 'registration_failed';
 +      if (e?.isNetwork) {
-+        line = 'No internet connection. Check your network and try again.';
-+        outcome = 'network_unavailable';
-+      } else if (code === 'phone_exists' || /phone number already exists/i.test(e?.message || '')) {
-+        line = 'An account already uses that phone number. Your name is fine — it is the number that is taken. Try signing in instead, or use a different number.';
-+        focus = 'phoneNumber';
-+        outcome = 'phone_exists';
-+      } else if (code === 'email_exists' || e?.status === 409 || /email already exists|already uses that email/i.test(e?.message || '')) {
-+        line = 'An account already uses that email. Try signing in instead.';
-+        focus = 'email';
-+        outcome = 'email_exists';
-+      } else if (code === 'invalid_email' || code === 'email_invalid') {
-+        line = 'That email address does not look right. Check it and type it again.';
-+        focus = 'email';
-+        outcome = 'email_invalid';
-+      } else if (code === 'invalid_phone') {
-+        line = 'That phone number does not look right. Enter an 11-digit number.';
-+        focus = 'phoneNumber';
-+        outcome = 'invalid_phone';
-+      } else if (code === 'weak_password') {
-+        line = 'That secret code is not strong enough. Tap Suggest a code, then Use this code.';
-+        focus = 'password';
-+        outcome = 'weak_password';
-+      } else if (code === 'missing_identifier') {
-+        line = 'We still need an email address or a phone number.';
-+        focus = 'email';
-+        outcome = 'missing_identifier';
+         setError('No internet connection. Check your network and try again.');
+         reportAuthOutcome('network_unavailable');
++      } else if (/phone number already exists/i.test(e?.message || '')) {
++        setError('An account already uses that phone number. Try signing in instead.');
++      } else if (e?.status === 409 || /email already exists|already uses that email/i.test(e?.message || '')) {
++        setError('An account already uses that email. Try signing in instead.');
++        reportAuthOutcome('email_exists');
        } else {
--        setError(e?.message || 'Could not create your account. Please try again.');
-+        line = 'Could not create your account just now. Nothing was lost. Check the connection and try again.';
-+        if (field === 'phoneNumber' || field === 'email' || field === 'password' || field === 'fullName') focus = field;
-+        outcome = field === 'phoneNumber' ? 'invalid_phone'
-+          : field === 'email' ? 'invalid_email'
-+            : 'registration_failed';
+         setError(e?.message || 'Could not create your account. Please try again.');
        }
-+      setError(line);
-+      setLastError(outcome);
-+      setErrorField(focus);
-+      if (focus) setActiveField(focus);
-+      else setActiveField(null);
-+      reportAuthOutcome(outcome);
-+      // Heard as well as seen: the user may not be reading the screen.
-+      notice(line, { speak: true });
-+      // A password failure reopens the secure box so the fix is one tap away.
-+      if (outcome === 'weak_password') setPasswordOpen(true);
      } finally {
        setBusy(false);
      }
 -  }, [form, agreed, validate, register, referrer]);
 +  }, [
-+    busy, validate, firstInvalidField, register, form, referrer, nav,
-+    welcomeAfterRegistration, notice,
++    busy, validate, register, form, referrer, nav, welcomeAfterRegistration,
 +  ]);
 +
 +  const onAgreementAccepted = useCallback(() => {
@@ -2058,46 +1379,12 @@ index 184e003..a559134 100644
 +      && (form.email.trim() || form.phoneNumber.trim())
 +      && passwordSet
 +    );
-+    if (!complete) {
-+      // The screen names the missing step instead of pretending to finish.
-+      const next = !splitFullName(form.fullName).lastName
-+        ? 'fullName'
-+        : (form.email.trim() || form.phoneNumber.trim() ? 'password' : 'email');
-+      setActiveField(next);
-+      if (next === 'password') setPasswordOpen(true);
-+      return;
-+    }
++    if (!complete) return;
 +
-+    // Accepted is not the same as created: the summary card comes next, and
-+    // only its button submits.
-+    openConfirmCard();
-+  }, [form, passwordSet, openConfirmCard]);
-+
-+  const onAgreementDeclined = useCallback(() => {
-+    setAgreementOpen(false);
-+    setErrs(e => ({ ...e, agreed: '' }));
-+    if (declineExplainedRef.current) return;
-+    declineExplainedRef.current = true;
-+    notice(
-+      'That is your choice. Your account cannot be created until you accept, '
-+      + 'but nothing is lost — you can read it again whenever you are ready.',
-+      { speak: true },
-+    );
-+  }, [notice]);
-+
-+  const changeDetails = useCallback(() => {
-+    setConfirmOpen(false);
-+    const field = !form.fullName.trim() ? 'fullName'
-+      : (!form.email.trim() && !form.phoneNumber.trim() ? 'email' : null);
-+    if (field) setActiveField(field);
-+    notice('Tell me what to change: your name, email or phone number.', { speak: true });
-+  }, [form, notice]);
-+
-+  const cancelRegistration = useCallback(() => {
-+    setConfirmOpen(false);
-+    setConfirmed(false);
-+    notice('No account was created. Your details are still here when you are ready.', { speak: true });
-+  }, [notice]);
++    // Only now, with everything present, does the assistant announce creation.
++    notice('I am creating your account now.', { speak: true });
++    submit({ confirmedAgreement: true });
++  }, [form, passwordSet, notice, submit]);
 +
 +  const toggleAgreement = useCallback(() => {
 +    if (agreed) {
@@ -2106,36 +1393,10 @@ index 184e003..a559134 100644
 +    }
 +    onAgreementAccepted();
 +  }, [agreed, onAgreementAccepted]);
-+
-+  // The form's own Create account button uses the same path as the assistant:
-+  // validate, accept the terms, then show the summary. It never submits on the
-+  // first tap.
-+  const requestCreate = useCallback(() => {
-+    setError('');
-+    setLastError('');
-+    setErrorField(null);
-+    if (busy) return;
-+    if (!validate({ confirmedAgreement: true })) {
-+      const firstBad = firstInvalidField();
-+      if (firstBad && firstBad !== 'agreement') setActiveField(firstBad);
-+      setErrorField(firstBad === 'agreement' ? null : firstBad);
-+      setLastError('registration_invalid');
-+      reportAuthOutcome('registration_invalid');
-+      const line = 'Please check the highlighted box, then try again.';
-+      setError(line);
-+      notice(line, { speak: true });
-+      return;
-+    }
-+    if (!agreed) {
-+      setAgreementOpen(true);
-+      return;
-+    }
-+    openConfirmCard();
-+  }, [busy, validate, firstInvalidField, agreed, openConfirmCard, notice]);
  
    const googleSignUp = useCallback(async () => {
      if (googleBusy) return;
-@@ -268,7 +677,7 @@ export default function RegisterScreen({ route }) {
+@@ -268,7 +423,7 @@ export default function RegisterScreen({ route }) {
        }
  
        const { status, params } = await runGoogleAuth(authOptions);
@@ -2144,7 +1405,7 @@ index 184e003..a559134 100644
        if (status === 'cancelled') return;
        if (status === 'setup') {
          nav.push('completeProfile', {
-@@ -284,7 +693,8 @@ export default function RegisterScreen({ route }) {
+@@ -284,7 +439,8 @@ export default function RegisterScreen({ route }) {
          setError('Google sign-up did not complete. Please try again.');
          return;
        }
@@ -2154,7 +1415,7 @@ index 184e003..a559134 100644
        await adoptWebSession({
          authToken: params.token,
          userId: params.userId,
-@@ -296,8 +706,9 @@ export default function RegisterScreen({ route }) {
+@@ -296,8 +452,9 @@ export default function RegisterScreen({ route }) {
        success();
        nav.resetTo('market');
      } catch (e) {
@@ -2165,7 +1426,7 @@ index 184e003..a559134 100644
        // FIX: Expose raw errors here so if it's still 404ing, you see exactly why.
        if (message.includes('DEVELOPER_ERROR') || message.includes('10')) {
          setError('Google Error: SHA-1 fingerprint mismatch (DEVELOPER_ERROR). Check Firebase console.');
-@@ -314,7 +725,7 @@ export default function RegisterScreen({ route }) {
+@@ -314,7 +471,7 @@ export default function RegisterScreen({ route }) {
      } finally {
        setGoogleBusy(false);
      }
@@ -2174,7 +1435,7 @@ index 184e003..a559134 100644
  
    const resend = useCallback(async () => {
      setResendNote('');
-@@ -333,7 +744,7 @@ export default function RegisterScreen({ route }) {
+@@ -333,7 +490,7 @@ export default function RegisterScreen({ route }) {
      }
    }, [sentTo, form.email]);
  
@@ -2183,7 +1444,7 @@ index 184e003..a559134 100644
    if (sentTo || needsVerification) {
      const address = sentTo || form.email.trim();
      return (
-@@ -362,7 +773,7 @@ export default function RegisterScreen({ route }) {
+@@ -362,7 +519,7 @@ export default function RegisterScreen({ route }) {
            <Body style={styles.doneBody}>
              We sent a secure verification link to{'\n'}
              <Body style={styles.doneEmail}>{address}</Body>
@@ -2192,7 +1453,7 @@ index 184e003..a559134 100644
            </Body>
  
            {!!resendNote && (
-@@ -466,48 +877,34 @@ export default function RegisterScreen({ route }) {
+@@ -466,48 +623,34 @@ export default function RegisterScreen({ route }) {
            )}
  
            <View style={styles.formBox}>
@@ -2260,36 +1521,20 @@ index 184e003..a559134 100644
                    placeholderTextColor={T.muted}
                    autoCapitalize="none"
                    keyboardType="email-address"
-@@ -518,67 +915,46 @@ export default function RegisterScreen({ route }) {
+@@ -518,67 +661,46 @@ export default function RegisterScreen({ route }) {
              </View>
  
              <View>
 -              <Text style={styles.fieldLabel}>Password</Text>
 -              <View style={[styles.fieldInput, errs.password && styles.fieldInputError]}>
 -                <Ionicons name="lock-closed-outline" size={18} color={T.muted} style={styles.fieldIcon} />
--                <TextInput
--                  value={form.password}
--                  onChangeText={t => set('password', t)}
--                  placeholder="At least 8 characters"
--                  placeholderTextColor={T.muted}
--                  secureTextEntry
--                  style={styles.input}
--                />
--              </View>
--              {!!errs.password && <Text style={styles.fieldError}>{errs.password}</Text>}
--            </View>
--
--            <View>
--              <Text style={styles.fieldLabel}>Confirm password</Text>
--              <View style={[styles.fieldInput, errs.confirm && styles.fieldInputError]}>
--                <Ionicons name="shield-outline" size={18} color={T.muted} style={styles.fieldIcon} />
 +              <Text style={styles.fieldLabel}>Phone number (use this if you have no email)</Text>
 +              <View style={[styles.fieldInput, errs.phoneNumber && styles.fieldInputError]}>
 +                <Ionicons name="call-outline" size={18} color={T.muted} style={styles.fieldIcon} />
                  <TextInput
--                  value={form.confirm}
--                  onChangeText={t => set('confirm', t)}
--                  placeholder="Re-enter password"
+-                  value={form.password}
+-                  onChangeText={t => set('password', t)}
+-                  placeholder="At least 8 characters"
 +                  ref={phoneRef}
 +                  value={form.phoneNumber}
 +                  onChangeText={t => set('phoneNumber', normalizePhoneInput(t))}
@@ -2302,6 +1547,22 @@ index 184e003..a559134 100644
                    style={styles.input}
                  />
                </View>
+-              {!!errs.password && <Text style={styles.fieldError}>{errs.password}</Text>}
+-            </View>
+-
+-            <View>
+-              <Text style={styles.fieldLabel}>Confirm password</Text>
+-              <View style={[styles.fieldInput, errs.confirm && styles.fieldInputError]}>
+-                <Ionicons name="shield-outline" size={18} color={T.muted} style={styles.fieldIcon} />
+-                <TextInput
+-                  value={form.confirm}
+-                  onChangeText={t => set('confirm', t)}
+-                  placeholder="Re-enter password"
+-                  placeholderTextColor={T.muted}
+-                  secureTextEntry
+-                  style={styles.input}
+-                />
+-              </View>
 -              {!!errs.confirm && <Text style={styles.fieldError}>{errs.confirm}</Text>}
 +              {!!errs.phoneNumber && <Text style={styles.fieldError}>{errs.phoneNumber}</Text>}
              </View>
@@ -2356,7 +1617,7 @@ index 184e003..a559134 100644
              </View>
  
              <View style={styles.refSection}>
-@@ -628,10 +1004,7 @@ export default function RegisterScreen({ route }) {
+@@ -628,10 +750,7 @@ export default function RegisterScreen({ route }) {
            </View>
  
            <Pressable
@@ -2368,16 +1629,16 @@ index 184e003..a559134 100644
              hitSlop={10}
              accessibilityRole="checkbox"
              accessibilityState={{ checked: agreed }}
-@@ -648,7 +1021,7 @@ export default function RegisterScreen({ route }) {
+@@ -648,7 +767,7 @@ export default function RegisterScreen({ route }) {
            {!!errs.agreed && <Text style={styles.errorTextInline}>{errs.agreed}</Text>}
  
            <Pressable
 -            onPress={busy ? undefined : submit}
-+            onPress={busy ? undefined : requestCreate}
++            onPress={busy ? undefined : () => submit()}
              disabled={busy}
              accessibilityRole="button"
              style={({ pressed }) => [styles.primaryBtn, busy && { opacity: 0.72 }, pressed && !busy && { opacity: 0.96 }]}
-@@ -693,6 +1066,267 @@ export default function RegisterScreen({ route }) {
+@@ -693,6 +812,187 @@ export default function RegisterScreen({ route }) {
            </View>
          </ScrollView>
        </KeyboardAvoidingView>
@@ -2494,20 +1755,14 @@ index 184e003..a559134 100644
 +                      splitFullName(form.fullName).lastName
 +                      && (form.email.trim() || form.phoneNumber.trim())
 +                    );
-+                    if (!restComplete) {
-+                      // Nothing to confirm yet: point at the missing box.
-+                      const field = !splitFullName(form.fullName).lastName ? 'fullName' : 'email';
-+                      setActiveField(field);
-+                      if (field === 'fullName') fullNameRef.current?.focus?.();
-+                      else emailRef.current?.focus?.();
-+                      return;
-+                    }
++                    if (!restComplete) return;
 +                    if (!agreed) {
 +                      // The agreement is the last step, so it opens by itself.
 +                      setAgreementOpen(true);
 +                      return;
 +                    }
-+                    openConfirmCard();
++                    notice('I am creating your account now.', { speak: true });
++                    submit({ confirmedAgreement: true });
 +                  }}
 +                  accessibilityRole="button"
 +                  style={({ pressed }) => [styles.modalPrimary, pressed && { opacity: 0.9 }]}
@@ -2548,15 +1803,6 @@ index 184e003..a559134 100644
 +              Salmart's Terms and Privacy Policy.
 +            </Text>
 +            <Pressable
-+              onPress={() => speak(AGREEMENT_SPOKEN)}
-+              accessibilityRole="button"
-+              accessibilityLabel="Read the agreement aloud"
-+              style={({ pressed }) => [styles.modalAgreeRow, pressed && { opacity: 0.85 }]}
-+            >
-+              <Ionicons name="volume-high-outline" size={18} color={T.emerald} />
-+              <Text style={styles.modalAgreeText}>Read it aloud</Text>
-+            </Pressable>
-+            <Pressable
 +              onPress={onAgreementAccepted}
 +              accessibilityRole="checkbox"
 +              accessibilityState={{ checked: agreed }}
@@ -2568,76 +1814,11 @@ index 184e003..a559134 100644
 +              <Text style={styles.modalAgreeText}>I accept and want to use Salmart.</Text>
 +            </Pressable>
 +            <Pressable
-+              onPress={onAgreementDeclined}
++              onPress={() => setAgreementOpen(false)}
 +              accessibilityRole="button"
 +              style={{ paddingVertical: 12 }}
 +            >
-+              <Text style={styles.modalCancel}>Not now</Text>
-+            </Pressable>
-+          </Pressable>
-+        </Pressable>
-+      </Modal>
-+
-+      {/* Last card before the server is called. The user sees and hears the
-+          name plus a masked phone or email, and only this button submits. */}
-+      <Modal
-+        visible={confirmOpen}
-+        transparent
-+        animationType="fade"
-+        onRequestClose={cancelRegistration}
-+      >
-+        <Pressable style={styles.modalBackdrop} onPress={cancelRegistration}>
-+          <Pressable style={styles.modalCard} onPress={() => {}}>
-+            <View style={styles.modalIconWrap}>
-+              <Ionicons name="person-add" size={22} color={T.emerald} />
-+            </View>
-+            <Text style={styles.modalTitle}>Create your account?</Text>
-+            <View style={styles.summaryBox}>
-+              <Text style={styles.summaryRow}>
-+                <Text style={styles.summaryLabel}>Name: </Text>
-+                {form.fullName.trim() || '—'}
-+              </Text>
-+              {!!form.phoneNumber.trim() && (
-+                <Text style={styles.summaryRow}>
-+                  <Text style={styles.summaryLabel}>Phone: </Text>
-+                  {form.phoneNumber.trim().replace(/\d(?=\d{4})/g, '•')}
-+                </Text>
-+              )}
-+              {!!form.email.trim() && (
-+                <Text style={styles.summaryRow}>
-+                  <Text style={styles.summaryLabel}>Email: </Text>
-+                  {maskEmail(form.email)}
-+                </Text>
-+              )}
-+            </View>
-+            <Text style={styles.modalHint}>
-+              Your secret code is not shown here and is only sent when you tap the button.
-+            </Text>
-+            <Pressable
-+              onPress={busy ? undefined : submit}
-+              disabled={busy}
-+              accessibilityRole="button"
-+              style={({ pressed }) => [styles.modalPrimary, busy && { opacity: 0.72 }, pressed && !busy && { opacity: 0.9 }]}
-+            >
-+              {busy ? (
-+                <ActivityIndicator size="small" color={T.onBrand} />
-+              ) : (
-+                <Text style={styles.modalPrimaryText}>Create my account</Text>
-+              )}
-+            </Pressable>
-+            <Pressable
-+              onPress={changeDetails}
-+              accessibilityRole="button"
-+              style={{ paddingVertical: 10 }}
-+            >
-+              <Text style={styles.suggestLink}>Change a detail</Text>
-+            </Pressable>
-+            <Pressable
-+              onPress={cancelRegistration}
-+              accessibilityRole="button"
-+              style={{ paddingVertical: 10 }}
-+            >
-+              <Text style={styles.modalCancel}>Cancel</Text>
++              <Text style={styles.modalCancel}>Not yet</Text>
 +            </Pressable>
 +          </Pressable>
 +        </Pressable>
@@ -2645,7 +1826,7 @@ index 184e003..a559134 100644
      </SafeAreaView>
    );
  }
-@@ -702,6 +1336,115 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+@@ -702,6 +1002,104 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
    flex: { flex: 1 },
    scroll: { flexGrow: 1, paddingHorizontal: 22, paddingTop: 12 },
  
@@ -2746,22 +1927,11 @@ index 184e003..a559134 100644
 +    marginBottom: 6,
 +  },
 +  modalAgreeText: { color: T.ink, fontSize: 14, flex: 1, lineHeight: 19 },
-+  summaryBox: {
-+    marginTop: 12,
-+    padding: 12,
-+    borderRadius: 14,
-+    backgroundColor: T.bgSoft,
-+    borderWidth: 1,
-+    borderColor: T.border,
-+    gap: 6,
-+  },
-+  summaryRow: { color: T.ink, fontSize: 15, lineHeight: 20 },
-+  summaryLabel: { color: T.muted, fontWeight: '800' },
 +
    brandRow: {
      flexDirection: 'row',
      alignItems: 'center',
-@@ -762,8 +1505,6 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+@@ -762,8 +1160,6 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
    },
  
    formBox: { gap: 16, marginBottom: 10 },

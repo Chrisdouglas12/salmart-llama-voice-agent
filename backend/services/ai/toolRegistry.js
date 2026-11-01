@@ -473,34 +473,6 @@ define({
   handler: (ctx, args) => formTools.prepareRegistration(ctx, args),
 });
 
-define({
-  name: 'confirmRegistration',
-  category: 'form',
-  description:
-    'Open the account confirmation card on the create-account screen, where the user ' +
-    'checks the name and phone or email and then taps Create my account. Call it only ' +
-    'when every registration detail is filled, the agreement is ticked, and the user ' +
-    'says to finish or answers yes to creating the account. It never creates anything ' +
-    'by itself and needs no arguments. Never call it for sign-in.',
-  inputSchema: {
-    type: 'object',
-    properties: {},
-    additionalProperties: false,
-  },
-  requiresAuth: false,
-  permissions: [],
-  requiresConfirmation: false,
-  mutates: false,
-  idempotent: true,
-  wired: true,
-  handler: () => ({
-    show: true,
-    summary:
-      'Confirmation card opened. Tell them in one short sentence to check the name and '
-      + 'the phone or email, then tap Create my account. Never read a password.',
-  }),
-});
-
 // ─── MESSAGING ───────────────────────────────────────────────────────────────
 
 define({

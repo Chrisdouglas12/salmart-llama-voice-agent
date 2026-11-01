@@ -77,7 +77,6 @@ async function beginAuthHelp(ctx, { intent } = {}) {
     emailDeclined: !!(ctx && ctx.emailDeclined),
     passwordSet: !!(ctx && ctx.passwordSet),
     agreed: !!(ctx && ctx.agreed),
-    confirmed: !!(ctx && ctx.confirmed),
     registration: (ctx && ctx.registration) || null,
   });
   if (!plan) {

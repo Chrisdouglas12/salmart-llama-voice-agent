@@ -63,7 +63,6 @@ const REGISTRATION_QUESTIONS = {
   phone: 'That is fine. What phone number should we use? It can be MTN, Airtel, Glo, or any other network.',
   password: 'Now make a secret code in the box: 8 characters or more, with a letter and a number. You can copy the suggested code and keep it safe. Do not share it.',
   agreement: 'Last step. Please read the agreement on the screen and tick the box if you accept to use Salmart.',
-  confirm: 'Your details are on the screen. Check the name and the phone or email, then tell me: should I create your account?',
 };
 
 /**
@@ -215,7 +214,6 @@ function registrationStep({
   emailDeclined,
   passwordSet,
   agreed,
-  confirmed,
   registration,
 } = {}) {
   const draft = registerDraft && typeof registerDraft === 'object' ? registerDraft : {};
@@ -231,16 +229,12 @@ function registrationStep({
   const declined = !!(emailDeclined || snap.emailDeclined === true);
   const hasPassword = !!(passwordSet || snap.password === true);
   const accepted = !!(agreed || snap.agreed === true);
-  // The last stop before the server: a spoken summary of what will be created.
-  // It is read from the phone's snapshot, so it follows a correction.
-  const done = !!(confirmed || snap.confirmed === true || snap.submitted === true);
 
   if (!hasName) return 'fullName';
   if (!hasEmail && !declined) return 'email';
   if (!hasEmail && !hasPhone) return 'phone';
   if (!hasPassword) return 'password';
   if (!accepted) return 'agreement';
-  if (!done) return 'confirm';
   return null;
 }
 
@@ -263,7 +257,6 @@ function planAuthHelp({
   emailDeclined,
   passwordSet,
   agreed,
-  confirmed,
   registration,
 } = {}) {
   const key = cleanIntent(intent);
@@ -278,7 +271,6 @@ function planAuthHelp({
       emailDeclined,
       passwordSet,
       agreed,
-      confirmed,
       registration,
     });
     if (!step) plan = REGISTRATION_READY;
@@ -366,7 +358,6 @@ function sanitizeAuthState(raw) {
     emailDeclined: raw.emailDeclined === true,
     passwordSet: raw.passwordSet === true,
     agreed: raw.agreed === true,
-    confirmed: raw.confirmed === true,
     attempts,
     updatedAt,
   };
@@ -383,7 +374,6 @@ function buildPromptBlock(auth, { screen } = {}) {
     `User said they have no email: ${auth.emailDeclined ? 'yes' : 'no'}`,
     `Password entered on the phone: ${auth.passwordSet ? 'yes' : 'no'}`,
     `Agreement accepted: ${auth.agreed ? 'yes' : 'no'}`,
-    `Details confirmed on the phone: ${auth.confirmed ? 'yes' : 'no'}`,
     `Method: ${auth.method || 'not chosen yet'}`,
     `Turns on this step: ${auth.attempts}`,
   ];

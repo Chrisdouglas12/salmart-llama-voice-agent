@@ -72,16 +72,9 @@ test('registration walks one field at a time, then goes ready', () => {
     registerDraft: { fullName: 'Ada Obi' }, emailProvided: true, passwordSet: true,
   });
   assert.equal(agreement.field, 'agreement');
-  // Accepting the terms is not consent to create: the summary card comes next.
-  const confirm = plan('REGISTER', {
-    registerDraft: { fullName: 'Ada Obi' }, emailProvided: true,
-    passwordSet: true, agreed: true,
-  });
-  assert.equal(confirm.field, 'confirm');
-  assert.match(confirm.say, /create your account/i);
   const ready = plan('REGISTER', {
     registerDraft: { fullName: 'Ada Obi' }, emailProvided: true,
-    passwordSet: true, agreed: true, confirmed: true,
+    passwordSet: true, agreed: true,
   });
   assert.equal(ready.state, 'REGISTRATION_READY');
   assert.equal(ready.field, null);

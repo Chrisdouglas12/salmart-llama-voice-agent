@@ -1,5 +1,5 @@
 diff --git a/routes/userRoutesIndex.js b/routes/userRoutesIndex.js
-index de905af27..cc04120c7 100644
+index de905af27..d946dd82b 100644
 --- a/routes/userRoutesIndex.js
 +++ b/routes/userRoutesIndex.js
 @@ -30,6 +30,17 @@ const resend = new Resend(process.env.RESEND_API_KEY);
@@ -20,7 +20,7 @@ index de905af27..cc04120c7 100644
  // ================================
  // AUTHENTICATION ROUTES (Registration, Login, etc.)
  // ================================
-@@ -43,29 +54,58 @@ router.post('/register', async (req, res) => {
+@@ -43,29 +54,53 @@ router.post('/register', async (req, res) => {
    try {
      const { firstName, lastName, email, password, referrer, phoneNumber } = req.body;
  
@@ -30,28 +30,26 @@ index de905af27..cc04120c7 100644
 +    const rawPhone = String(phoneNumber || '').trim();
 +
 +    if (!password || String(password).length < 8) {
-+      return res.status(400).json({ success: false, code: 'weak_password', message: 'Choose a password with at least 8 characters.' });
++      return res.status(400).json({ message: 'Choose a password with at least 8 characters.' });
 +    }
 +    if (!rawEmail && !rawPhone) {
-+      return res.status(400).json({ success: false, code: 'missing_identifier', message: 'Give us an email address or a phone number.' });
++      return res.status(400).json({ message: 'Give us an email address or a phone number.' });
++    }
++
++    const normalizedEmail = rawEmail && EMAIL_RE.test(rawEmail) ? rawEmail : '';
++    if (rawEmail && !normalizedEmail) {
++      return res.status(400).json({ message: 'That email address does not look right.' });
      }
  
 -    const normalizedEmail = email.trim().toLowerCase();
-+    const normalizedEmail = rawEmail && EMAIL_RE.test(rawEmail) ? rawEmail : '';
-+    if (rawEmail && !normalizedEmail) {
-+      return res.status(400).json({ success: false, code: 'invalid_email', message: 'That email address does not look right.' });
-+    }
-+
 +    const normalizedPhone = rawPhone ? normalizePhone(rawPhone) : '';
 +    if (rawPhone && !normalizedPhone) {
-+      return res.status(400).json({ success: false, code: 'invalid_phone', message: 'That phone number does not look right.' });
++      return res.status(400).json({ message: 'That phone number does not look right.' });
 +    }
  
 -    const existingUser = await User.findOne({ email: normalizedEmail });
 +    // Email and phone are both optional, but at least one identifier is
-+    // required so the account can be found again at sign-in. Names are never
-+    // part of this check: two people may share a name, so only a taken email
-+    // or phone number blocks registration.
++    // required so the account can be found again at sign-in.
 +    const conflicts = [];
 +    if (normalizedEmail) conflicts.push({ email: normalizedEmail });
 +    if (normalizedPhone) conflicts.push({ phoneNumber: normalizedPhone });
@@ -60,9 +58,6 @@ index de905af27..cc04120c7 100644
 -      return res.status(400).json({ message: 'User already exists.' });
 +      const phoneTaken = !!normalizedPhone && existingUser.phoneNumber === normalizedPhone;
 +      return res.status(400).json({
-+        success: false,
-+        code: phoneTaken ? 'phone_exists' : 'email_exists',
-+        field: phoneTaken ? 'phoneNumber' : 'email',
 +        message: phoneTaken
 +          ? 'An account with this phone number already exists.'
 +          : 'An account with this email already exists.',
@@ -89,7 +84,7 @@ index de905af27..cc04120c7 100644
      });
  
      await newUser.save();
-@@ -85,129 +125,48 @@ router.post('/register', async (req, res) => {
+@@ -85,127 +120,34 @@ router.post('/register', async (req, res) => {
      );
      // ───────────────────────────────────────────────────────────────────────────
  
@@ -230,31 +225,16 @@ index de905af27..cc04120c7 100644
 +    });
    } catch (error) {
      console.error('❌ Registration error:', error.message);
-+    // A race between the check above and the insert lands here as a duplicate
-+    // key. Name the real conflict (email vs phone) so the app can point at
-+    // the exact field instead of a generic "already exists".
      if (error.code === 11000) {
 -      res.status(400).json({ message: 'An account with this email already exists.' });
-+      const key = error.keyPattern ? Object.keys(error.keyPattern)[0] : '';
-+      const phoneTaken = key === 'phoneNumber';
-+      return res.status(400).json({
-+        success: false,
-+        code: phoneTaken ? 'phone_exists' : 'email_exists',
-+        field: phoneTaken ? 'phoneNumber' : 'email',
-+        message: phoneTaken
-+          ? 'An account with this phone number already exists.'
-+          : 'An account with this email already exists.',
-+      });
++      res.status(400).json({ message: 'An account with these details already exists.' });
      } else if (error.name === 'ValidationError') {
 -      res.status(400).json({ message: 'Invalid data provided. Please check your information.' });
-+      return res.status(400).json({ success: false, code: 'registration_invalid', message: 'Please check the information and try again.' });
++      res.status(400).json({ message: 'Please check the information and try again.' });
      } else {
--      res.status(500).json({ message: 'Registration failed. Please try again later.' });
-+      return res.status(500).json({ success: false, code: 'registration_failed', message: 'Registration failed. Please try again later.' });
+       res.status(500).json({ message: 'Registration failed. Please try again later.' });
      }
-   }
- });
-@@ -243,10 +202,18 @@ router.get('/verify-email', async (req, res) => {
+@@ -243,10 +185,18 @@ router.get('/verify-email', async (req, res) => {
   */
  router.post('/login', async (req, res) => {
    try {

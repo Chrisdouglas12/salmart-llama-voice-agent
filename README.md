@@ -11,7 +11,7 @@ For a struggling user, Salmart's register screen (5 fields + password rules + em
 - **Understands account problems** — 11 intents, 11 conversation states. "I can't enter my account" gets one clarifying question, never an instant reset.
 - **Recovers forgotten emails** — Google-or-email branch, mail-app guidance, honest limits (no name lookup, no invented channels).
 - **Registers by conversation** - full name first; email optional (Google, Yahoo, or any other); if no email, a phone number from MTN, Airtel, Glo, or any other network; one secure password entry with a copyable suggested code and spoken help; agreement last; server confirms, the app signs in, and the model writes the welcome question aloud.
-- **Guides buying end-to-end** — finds the item, drafts the seller message, holds it in cart, tick-to-pay checkout, mic stays visible over Paystack with exact payment steps and escrow reassurance.
+- **Guides buying end-to-end** — finds the item, opens a large picture picker so the buyer only has to touch the one they want (no reading or pronunciation), speaks its price and description, holds it in cart, drafts the seller message, tick-to-pay checkout, mic stays visible over Paystack with exact payment steps and escrow reassurance.
 - **Never lies, never leaks** — passwords/OTPs typed in chat are refused before reaching Meta; success is claimed only from real app state; Meta models only, end to end.
 
 ## Verify in 60 seconds

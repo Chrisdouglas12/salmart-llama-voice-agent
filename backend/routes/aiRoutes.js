@@ -828,7 +828,7 @@ router.post('/cart/select', hardAuth, actionLimiter, async (req, res) => {
           { role: 'user', content: prompt.user },
         ],
         requestId,
-        maxTokens: 200,
+        maxTokens: 500,
         reasoningEffort: 'minimal',
         timeoutMs: 10000,
       });
@@ -836,6 +836,7 @@ router.post('/cart/select', hardAuth, actionLimiter, async (req, res) => {
         ? touchBuy.acceptModelReply(ai.text, {
           price: added.price,
           hasSeller: !!prepared,
+          lang: replyLang,
         })
         : null;
       if (accepted) {

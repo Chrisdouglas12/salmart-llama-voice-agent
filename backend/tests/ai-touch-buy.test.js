@@ -143,6 +143,33 @@ test('touch: a good model reply is accepted and cleaned', () => {
   );
 });
 
+test('touch: a translated reply is accepted without the English word "cart"', () => {
+  const line = touchBuy.acceptModelReply(
+    'A ti fi baagi alawọ dudu kun kaa rẹ. O jẹ ₦18,500.',
+    { price: 18500, hasSeller: true, lang: 'yor' },
+  );
+
+  assert.equal(line, 'A ti fi baagi alawọ dudu kun kaa rẹ. O jẹ ₦18,500.');
+});
+
+test('touch: a translated reply still cannot change the price', () => {
+  assert.equal(
+    touchBuy.acceptModelReply('O jẹ ₦20,000.', {
+      price: 18500, hasSeller: true, lang: 'yor',
+    }),
+    null,
+  );
+});
+
+test('touch: an English reply without a cart confirmation is still rejected', () => {
+  assert.equal(
+    touchBuy.acceptModelReply('The black bag costs ₦18,500.', {
+      price: 18500, hasSeller: true, lang: null,
+    }),
+    null,
+  );
+});
+
 test('touch: a model reply that changes the price is rejected', () => {
   assert.equal(
     touchBuy.acceptModelReply('I added it to your cart for ₦20,000.', {

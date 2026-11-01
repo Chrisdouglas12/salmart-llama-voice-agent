@@ -22,4 +22,4 @@ Show the register screen. Say: *"For my grandmother, this screen is a locked doo
 
 ## 2:30–3:00 — The guarantees
 
-To camera: *"Typed passwords never reach Meta. Success is claimed only from real app state. Meta models only, end to end."* End card: 119/119 tests, repo link.
+To camera: *"Typed passwords never reach Meta. Success is claimed only from real app state. Meta models only, end to end."* End card: 102/102 targeted tests, live Meta model, repo link.

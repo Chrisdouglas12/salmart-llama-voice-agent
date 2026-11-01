@@ -137,8 +137,13 @@ function mentionsPrice(text, price) {
 /**
  * Accept a model reply only when it is safe to speak. Returns the cleaned
  * line, or null so the caller speaks the deterministic fallback instead.
+ *
+ * The English word checks are skipped when the reply is meant for Yoruba,
+ * Hausa or Igbo: those checks cannot read the translation, but the price
+ * check still runs because the digits are language-neutral.
  */
-function acceptModelReply(text, { price, hasSeller } = {}) {
+function acceptModelReply(text, { price, hasSeller, lang } = {}) {
+  const translated = !!LANGUAGE_NAMES[String(lang || '').toLowerCase()];
   let out = String(text == null ? '' : text)
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/[`*_#>]+/g, ' ')
@@ -157,9 +162,9 @@ function acceptModelReply(text, { price, hasSeller } = {}) {
 
   if (/https?:\/\//i.test(out)) return null;
   if (/\b(paid|payment|shipped|delivered|reserved)\b/i.test(out)) return null;
-  if (!/\b(cart|added)\b/i.test(out)) return null;
+  if (!translated && !/\b(cart|added)\b/i.test(out)) return null;
   if (!mentionsPrice(out, price)) return null;
-  if (!hasSeller && /\bseller\b/i.test(out)) return null;
+  if (!hasSeller && !translated && /\bseller\b/i.test(out)) return null;
 
   return out;
 }

@@ -354,10 +354,12 @@ The spoken reply is model-written from that listing's live data: title, exact
 price, description, and whether a seller is reachable. `touchBuy.buildPickPrompt`
 builds the prompt; `touchBuy.acceptModelReply` rejects a line that changes the
 price, mentions a seller when none is reachable, claims payment/delivery/reserve,
-lacks a cart confirmation, contains a URL, or runs too long. When the model is
-unavailable or rejected, the route falls back to the deterministic template, so
-the buyer always hears a correct line. `lang` (`yor`/`hau`/`ibo`) makes the reply
-match the language the buyer last spoke.
+lacks a cart confirmation, contains a URL, or runs too long. For a translated
+reply (`yor`/`hau`/`ibo`) the English word checks are relaxed, but the price
+check still runs. When the model is unavailable or rejected, the route falls
+back to the deterministic template, so the buyer always hears a correct line.
+`lang` (`yor`/`hau`/`ibo`) makes the reply match the language the buyer last
+spoke.
 
 ```json
 {

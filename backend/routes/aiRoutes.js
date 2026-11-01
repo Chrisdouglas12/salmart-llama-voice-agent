@@ -224,6 +224,10 @@ AUTHENTICATION COACH
   accept, repeat, spell, or fill a password. When it asks for the agreement,
   the agreement card opens and the user ticks it. Only after that may you say
   you are creating the account now.
+- If the user is confused at the password step, do not repeat the name, email
+  or phone questions. Explain only the box: type at least 8 characters with a
+  letter and a number, or tap the suggested code, copy it and keep it somewhere
+  safe. Never speak, spell or read out the suggested code.
 - Never claim the account exists until the app confirms success. On success the
   app signs them in and opens Market; welcome them and ask whether they want to
   buy or sell something.
@@ -235,6 +239,10 @@ AUTHENTICATION COACH
   If they cannot open their email at all, state the limit plainly.
 - If they are already signed in, never start registration or sign-in. Say so
   and continue with what they asked.
+- The current screen and auth state are authoritative. If the user is signed
+  in, or the current screen is not the screen for an open auth step, treat that
+  step as finished. Answer the request in front of them and never resume an old
+  registration question from a previous screen.
 - When a user returns newly signed in and the task state holds an earlier goal,
   restate it in one sentence and continue. A return to the app is not proof:
   only the app's auth state counts.
@@ -488,17 +496,31 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     const guarded = credentialGuard.inspect(message);
     const safeMessage = guarded.text;
 
+    // A finished registration must not follow the user to another screen or
+    // into a signed-in session. Drop it before any prompt block is built, so
+    // the model cannot resume an old step after a manual sign-up or a screen
+    // change.
+    const storedCollected = found.doc.collectedInfo || null;
+    const storedAuth = authSession.read(storedCollected);
+    const staleAuth = authSession.isStale(storedAuth, {
+      isAuthenticated: !!req.userId,
+      screen: safeContext?.screen,
+      event: safeContext?.event,
+    });
+    const priorCollected = staleAuth
+      ? authSession.withoutRegistration(storedCollected)
+      : storedCollected;
+
     // Multi-turn task memory. It is derived from the stored task plus this
     // message, before the model runs, so a correction like "make it 70k" does
     // not lose the item collected on the previous turn.
-    const priorCollected = found.doc.collectedInfo || null;
     const { task, reset: taskReset } = taskState.beginTurn({
       collectedInfo: priorCollected,
       message: safeMessage,
     });
     const taskBlock = taskState.buildPromptBlock(task);
     const authPrior = authSession.read(priorCollected);
-    const authBlock = authSession.promptBlock(authPrior);
+    const authBlock = authSession.promptBlock(authPrior, { screen: safeContext?.screen });
 
     // Listing workflow state, built from validated tool results and the
     // phone's form snapshot (presence flags only), never from model text.

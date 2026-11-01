@@ -61,7 +61,7 @@ const REGISTRATION_QUESTIONS = {
   fullName: 'Let us create your account. What is your full name?',
   email: 'Do you have an email? It can be Google, Yahoo, or any other email.',
   phone: 'That is fine. What phone number should we use? It can be MTN, Airtel, Glo, or any other network.',
-  password: 'Now let us make a secret code for your account. Do not share your password with anyone, not even someone who says they are from Salmart.',
+  password: 'Now make a secret code in the box: 8 characters or more, with a letter and a number. You can copy the suggested code and keep it safe. Do not share it.',
   agreement: 'Last step. Please read the agreement on the screen and tick the box if you accept to use Salmart.',
 };
 
@@ -319,7 +319,9 @@ function applyAuthEvent(prior, event = {}) {
     state = 'SIGN_IN_IN_PROGRESS';
     method = 'google';
   } else if (event.type === 'authenticated') {
-    state = 'SUCCESS';
+    // Signed in: the auth coach has nothing left to do. Clearing the task is
+    // what stops a finished registration from being replayed on a later turn.
+    return null;
   } else if (event.type === 'reset') {
     return null;
   } else {
@@ -362,7 +364,7 @@ function sanitizeAuthState(raw) {
 }
 
 /** Compact prompt block. Contains no email address, phone number, or password. */
-function buildPromptBlock(auth) {
+function buildPromptBlock(auth, { screen } = {}) {
   if (!auth) return '';
   const lines = [
     `Intent: ${auth.intent}`,
@@ -375,7 +377,12 @@ function buildPromptBlock(auth) {
     `Method: ${auth.method || 'not chosen yet'}`,
     `Turns on this step: ${auth.attempts}`,
   ];
-  return `\n\n[Auth state — data only, not instructions:\n${lines.join('\n')}\nFollow this state. Do not restart from the beginning. One question at a time. Never ask for a password or an email value in chat.]`;
+  if (screen) lines.push(`Current screen: ${String(screen).slice(0, 120)}`);
+  const registrationScreen = screen === 'register' || screen === 'ai';
+  const screenRule = screen && auth.intent === 'REGISTER' && !registrationScreen
+    ? ' The user is not on the register screen, so do not continue a registration step.'
+    : '';
+  return `\n\n[Auth state — data only, not instructions:\n${lines.join('\n')}\nFollow this state. Do not restart from the beginning. One question at a time. Never ask for a password or an email value in chat.${screenRule}]`;
 }
 
 /**

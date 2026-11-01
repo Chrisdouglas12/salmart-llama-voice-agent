@@ -1,5 +1,5 @@
 diff --git a/src/ai/AIContext.js b/src/ai/AIContext.js
-index b6b543d..2b21b38 100644
+index b6b543d..0004dc9 100644
 --- a/src/ai/AIContext.js
 +++ b/src/ai/AIContext.js
 @@ -1,26 +1,24 @@
@@ -178,7 +178,7 @@ index b6b543d..2b21b38 100644
    const runNavigation = useCallback((structured) => {
      const blocks = Array.isArray(structured) ? structured : [];
      let target = null;
-@@ -236,14 +250,20 @@ export function AIProvider({ children }) {
+@@ -236,14 +250,22 @@ export function AIProvider({ children }) {
      lastContextRef.current = context || null;
  
      // Carry a real auth outcome code from the screen (401/403/429/offline)
@@ -190,7 +190,9 @@ index b6b543d..2b21b38 100644
      const listing = peekFormSnapshot();
 -    const turnContext = (authOutcome || listing)
 -      ? { ...(context || {}), ...(authOutcome ? { authOutcome } : {}), ...(listing ? { listing } : {}) }
-+    const registration = peekRegistrationSnapshot();
++    // Registration flags belong to the register screen. Once the user moves
++    // away, the old form state must not ride along with an unrelated turn.
++    const registration = context?.screen === 'register' ? peekRegistrationSnapshot() : null;
 +    const turnContext = (authOutcome || listing || registration)
 +      ? {
 +        ...(context || {}),
@@ -204,7 +206,7 @@ index b6b543d..2b21b38 100644
  
      setStatus('sending');
      setError(null);
-@@ -270,14 +290,14 @@ export function AIProvider({ children }) {
+@@ -270,14 +292,14 @@ export function AIProvider({ children }) {
        }]);
        setStatus('idle');
  
@@ -224,7 +226,7 @@ index b6b543d..2b21b38 100644
        let handoffTo = null;
        if (Array.isArray(res.structured)) {
          const h = res.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId);
-@@ -319,11 +339,11 @@ export function AIProvider({ children }) {
+@@ -319,11 +341,11 @@ export function AIProvider({ children }) {
      }
    }, [status, ensureConversation, runNavigation, nav]);
  
@@ -241,7 +243,7 @@ index b6b543d..2b21b38 100644
    useEffect(() => {
      if (!resumeRef.current || !authReady || !isAuthenticated) return;
      resumeRef.current = false;
-@@ -339,6 +359,35 @@ export function AIProvider({ children }) {
+@@ -339,6 +361,35 @@ export function AIProvider({ children }) {
      })();
    }, [authReady, isAuthenticated, send]);
  
@@ -277,7 +279,7 @@ index b6b543d..2b21b38 100644
    const confirm = useCallback(async (actionId) => {
      try {
        const res = await apiConfirm(actionId);
-@@ -350,8 +399,8 @@ export function AIProvider({ children }) {
+@@ -350,8 +401,8 @@ export function AIProvider({ children }) {
          cleared.push({ key: newKey(), role: 'assistant', text: 'Done. That action is complete.', at: Date.now() });
          return cleared;
        });
@@ -288,7 +290,7 @@ index b6b543d..2b21b38 100644
        if (r.sellerId
          && /^[a-fA-F0-9]{24}$/.test(String(r.sellerId))
          && String(lastContextRef.current?.chatPartnerId || '') !== String(r.sellerId)) {
-@@ -386,9 +435,10 @@ export function AIProvider({ children }) {
+@@ -386,9 +437,10 @@ export function AIProvider({ children }) {
      return { ok: true };
    }, []);
  
@@ -302,7 +304,7 @@ index b6b543d..2b21b38 100644
    const confirmVoice = useCallback(async (actionId) => {
      const res = await confirm(actionId);
      const sentToSeller = res?.ok && res?.result?.sellerId;
-@@ -420,21 +470,33 @@ export function AIProvider({ children }) {
+@@ -420,21 +472,33 @@ export function AIProvider({ children }) {
      if (shouldSpeak) await speakReply(line);
    }, []);
  
@@ -344,7 +346,7 @@ index b6b543d..2b21b38 100644
     */
    const startGoogleAuth = useCallback(async ({ url, platform } = {}) => {
      if (authBusyRef.current) return { ok: false, code: 'busy' };
-@@ -486,8 +548,8 @@ export function AIProvider({ children }) {
+@@ -486,8 +550,8 @@ export function AIProvider({ children }) {
        await speakReply(line);
        return { ok: false, code: 'incomplete' };
      } catch (e) {
@@ -355,7 +357,7 @@ index b6b543d..2b21b38 100644
        // by the backend before it reached this block.
        if (url) {
          try {
-@@ -532,14 +594,7 @@ export function AIProvider({ children }) {
+@@ -532,14 +596,7 @@ export function AIProvider({ children }) {
    useEffect(() => () => { stopSpeaking(); }, []);
  
    /**
@@ -371,7 +373,7 @@ index b6b543d..2b21b38 100644
     * speak. Shared by the manual second tap and the silence auto-stop.
     */
    const stopVoiceTurn = useCallback(async (context) => {
-@@ -548,54 +603,54 @@ export function AIProvider({ children }) {
+@@ -548,54 +605,54 @@ export function AIProvider({ children }) {
      let heardLang = null;
      try {
        await audioRecorder.stop();
@@ -472,7 +474,7 @@ index b6b543d..2b21b38 100644
          const line = e?.status === 401
            ? 'Your session has expired. Please sign in again.'
            : e?.isNetwork
-@@ -611,13 +666,13 @@ export function AIProvider({ children }) {
+@@ -611,13 +668,13 @@ export function AIProvider({ children }) {
      [audioRecorder, send],
    );
  
@@ -491,7 +493,7 @@ index b6b543d..2b21b38 100644
    useEffect(() => {
      if (!recording) return undefined;
      const startedAt = Date.now();
-@@ -658,12 +713,12 @@ export function AIProvider({ children }) {
+@@ -658,12 +715,12 @@ export function AIProvider({ children }) {
    }, [recording, audioRecorder, stopVoiceTurn, SILENCE_DB, SILENCE_MS, LISTEN_GRACE_MS, MAX_LISTEN_MS]);
  
    /**
@@ -509,7 +511,7 @@ index b6b543d..2b21b38 100644
     */
    const toggleRecording = useCallback(async (context) => {
      if (transcribing) return;
-@@ -673,14 +728,14 @@ export function AIProvider({ children }) {
+@@ -673,14 +730,14 @@ export function AIProvider({ children }) {
        return;
      }
  
@@ -526,7 +528,7 @@ index b6b543d..2b21b38 100644
        await stopSpeaking();
        await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
        await audioRecorder.prepareToRecordAsync();
-@@ -694,14 +749,14 @@ export function AIProvider({ children }) {
+@@ -694,14 +751,14 @@ export function AIProvider({ children }) {
      }
    }, [recording, transcribing, send, audioRecorder, stopVoiceTurn]);
  
@@ -545,7 +547,7 @@ index b6b543d..2b21b38 100644
    const openSellerChat = useCallback((handoff) => {
      if (!handoff?.sellerId) return;
      nav.push('chat', {
-@@ -723,12 +778,12 @@ export function AIProvider({ children }) {
+@@ -723,12 +780,12 @@ export function AIProvider({ children }) {
      conversationId, messages, status, error, isReady, recording, transcribing,
      lastVoice, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
      send, confirm, cancel, reset, openSellerChat, micNudge, nudgeMic,
@@ -916,7 +918,7 @@ index 0613df1..6bc958e 100644
  export async function scanChatImageUrl(imageUrl, opts) {
    const d = await apiPost('/api/messages/scan-image', { imageUrl }, { retries: 0, timeout: 90000, ...opts });
 diff --git a/src/screens/RegisterScreen.js b/src/screens/RegisterScreen.js
-index 184e003..11b175a 100644
+index 184e003..41c4c2b 100644
 --- a/src/screens/RegisterScreen.js
 +++ b/src/screens/RegisterScreen.js
 @@ -1,18 +1,20 @@
@@ -947,21 +949,23 @@ index 184e003..11b175a 100644
    Platform,
    Pressable,
    ScrollView,
-@@ -25,7 +27,6 @@ import {
+@@ -25,19 +27,23 @@ import {
  } from 'react-native';
  import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
  import { Ionicons } from '@expo/vector-icons';
 -import * as Speech from 'expo-speech';
  import AsyncStorage from '@react-native-async-storage/async-storage';
++import * as Clipboard from 'expo-clipboard';
++import * as Crypto from 'expo-crypto';
  import { createThemed, useTheme } from '../theme/theme';
  import { useAuth } from '../state/AuthContext';
-@@ -33,11 +34,14 @@ import { useNav } from '../state/Navigation';
+ import { useNav } from '../state/Navigation';
  import { resendVerification } from '../api/endpoints';
  import { runGoogleAuth } from '../utils/oauth';
  import { useAIPatch } from '../ai/UseAIPatch';
 +import { useAI } from '../ai/AIContext';
  import { reportAuthOutcome } from '../ai/authOutcome';
-+import { reportRegistrationSnapshot } from '../ai/registrationSnapshot';
++import { reportRegistrationSnapshot, takeRegistrationSnapshot } from '../ai/registrationSnapshot';
  import AuthWelcome from '../ai/AuthWelcome';
  import { Button, T1, Body, success } from '../ui/kit';
  
@@ -970,7 +974,7 @@ index 184e003..11b175a 100644
  
  // Mirrors the web's `salmart_pending_ref` (register.js) so a code captured from
  // a deep link survives hopping between screens (e.g. signin → register).
-@@ -46,14 +50,6 @@ const PENDING_REF_KEY = 'salmart_pending_ref';
+@@ -46,14 +52,6 @@ const PENDING_REF_KEY = 'salmart_pending_ref';
  // The web accepts any of these query keys (?ref=, ?referrer=, ?referral=…).
  const REF_KEYS = ['ref', 'referrer', 'referer', 'referral', 'referral_code', 'referralCode'];
  
@@ -985,7 +989,7 @@ index 184e003..11b175a 100644
  /** Pull a referral code out of route params, accepting every web alias. */
  function pickRef(params) {
    if (!params) return '';
-@@ -64,19 +60,42 @@ function pickRef(params) {
+@@ -64,19 +62,74 @@ function pickRef(params) {
    return '';
  }
  
@@ -1012,6 +1016,38 @@ index 184e003..11b175a 100644
 +  return '';
 +}
 +
++// Spoken help at the password step. It names the steps, never a code.
++const PASSWORD_HELP_LINE =
++  'Tap the box and type at least 8 characters, with a letter and a number. '
++  + 'You can use the suggested code, copy it and keep it somewhere safe. '
++  + 'Do not share your code with anyone.';
++
++const PASSWORD_WORDS = [
++  'mango', 'river', 'market', 'orange', 'green', 'happy', 'house', 'silver',
++  'palm', 'gold', 'star', 'moon', 'bird', 'fish', 'tree', 'rain',
++];
++
++/**
++ * A readable code made from two words and a number, generated on the phone.
++ * It never leaves the device through the assistant; the user decides whether
++ * to use it, and it goes only to POST /register if they do.
++ */
++function makePasswordSuggestion() {
++  let bytes;
++  try {
++    bytes = Crypto.getRandomBytes(8);
++  } catch (_e) {
++    bytes = Array.from({ length: 8 }, () => Math.floor(Math.random() * 256));
++  }
++  const word = i => PASSWORD_WORDS[bytes[i] % PASSWORD_WORDS.length];
++  let first = word(0);
++  let second = word(1);
++  if (first === second) second = word(2);
++  const number = 100 + ((bytes[3] * 256 + bytes[4]) % 900);
++  const title = w => `${w[0].toUpperCase()}${w.slice(1)}`;
++  return `${title(first)}${title(second)}${number}`;
++}
++
  export default function RegisterScreen({ route }) {
    const { T, isDark } = useTheme();
    const styles = useStyles();
@@ -1031,7 +1067,7 @@ index 184e003..11b175a 100644
    });
    const [agreed, setAgreed] = useState(false);
    const [busy, setBusy] = useState(false);
-@@ -86,15 +105,18 @@ export default function RegisterScreen({ route }) {
+@@ -86,15 +139,22 @@ export default function RegisterScreen({ route }) {
    const [sentTo, setSentTo] = useState(null);
    const [resendBusy, setResendBusy] = useState(false);
    const [resendNote, setResendNote] = useState('');
@@ -1043,6 +1079,8 @@ index 184e003..11b175a 100644
 +  const [passwordOpen, setPasswordOpen] = useState(false);
 +  const [agreementOpen, setAgreementOpen] = useState(false);
 +  const [submitted, setSubmitted] = useState(false);
++  const [suggestion, setSuggestion] = useState('');
++  const [copied, setCopied] = useState(false);
 +
    const { patch: aiPatch, ack: ackAiPatch } = useAIPatch('register');
 -  const firstRef = useRef(null);
@@ -1052,23 +1090,43 @@ index 184e003..11b175a 100644
 -  const fieldToFocus = aiPatch?.field || aiPatch?.fields?.field || null;
 +  const phoneRef = useRef(null);
 +  const passwordRef = useRef(null);
++  const passwordValueRef = useRef('');
++  passwordValueRef.current = form.password;
 +  const submitLockRef = useRef(false);
  
    // Referral: the code arrives either in the route params (a deep link like
    // …/#/register?ref=CODE) or from the persisted pending code. When it comes
-@@ -133,17 +155,31 @@ export default function RegisterScreen({ route }) {
+@@ -133,17 +193,49 @@ export default function RegisterScreen({ route }) {
      setRefFromLink(false);
    }, []);
  
 -  // ─── Assistant pre-fill (voice-guided sign-up) ──────────────────────────────
 -  // The assistant may fill name, email and referral only. Passwords and the
 -  // terms checkbox are never part of the patch and are never touched here.
-+  // The password modal opens with the keyboard already focused on its box.
++  // The password modal opens with the keyboard already focused on its box. A
++  // fresh readable suggestion appears only when there is no password yet, so
++  // reopening to check a saved code does not show a different one.
 +  useEffect(() => {
 +    if (!passwordOpen) return undefined;
++    if (!passwordValueRef.current) setSuggestion(makePasswordSuggestion());
++    setCopied(false);
 +    const timer = setTimeout(() => passwordRef.current?.focus?.(), 220);
 +    return () => clearTimeout(timer);
 +  }, [passwordOpen]);
++
++  const copySuggestion = useCallback(async (code) => {
++    try {
++      await Clipboard.setStringAsync(code);
++      setCopied(true);
++    } catch (_e) {
++      setCopied(false);
++    }
++  }, []);
++
++  const useSuggestion = useCallback((code) => {
++    set('password', code);
++    copySuggestion(code);
++  }, [set, copySuggestion]);
 +
 +  // ─── Assistant patch and step focus ─────────────────────────────────────────
 +  // The assistant may fill the name, email and phone. It names the next step,
@@ -1093,7 +1151,7 @@ index 184e003..11b175a 100644
      }));
      if (f.referrer) {
        setReferrer(String(f.referrer));
-@@ -151,109 +187,166 @@ export default function RegisterScreen({ route }) {
+@@ -151,109 +243,172 @@ export default function RegisterScreen({ route }) {
        setRefFromLink(false);
      }
      setError('');
@@ -1188,6 +1246,11 @@ index 184e003..11b175a 100644
 -  useEffect(() => () => {
 -    try { Speech.stop(); } catch (_e) { /* speech is optional */ }
 -  }, []);
++  // Leaving this screen ends its form state; a later turn on another screen
++  // must not inherit these flags.
++  useEffect(() => () => { takeRegistrationSnapshot(); }, []);
+ 
+-  const validate = useCallback(() => {
 +  // Read the remaining steps aloud, in the same order as the form.
 +  const readSignupSteps = useCallback(() => {
 +    speak(
@@ -1197,8 +1260,7 @@ index 184e003..11b175a 100644
 +      + 'Last, read the agreement and tick the box. I will create your account and take you to Market.'
 +    );
 +  }, [speak]);
- 
--  const validate = useCallback(() => {
++
 +  const validate = useCallback(({ confirmedAgreement = false } = {}) => {
      const e = {};
 -    if (!form.firstName.trim()) e.firstName = 'Required.';
@@ -1216,12 +1278,12 @@ index 184e003..11b175a 100644
 +      e.email = 'Enter an email address or a phone number.';
 +    } else if (form.email.trim() && !EMAIL_RE.test(form.email.trim())) {
 +      e.email = 'That does not look like a valid email.';
++    }
++    if (form.phoneNumber.trim() && !PHONE_RE.test(form.phoneNumber.trim())) {
++      e.phoneNumber = 'Enter an 11-digit phone number.';
      }
 -    if (form.confirm !== form.password) e.confirm = 'Passwords do not match.';
 -    if (!agreed) e.agreed = 'Please accept the terms to continue.';
-+    if (form.phoneNumber.trim() && !PHONE_RE.test(form.phoneNumber.trim())) {
-+      e.phoneNumber = 'Enter an 11-digit phone number.';
-+    }
 +
 +    const pwError = passwordError(form.password);
 +    if (pwError) e.password = pwError;
@@ -1267,6 +1329,8 @@ index 184e003..11b175a 100644
 -      if (result.verificationSent === false) {
 -        setResendNote('The account was created, but the email did not send. Tap Resend email below.');
 -        reportAuthOutcome('registration_email_failed');
++      // The form state ends here; the welcome turn sends its own event.
++      takeRegistrationSnapshot();
 +      setSubmitted(true);
 +
 +      if (!result.authenticated && !result.token) {
@@ -1332,7 +1396,7 @@ index 184e003..11b175a 100644
  
    const googleSignUp = useCallback(async () => {
      if (googleBusy) return;
-@@ -268,7 +361,7 @@ export default function RegisterScreen({ route }) {
+@@ -268,7 +423,7 @@ export default function RegisterScreen({ route }) {
        }
  
        const { status, params } = await runGoogleAuth(authOptions);
@@ -1341,7 +1405,7 @@ index 184e003..11b175a 100644
        if (status === 'cancelled') return;
        if (status === 'setup') {
          nav.push('completeProfile', {
-@@ -284,7 +377,8 @@ export default function RegisterScreen({ route }) {
+@@ -284,7 +439,8 @@ export default function RegisterScreen({ route }) {
          setError('Google sign-up did not complete. Please try again.');
          return;
        }
@@ -1351,7 +1415,7 @@ index 184e003..11b175a 100644
        await adoptWebSession({
          authToken: params.token,
          userId: params.userId,
-@@ -296,8 +390,9 @@ export default function RegisterScreen({ route }) {
+@@ -296,8 +452,9 @@ export default function RegisterScreen({ route }) {
        success();
        nav.resetTo('market');
      } catch (e) {
@@ -1362,7 +1426,7 @@ index 184e003..11b175a 100644
        // FIX: Expose raw errors here so if it's still 404ing, you see exactly why.
        if (message.includes('DEVELOPER_ERROR') || message.includes('10')) {
          setError('Google Error: SHA-1 fingerprint mismatch (DEVELOPER_ERROR). Check Firebase console.');
-@@ -314,7 +409,7 @@ export default function RegisterScreen({ route }) {
+@@ -314,7 +471,7 @@ export default function RegisterScreen({ route }) {
      } finally {
        setGoogleBusy(false);
      }
@@ -1371,7 +1435,7 @@ index 184e003..11b175a 100644
  
    const resend = useCallback(async () => {
      setResendNote('');
-@@ -333,7 +428,7 @@ export default function RegisterScreen({ route }) {
+@@ -333,7 +490,7 @@ export default function RegisterScreen({ route }) {
      }
    }, [sentTo, form.email]);
  
@@ -1380,7 +1444,7 @@ index 184e003..11b175a 100644
    if (sentTo || needsVerification) {
      const address = sentTo || form.email.trim();
      return (
-@@ -362,7 +457,7 @@ export default function RegisterScreen({ route }) {
+@@ -362,7 +519,7 @@ export default function RegisterScreen({ route }) {
            <Body style={styles.doneBody}>
              We sent a secure verification link to{'\n'}
              <Body style={styles.doneEmail}>{address}</Body>
@@ -1389,7 +1453,7 @@ index 184e003..11b175a 100644
            </Body>
  
            {!!resendNote && (
-@@ -466,48 +561,34 @@ export default function RegisterScreen({ route }) {
+@@ -466,48 +623,34 @@ export default function RegisterScreen({ route }) {
            )}
  
            <View style={styles.formBox}>
@@ -1457,7 +1521,7 @@ index 184e003..11b175a 100644
                    placeholderTextColor={T.muted}
                    autoCapitalize="none"
                    keyboardType="email-address"
-@@ -518,67 +599,46 @@ export default function RegisterScreen({ route }) {
+@@ -518,67 +661,46 @@ export default function RegisterScreen({ route }) {
              </View>
  
              <View>
@@ -1553,7 +1617,7 @@ index 184e003..11b175a 100644
              </View>
  
              <View style={styles.refSection}>
-@@ -628,10 +688,7 @@ export default function RegisterScreen({ route }) {
+@@ -628,10 +750,7 @@ export default function RegisterScreen({ route }) {
            </View>
  
            <Pressable
@@ -1565,7 +1629,7 @@ index 184e003..11b175a 100644
              hitSlop={10}
              accessibilityRole="checkbox"
              accessibilityState={{ checked: agreed }}
-@@ -648,7 +705,7 @@ export default function RegisterScreen({ route }) {
+@@ -648,7 +767,7 @@ export default function RegisterScreen({ route }) {
            {!!errs.agreed && <Text style={styles.errorTextInline}>{errs.agreed}</Text>}
  
            <Pressable
@@ -1574,7 +1638,7 @@ index 184e003..11b175a 100644
              disabled={busy}
              accessibilityRole="button"
              style={({ pressed }) => [styles.primaryBtn, busy && { opacity: 0.72 }, pressed && !busy && { opacity: 0.96 }]}
-@@ -693,6 +750,127 @@ export default function RegisterScreen({ route }) {
+@@ -693,6 +812,187 @@ export default function RegisterScreen({ route }) {
            </View>
          </ScrollView>
        </KeyboardAvoidingView>
@@ -1593,69 +1657,129 @@ index 184e003..11b175a 100644
 +        >
 +          <Pressable style={styles.modalBackdrop} onPress={Keyboard.dismiss}>
 +            <Pressable style={styles.modalCard} onPress={() => {}}>
-+              <View style={styles.modalIconWrap}>
-+                <Ionicons name="lock-closed" size={22} color={T.emerald} />
-+              </View>
-+              <Text style={styles.modalTitle}>Create your secret code</Text>
-+              <Text style={styles.modalBody}>
-+                You will use this code whenever you enter Salmart. Do not share it with anyone.
-+              </Text>
-+              <TextInput
-+                ref={passwordRef}
-+                value={form.password}
-+                onChangeText={t => {
-+                  set('password', t);
-+                  setErrs(e => ({ ...e, password: '' }));
-+                }}
-+                onFocus={() => setActiveField('password')}
-+                placeholder="At least 8 characters"
-+                placeholderTextColor={T.muted}
-+                secureTextEntry
-+                autoFocus
-+                autoCapitalize="none"
-+                autoCorrect={false}
-+                style={styles.modalInput}
-+              />
-+              {!!errs.password && <Text style={styles.fieldError}>{errs.password}</Text>}
-+              <Text style={styles.modalHint}>Include at least one letter and one number.</Text>
-+              <Pressable
-+                onPress={() => {
-+                  const pwError = passwordError(form.password);
-+                  if (pwError) {
-+                    setErrs(e => ({ ...e, password: pwError }));
-+                    return;
-+                  }
-+                  setPasswordOpen(false);
-+                  Keyboard.dismiss();
++              <ScrollView
++                showsVerticalScrollIndicator={false}
++                keyboardShouldPersistTaps="handled"
++                contentContainerStyle={styles.modalScroll}
++              >
++                <View style={styles.modalTopRow}>
++                  <View style={[styles.modalIconWrap, { marginBottom: 0 }]}>
++                    <Ionicons name="lock-closed" size={22} color={T.emerald} />
++                  </View>
++                  <Pressable
++                    onPress={() => speak(PASSWORD_HELP_LINE)}
++                    accessibilityRole="button"
++                    accessibilityLabel="Hear how to create your code"
++                    style={({ pressed }) => [styles.modalHelpBtn, pressed && { opacity: 0.85 }]}
++                  >
++                    <Ionicons name="volume-high-outline" size={16} color={T.emerald} />
++                    <Text style={styles.modalHelpText}>Hear how</Text>
++                  </Pressable>
++                </View>
++                <Text style={styles.modalTitle}>Create your secret code</Text>
++                <Text style={styles.modalBody}>
++                  Type a code with at least 8 characters, including a letter and a number. Do not
++                  share it with anyone.
++                </Text>
++                <TextInput
++                  ref={passwordRef}
++                  value={form.password}
++                  onChangeText={t => {
++                    set('password', t);
++                    setErrs(e => ({ ...e, password: '' }));
++                  }}
++                  onFocus={() => setActiveField('password')}
++                  placeholder="At least 8 characters"
++                  placeholderTextColor={T.muted}
++                  secureTextEntry
++                  autoFocus
++                  autoCapitalize="none"
++                  autoCorrect={false}
++                  style={styles.modalInput}
++                />
++                {!!errs.password && <Text style={styles.fieldError}>{errs.password}</Text>}
++                <Text style={styles.modalHint}>At least 8 characters, one letter and one number.</Text>
 +
-+                  const restComplete = !!(
-+                    splitFullName(form.fullName).lastName
-+                    && (form.email.trim() || form.phoneNumber.trim())
-+                  );
-+                  if (!restComplete) return;
-+                  if (!agreed) {
-+                    // The agreement is the last step, so it opens by itself.
-+                    setAgreementOpen(true);
-+                    return;
-+                  }
-+                  notice('I am creating your account now.', { speak: true });
-+                  submit({ confirmedAgreement: true });
-+                }}
-+                accessibilityRole="button"
-+                style={({ pressed }) => [styles.modalPrimary, pressed && { opacity: 0.9 }]}
-+              >
-+                <Text style={styles.modalPrimaryText}>Save my code</Text>
-+              </Pressable>
-+              <Pressable
-+                onPress={() => {
-+                  setPasswordOpen(false);
-+                  Keyboard.dismiss();
-+                }}
-+                accessibilityRole="button"
-+                style={{ paddingVertical: 12 }}
-+              >
-+                <Text style={styles.modalCancel}>Not now</Text>
-+              </Pressable>
++                {!!suggestion && (
++                  <View style={styles.suggestBox}>
++                    <Text style={styles.suggestLabel}>Suggested code</Text>
++                    <Text selectable style={styles.suggestCode}>{suggestion}</Text>
++                    <Text style={styles.suggestHelp}>
++                      Copy it and save it somewhere safe. You will need it to sign in.
++                    </Text>
++                    <View style={styles.suggestRow}>
++                      <Pressable
++                        onPress={() => useSuggestion(suggestion)}
++                        accessibilityRole="button"
++                        accessibilityLabel="Use and copy this suggested code"
++                      >
++                        <Text style={styles.suggestPrimary}>
++                          {copied ? 'Used and copied' : 'Use this code'}
++                        </Text>
++                      </Pressable>
++                      <Pressable
++                        onPress={() => copySuggestion(suggestion)}
++                        accessibilityRole="button"
++                        accessibilityLabel="Copy this suggested code"
++                      >
++                        <Text style={styles.suggestAction}>{copied ? 'Copied' : 'Copy'}</Text>
++                      </Pressable>
++                    </View>
++                  </View>
++                )}
++
++                <Pressable
++                  onPress={() => {
++                    setSuggestion(makePasswordSuggestion());
++                    setCopied(false);
++                  }}
++                  accessibilityRole="button"
++                  style={{ alignSelf: 'center' }}
++                >
++                  <Text style={styles.suggestLink}>
++                    {suggestion ? 'Suggest another code' : 'Suggest a code'}
++                  </Text>
++                </Pressable>
++
++                <Pressable
++                  onPress={() => {
++                    const pwError = passwordError(form.password);
++                    if (pwError) {
++                      setErrs(e => ({ ...e, password: pwError }));
++                      return;
++                    }
++                    setPasswordOpen(false);
++                    Keyboard.dismiss();
++
++                    const restComplete = !!(
++                      splitFullName(form.fullName).lastName
++                      && (form.email.trim() || form.phoneNumber.trim())
++                    );
++                    if (!restComplete) return;
++                    if (!agreed) {
++                      // The agreement is the last step, so it opens by itself.
++                      setAgreementOpen(true);
++                      return;
++                    }
++                    notice('I am creating your account now.', { speak: true });
++                    submit({ confirmedAgreement: true });
++                  }}
++                  accessibilityRole="button"
++                  style={({ pressed }) => [styles.modalPrimary, pressed && { opacity: 0.9 }]}
++                >
++                  <Text style={styles.modalPrimaryText}>Save my code</Text>
++                </Pressable>
++                <Pressable
++                  onPress={() => {
++                    setPasswordOpen(false);
++                    Keyboard.dismiss();
++                  }}
++                  accessibilityRole="button"
++                  style={{ paddingVertical: 12 }}
++                >
++                  <Text style={styles.modalCancel}>Not now</Text>
++                </Pressable>
++              </ScrollView>
 +            </Pressable>
 +          </Pressable>
 +        </KeyboardAvoidingView>
@@ -1702,7 +1826,7 @@ index 184e003..11b175a 100644
      </SafeAreaView>
    );
  }
-@@ -702,6 +880,64 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+@@ -702,6 +1002,104 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
    flex: { flex: 1 },
    scroll: { flexGrow: 1, paddingHorizontal: 22, paddingTop: 12 },
  
@@ -1715,14 +1839,33 @@ index 184e003..11b175a 100644
 +    padding: 22,
 +  },
 +  modalCard: {
-+    width: '100%',
-+    maxWidth: 420,
++    width: '88%',
++    maxWidth: 360,
++    maxHeight: '86%',
++    alignSelf: 'center',
 +    backgroundColor: T.card,
 +    borderRadius: 20,
 +    borderWidth: 1,
 +    borderColor: T.border,
-+    padding: 22,
++    padding: 18,
 +  },
++  modalScroll: { paddingBottom: 2 },
++  modalTopRow: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    marginBottom: 12,
++  },
++  modalHelpBtn: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    gap: 6,
++    paddingVertical: 6,
++    paddingHorizontal: 10,
++    borderRadius: 999,
++    backgroundColor: T.bgSoft,
++  },
++  modalHelpText: { color: T.emerald, fontSize: 12, fontWeight: '800' },
 +  modalIconWrap: {
 +    width: 44,
 +    height: 44,
@@ -1745,6 +1888,27 @@ index 184e003..11b175a 100644
 +    fontSize: 16,
 +  },
 +  modalHint: { color: T.muted, fontSize: 12, marginTop: 6 },
++  suggestBox: {
++    marginTop: 14,
++    padding: 12,
++    borderRadius: 14,
++    backgroundColor: T.bgSoft,
++    borderWidth: 1,
++    borderColor: T.border,
++  },
++  suggestLabel: {
++    color: T.muted,
++    fontSize: 11,
++    fontWeight: '800',
++    textTransform: 'uppercase',
++    letterSpacing: 0.4,
++  },
++  suggestCode: { color: T.ink, fontSize: 18, fontWeight: '800', marginTop: 4, letterSpacing: 0.5 },
++  suggestHelp: { color: T.inkMuted, fontSize: 12, lineHeight: 17, marginTop: 6 },
++  suggestRow: { flexDirection: 'row', alignItems: 'center', gap: 18, marginTop: 10 },
++  suggestPrimary: { color: T.emerald, fontSize: 13, fontWeight: '800' },
++  suggestAction: { color: T.inkMuted, fontSize: 13, fontWeight: '700' },
++  suggestLink: { color: T.emerald, fontSize: 12, fontWeight: '700', textAlign: 'center', paddingVertical: 10 },
 +  modalPrimary: {
 +    marginTop: 16,
 +    minHeight: 48,
@@ -1767,7 +1931,7 @@ index 184e003..11b175a 100644
    brandRow: {
      flexDirection: 'row',
      alignItems: 'center',
-@@ -762,8 +998,6 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+@@ -762,8 +1160,6 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
    },
  
    formBox: { gap: 16, marginBottom: 10 },

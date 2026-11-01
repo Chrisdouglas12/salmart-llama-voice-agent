@@ -254,7 +254,9 @@ export function AIProvider({ children }) {
     // The listing snapshot follows the same rule: flags only, never values.
     const authOutcome = takeAuthOutcome();
     const listing = peekFormSnapshot();
-    const registration = peekRegistrationSnapshot();
+    // Registration flags belong to the register screen. Once the user moves
+    // away, the old form state must not ride along with an unrelated turn.
+    const registration = context?.screen === 'register' ? peekRegistrationSnapshot() : null;
     const turnContext = (authOutcome || listing || registration)
       ? {
         ...(context || {}),

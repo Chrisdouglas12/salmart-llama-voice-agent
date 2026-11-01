@@ -7,7 +7,7 @@ can be read without applying anything.
 | --- | --- | --- | --- |
 | `salmart-mobile.event.patch` | +943 / −149 | `5ce993f` | original event frontend work (18 files) |
 | `salmart-mobile.ai-voice.patch` | +2451 / −464 | `e3076a1` | inline voice, screen navigation, voice-assisted registration, Google handoff, long-press AI screen, same-language voice, post-sign-in resume, LAN dev API discovery (28 files) |
-| `salmart-mobile.registration.patch` | +747 / -471 | on top of `salmart-mobile.ai-voice.patch` | voice-first sign-up: full name, optional email (Google/Yahoo/other), phone fallback (MTN/Airtel/Glo/other), secure password modal, agreement card, automatic sign-in, model-written welcome, standard device voice (7 files) |
+| `salmart-mobile.registration.patch` | +911 / -471 | on top of `salmart-mobile.ai-voice.patch` | voice-first sign-up: full name, optional email (Google/Yahoo/other), phone fallback (MTN/Airtel/Glo/other), sized secure password modal with copyable suggestion and spoken help, agreement card, automatic sign-in, model-written welcome, stale registration state cleared by screen/sign-in, standard device voice (7 files) |
 
 `mobile/src/**` holds the **current, complete** frontend AI code under its real
 app path, so a reviewer can read it without applying anything:
@@ -71,7 +71,7 @@ the Meta-voice pass — the ten files below. Backend counterpart is documented i
 
 | File | Change |
 | --- | --- |
-| `src/ai/AIContext.js` | `send()` returns `{ ok, reply, structured, confirmation, navigatedTo }`; single `toggleRecording(context)` path transcribes → sends → speaks; executes the `navigate` block on every turn (voice and text); client-side screen allowlist that excludes `ai`/`assistant` and id-based routes; `startGoogleAuth` prefers the native picker and falls back to the backend `auth_url` in a system browser; `notice()` and `speak()` for spoken status; `authBusy` prevents double taps; voice turns carry the speaker's `lang` from transcription into the turn context and the spoken reply; registration snapshots ride along with the turn, and `welcomeAfterRegistration()` skips the generic resume and sends one `registration_complete` turn after the rebind, so the model writes the greeting |
+| `src/ai/AIContext.js` | `send()` returns `{ ok, reply, structured, confirmation, navigatedTo }`; single `toggleRecording(context)` path transcribes → sends → speaks; executes the `navigate` block on every turn (voice and text); client-side screen allowlist that excludes `ai`/`assistant` and id-based routes; `startGoogleAuth` prefers the native picker and falls back to the backend `auth_url` in a system browser; `notice()` and `speak()` for spoken status; `authBusy` prevents double taps; voice turns carry the speaker's `lang` from transcription into the turn context and the spoken reply; registration snapshots ride only turns from the register screen, and `welcomeAfterRegistration()` skips the generic resume and sends one `registration_complete` turn after the rebind, so the model writes the greeting |
 | `src/ai/AIModeButton.js` | global mic is inline: listening status, spoken reply, Confirm/Cancel, Google button, auto-dismiss after 10 s; tap never pushes the AI screen; **hold 450 ms** opens `ai` with `{ screen: currentName }` and swallows the following tap so the long press cannot also record |
 | `src/ai/AIModeScreen.js` | sends `{ screen, platform }` on every text/voice turn; routes `auth_url` to the Google handler and `onSpeak` to the "hear this" lines |
 | `src/ai/UseAIPatch.js` | accepts `register` as a form target, maps `fill_register`, and focuses the step named by a `register_focus` block |
@@ -80,7 +80,7 @@ the Meta-voice pass — the ten files below. Backend counterpart is documented i
 | `src/api/endpoints.js` | `register()` returns the JWT and user fields, so a successful sign-up signs the user in without a second login |
 | `src/ai/components/StructuredBlock.js` | **new renderers** for `auth_url` (tappable "Continue with Google", never auto-opens) and `fill_register` (explains the remaining manual steps, can be read aloud) |
 | `src/ai/components/MessageBubble.js` | passes `onOpenAuth` / `onSpeak` through to structured blocks |
-| `src/screens/RegisterScreen.js` | voice-first form: optional email, phone fallback, one secure password modal with the keyboard focused, agreement card last, automatic submit and sign-in, Market reset, model-written welcome |
+| `src/screens/RegisterScreen.js` | voice-first form: optional email, phone fallback, a sized (not full-screen) password card with a copyable suggested code and a "Hear how" spoken explanation, agreement card last, automatic submit and sign-in, Market reset, model-written welcome |
 | `src/state/AuthContext.js` | applies the session returned by `/register` immediately; the verification path remains only for older unverified accounts |
 
 `RegisterScreen.js`, `src/state/AuthContext.js` and `src/api/endpoints.js` are
@@ -93,12 +93,15 @@ What a non-reading user gets: tap the global mic and speak. The assistant can
 open the right screen ("take me to my messages", "help me create an account"),
 speak its answer, and run the action without leaving the current screen. On the
 register screen it asks for name and email-or-phone by voice, opens the secure
-password box itself when that step comes, then the agreement card. Ticking the
+password box itself when that step comes, offers a suggested code with Copy and
+Use actions plus a "Hear how" explanation, then the agreement card. Ticking the
 box is the user's own action; when it is ticked and everything is complete the
 assistant says "I am creating your account now.", the server creates the
 account, and the app opens Market signed in. The model then greets the new user
 and asks whether they want to buy or sell; if the model is unreachable the app
-speaks the fixed welcome instead.
+speaks the fixed welcome instead. If the user leaves the register screen or
+signs in some other way, the old registration step is discarded, so the
+assistant never asks a finished sign-up question again.
 For sign-in it shows one "Continue with Google" button; tapping it opens the
 account picker (or the system browser on a build without the native module), and
 the user never types a Google password into the assistant.
@@ -136,9 +139,10 @@ the same content as the app repo, byte for byte. `git apply --check -R` against
 the app repo confirms each patch is the exact reverse of the present changes.
 
 Verification: the app repo parses every changed file under Babel (JSX/JS), and
-the backend contract tests pass (42/42 in the four auth/form/task/navigation
+the backend contract tests pass (44/44 in the four auth/form/task/navigation
 files). Not run on a device or simulator yet, so the mic, secure modal, keyboard
-focus, automatic sign-in and model-written welcome still need a dev-build pass.
+focus, copy-to-clipboard suggestion, automatic sign-in and model-written welcome
+still need a dev-build pass.
 
 ## Original event work
 

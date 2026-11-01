@@ -18,8 +18,63 @@ function read(collectedInfo) {
 }
 
 /** Prompt block for the stored state (no email, password, or token). */
-function promptBlock(auth) {
-  return intents.buildPromptBlock(auth);
+function promptBlock(auth, { screen } = {}) {
+  return intents.buildPromptBlock(auth, { screen });
+}
+
+// A registration may only continue on the screens that show it. The AI screen
+// is included because the user can open the conversation without leaving the
+// form. Any other screen means they moved on.
+const REGISTRATION_SCREENS = new Set(['register', 'ai']);
+
+/**
+ * True when a stored auth task no longer matches this turn. A signed-in user
+ * has finished authentication, and a registration step cannot follow the user
+ * to Market or any other screen.
+ */
+function isStale(auth, { isAuthenticated, screen, event } = {}) {
+  if (!auth) return false;
+  if (isAuthenticated) return true;
+  if (event === 'registration_complete') return true;
+  if (auth.intent === 'REGISTER' && screen && !REGISTRATION_SCREENS.has(screen)) return true;
+  return false;
+}
+
+/**
+ * Remove a finished registration from memory: the auth task, the registration
+ * draft, and the "already supplied" flags. Other task drafts survive, so a
+ * buyer or seller who also started signing up does not lose their real work.
+ */
+function withoutRegistration(collectedInfo) {
+  if (!collectedInfo || typeof collectedInfo !== 'object' || Array.isArray(collectedInfo)) {
+    return null;
+  }
+  const base = { ...collectedInfo };
+  const auth = intents.sanitizeAuthState(base.auth);
+  delete base.auth;
+  if (!auth || auth.intent !== 'REGISTER') return base;
+
+  const task = base.task;
+  if (!task || typeof task !== 'object' || Array.isArray(task)) return base;
+
+  const next = { ...task };
+  if (next.drafts && typeof next.drafts === 'object' && !Array.isArray(next.drafts)) {
+    next.drafts = { ...next.drafts, register: {} };
+  }
+  delete next.emailProvided;
+  delete next.phoneProvided;
+  delete next.emailDeclined;
+
+  const hasOtherWork = !!(
+    (next.adDraft && Object.keys(next.adDraft).length)
+    || (next.drafts?.request && Object.keys(next.drafts.request).length)
+    || (next.drafts?.profile && Object.keys(next.drafts.profile).length)
+    || next.lastSearch
+  );
+  if (hasOtherWork) base.task = next;
+  else delete base.task;
+
+  return base;
 }
 
 /**
@@ -151,6 +206,8 @@ function toCollectedInfo(previous, auth) {
 module.exports = {
   read,
   promptBlock,
+  isStale,
+  withoutRegistration,
   applyToolResults,
   toCollectedInfo,
 };

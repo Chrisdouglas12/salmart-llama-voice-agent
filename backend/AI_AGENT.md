@@ -447,11 +447,19 @@ The mobile `RegisterScreen` applies the patch and asks one question at a time:
    has no email, the tool is called with `noEmail=true` and a phone number is
    collected instead, naming MTN, Airtel, Glo, or any other network. Phone-only
    accounts are valid.
-3. A secure password modal opens by itself with the keyboard focused. The value
-   stays in the component and goes only to `POST /register`.
+3. A secure password modal opens by itself with the keyboard focused. It is a
+   sized card, not a full-screen sheet. It explains the rule, offers a readable
+   suggested code with Copy and Use actions, and a "Hear how" button speaks the
+   instructions without reading the code. The value stays in the component and
+   goes only to `POST /register`.
 4. The agreement card is last, and ticking it is the user's own action.
 5. When everything is complete and the box is ticked, the assistant says "I am
    creating your account now." and the form submits.
+
+Auth state is also checked against the current screen before every turn. A
+registration that was left behind is dropped when the user is signed in or has
+moved to another screen, so the assistant cannot ask an old registration
+question after a manual sign-up.
 
 Server policy for this hackathon: email and phone are both accepted, no OTP or
 verification gate is inserted, the account is created as verified, and

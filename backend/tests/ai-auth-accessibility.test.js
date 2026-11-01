@@ -8,6 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const intents = require('../lib/assistant/authIntents');
+const authSession = require('../services/ai/authSession');
 const guard = require('../lib/assistant/credentialGuard');
 const { explainAuthError } = require('../lib/assistant/authGuidance');
 
@@ -140,13 +141,52 @@ test('repeating a request rephrases instead of restarting', () => {
   assert.ok(again.say.startsWith(intents._internal.RETRY_PREFIX));
 });
 
-test('only the app session marks success', () => {
+test('only the app session ends the auth task', () => {
   const prior = {
     intent: 'SIGN_IN', state: 'SIGN_IN_IN_PROGRESS',
     method: 'email', emailProvided: false, attempts: 0, updatedAt: Date.now(),
   };
   assert.equal(intents.applyAuthEvent(prior, { type: 'google_started' }).state, 'SIGN_IN_IN_PROGRESS');
-  assert.equal(intents.applyAuthEvent(prior, { type: 'authenticated' }).state, 'SUCCESS');
+  assert.equal(intents.applyAuthEvent(prior, { type: 'authenticated' }), null);
+});
+
+test('a signed-in or off-screen registration is not replayed', () => {
+  const auth = {
+    intent: 'REGISTER', state: 'COLLECTING_REGISTRATION_DETAILS',
+    method: 'email', updatedAt: Date.now(),
+  };
+  assert.equal(authSession.isStale(auth, { isAuthenticated: true }), true);
+  assert.equal(authSession.isStale(auth, { screen: 'market' }), true);
+  assert.equal(authSession.isStale(auth, { screen: 'register' }), false);
+  assert.equal(authSession.isStale(auth, { screen: 'ai' }), false);
+  assert.equal(authSession.isStale(auth, { event: 'registration_complete' }), true);
+  assert.equal(authSession.isStale({ ...auth, intent: 'SIGN_IN' }, { screen: 'market' }), false);
+});
+
+test('dropping a stale registration keeps unrelated task memory', () => {
+  const collected = {
+    auth: {
+      intent: 'REGISTER', state: 'COLLECTING_REGISTRATION_DETAILS',
+      method: 'email', emailProvided: true, updatedAt: Date.now(),
+    },
+    task: {
+      goal: 'I want to join', status: 'active',
+      drafts: { register: { fullName: 'Ada Obi' }, request: {}, profile: {} },
+      emailProvided: true, phoneProvided: false, emailDeclined: false,
+      updatedAt: Date.now(),
+    },
+  };
+  const clean = authSession.withoutRegistration(collected);
+  assert.equal(clean.auth, undefined);
+  assert.equal(clean.task, undefined);
+
+  const kept = authSession.withoutRegistration({
+    ...collected,
+    task: { ...collected.task, adDraft: { title: 'Blender' } },
+  });
+  assert.deepEqual(kept.task.drafts.register, {});
+  assert.equal(kept.task.adDraft.title, 'Blender');
+  assert.equal(kept.task.emailProvided, undefined);
 });
 
 test('credentials in chat are refused and redacted', () => {

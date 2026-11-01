@@ -46,6 +46,9 @@ async function runTurn({ ctx, messages, signal }) {
   const modelMessages = [...messages];
   let finalText = '';
   let stopReason = 'final';
+  // The exact chat model id that answered, so the app can show it honestly
+  // ("response by …") instead of a hardcoded label.
+  let usedModel = null;
 
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
     if (Date.now() - started > WALL_CLOCK_MS) { stopReason = 'timeout'; break; }
@@ -64,6 +67,7 @@ async function runTurn({ ctx, messages, signal }) {
         requestId: ctx.requestId,
         timeoutMs: remainingMs,
       });
+      if (resp?.model) usedModel = resp.model;
     } catch (err) {
       stopReason = 'error';
       finalText = 'The assistant is temporarily unavailable. Please try again.';
@@ -157,6 +161,7 @@ async function runTurn({ ctx, messages, signal }) {
 
   return {
     finalText, turns: newMessages, toolLog, toolResults, stopReason, pendingConfirmation,
+    model: usedModel,
     timings: { llmMs, toolMs, llmCalls, totalMs: Date.now() - started },
   };
 }

@@ -8,6 +8,7 @@ import { useTheme } from '../theme/theme';
 import { useNavActions, useNavSelector } from '../state/Navigation';
 import { Small, Tiny } from '../ui/kit';
 import { useAI } from './AIContext';
+import { shortModelName } from './models';
 import ProductPicker from './components/ProductPicker';
 import { useSplashVisible } from '../state/splash';
 
@@ -48,7 +49,7 @@ export default function AIModeButton({ extraContext } = {}) {
   const inWeb = useNavSelector(s => s.inWeb);
   const nav = useNavActions();
   const {
-    recording, transcribing, status, lastVoice,
+    recording, transcribing, status, lastVoice, models,
     toggleRecording, dismissVoice, confirmVoice, cancelVoice,
     startGoogleAuth, authBusy, micNudge, selectProduct, openSellerChat,
   } = useAI();
@@ -140,13 +141,19 @@ export default function AIModeButton({ extraContext } = {}) {
 
   const showCard = busy || !!lastVoice?.text || !!confirmation || !!authBlock || !!chatHandoff;
 
+  // The header names the real model doing the work, from ids the server
+  // reported on earlier turns — never a hardcoded string. Before the first
+  // turn the ids are still unknown, so the header stays generic rather than
+  // guessing.
+  const sttName = shortModelName(models?.stt);
+  const brainName = shortModelName(models?.brain);
   const statusLabel = recording
-    ? 'Listening…'
+    ? (sttName ? `${sttName} is listening` : 'Listening…')
     : transcribing
-      ? 'Transcribing…'
+      ? (sttName ? `${sttName} is understanding you…` : 'Transcribing…')
       : sending
-        ? 'Thinking…'
-        : 'Salmart AI';
+        ? (brainName ? `Response by ${brainName}…` : 'Thinking…')
+        : (lastVoice?.kind === 'reply' && brainName ? `Response by ${brainName}` : 'Salmart AI');
 
   const body = recording
     ? "I'm listening. Just stop talking and I'll pick it up — or tap the button."

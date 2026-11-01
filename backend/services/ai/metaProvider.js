@@ -64,12 +64,13 @@ async function chat({ messages, tools = [], requestId, maxTokens, reasoningEffor
   console.log(`[metaProvider] chat ok: requestId=${requestId} model=${model || '?'} ms=${Date.now() - started} kind=${rawCalls.length ? 'tool_calls' : 'final'} toolCalls=${rawCalls.length} completion=${usage.completion_tokens ?? '?'} reasoning=${reasoning ?? '?'}`);
 
   if (rawCalls.length === 0) {
-    return { kind: 'final', text: (msg.content || '').trim(), toolCalls: [], raw };
+    return { kind: 'final', text: (msg.content || '').trim(), toolCalls: [], raw, model };
   }
 
   return {
     kind: 'tool_calls',
     text: msg.content || null,
+    model,
     toolCalls: rawCalls.map(tc => {
       let args = {};
       if (typeof tc.function?.arguments === 'string') {

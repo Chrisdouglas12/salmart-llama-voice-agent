@@ -91,6 +91,10 @@ export function AIProvider({ children }) {
   // Latest content for the global mic card. `confirmation` keeps the turn's
   // Confirm/Cancel actions available inline.
   const [lastVoice, setLastVoice] = useState(null);
+  // Real model ids reported by the server (never hardcoded): `stt` from the
+  // transcription response, `brain` from the turn that wrote the reply. The
+  // card header names whichever model is actually working right now.
+  const [models, setModels] = useState({ stt: null, brain: null });
   const [authBusy, setAuthBusy] = useState(false);
   // Attention nudge for the mic button (welcome pulse, "Tap to talk"). It does
   // not record; it only animates the button. Cleared when recording starts.
@@ -251,6 +255,13 @@ export function AIProvider({ children }) {
   // is in.
   const finishTurn = useCallback((res, context) => {
     const reply = res.reply || '';
+    // Remember which real models answered, so the card can name them.
+    if (res?.models && (res.models.brain || res.models.stt)) {
+      setModels(prev => ({
+        stt: res.models.stt || prev.stt,
+        brain: res.models.brain || prev.brain,
+      }));
+    }
     setMessages(prev => [...prev, {
       key: newKey(),
       role: 'assistant',
@@ -488,6 +499,13 @@ export function AIProvider({ children }) {
       });
       if (!res?.success) throw new Error(res?.message || 'Could not add it to your cart.');
 
+      // The tap reply names its real author too (null when the template spoke).
+      if (res?.models && (res.models.brain || res.models.stt)) {
+        setModels(prev => ({
+          stt: res.models.stt || prev.stt,
+          brain: res.models.brain || prev.brain,
+        }));
+      }
       const line = res.reply || 'I added it to your cart.';
       const blocks = Array.isArray(res.structured) ? res.structured : [];
       setMessages(prev => [...prev, {
@@ -746,6 +764,11 @@ export function AIProvider({ children }) {
       form.append('audio', { uri, name: 'voice.m4a', type: 'audio/m4a' });
       const res = await apiUpload('/api/assistant/transcribe', form);
       const transcript = String(res?.text || '').trim();
+      // The real transcription model id travels with the response; the card
+      // header names it while listening on the next turns.
+      if (res?.model) {
+        setModels(prev => ({ ...prev, stt: String(res.model) }));
+      }
       // The reply, in text and voice, follows the speaker's language.
       heardLang = (res && typeof res.lang === 'string' && res.lang !== 'eng') ? res.lang : null;
       lastLangRef.current = heardLang;
@@ -924,12 +947,12 @@ export function AIProvider({ children }) {
 
   const value = useMemo(() => ({
     conversationId, messages, status, error, isReady, recording, transcribing,
-    lastVoice, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
+    lastVoice, models, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
     send, selectProduct, confirm, cancel, reset, openSellerChat, micNudge, nudgeMic,
     startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
   }), [
     conversationId, messages, status, error, isReady, send, selectProduct, confirm, cancel, reset,
-    recording, transcribing, toggleRecording, lastVoice, dismissVoice, confirmVoice, cancelVoice,
+    recording, transcribing, toggleRecording, lastVoice, models, dismissVoice, confirmVoice, cancelVoice,
     openSellerChat, micNudge, nudgeMic,
     startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
   ]);

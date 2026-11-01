@@ -1,5 +1,5 @@
 diff --git a/src/ai/AIContext.js b/src/ai/AIContext.js
-index 9d88d62..632a453 100644
+index 9d88d62..0455844 100644
 --- a/src/ai/AIContext.js
 +++ b/src/ai/AIContext.js
 @@ -41,6 +41,7 @@ import { TAB_ROOTS } from '../state/routes';
@@ -10,7 +10,18 @@ index 9d88d62..632a453 100644
    confirmAction as apiConfirm, cancelAction as apiCancel,
  } from './api';
  import { speakReply, queueSpeech, stopSpeaking } from './speak';
-@@ -107,6 +108,9 @@ export function AIProvider({ children }) {
+@@ -90,6 +91,10 @@ export function AIProvider({ children }) {
+   // Latest content for the global mic card. `confirmation` keeps the turn's
+   // Confirm/Cancel actions available inline.
+   const [lastVoice, setLastVoice] = useState(null);
++  // Real model ids reported by the server (never hardcoded): `stt` from the
++  // transcription response, `brain` from the turn that wrote the reply. The
++  // card header names whichever model is actually working right now.
++  const [models, setModels] = useState({ stt: null, brain: null });
+   const [authBusy, setAuthBusy] = useState(false);
+   // Attention nudge for the mic button (welcome pulse, "Tap to talk"). It does
+   // not record; it only animates the button. Cleared when recording starts.
+@@ -107,6 +112,9 @@ export function AIProvider({ children }) {
  
    const anonRef = useRef(null);
    const convRef = useRef(null);
@@ -20,7 +31,21 @@ index 9d88d62..632a453 100644
    const authBusyRef = useRef(false);
    const messagesRef = useRef([]);
    messagesRef.current = messages;
-@@ -452,6 +456,72 @@ export function AIProvider({ children }) {
+@@ -247,6 +255,13 @@ export function AIProvider({ children }) {
+   // is in.
+   const finishTurn = useCallback((res, context) => {
+     const reply = res.reply || '';
++    // Remember which real models answered, so the card can name them.
++    if (res?.models && (res.models.brain || res.models.stt)) {
++      setModels(prev => ({
++        stt: res.models.stt || prev.stt,
++        brain: res.models.brain || prev.brain,
++      }));
++    }
+     setMessages(prev => [...prev, {
+       key: newKey(),
+       role: 'assistant',
+@@ -452,6 +467,79 @@ export function AIProvider({ children }) {
      })();
    }, [welcomeTick, authReady, isAuthenticated, send]);
  
@@ -56,6 +81,13 @@ index 9d88d62..632a453 100644
 +      });
 +      if (!res?.success) throw new Error(res?.message || 'Could not add it to your cart.');
 +
++      // The tap reply names its real author too (null when the template spoke).
++      if (res?.models && (res.models.brain || res.models.stt)) {
++        setModels(prev => ({
++          stt: res.models.stt || prev.stt,
++          brain: res.models.brain || prev.brain,
++        }));
++      }
 +      const line = res.reply || 'I added it to your cart.';
 +      const blocks = Array.isArray(res.structured) ? res.structured : [];
 +      setMessages(prev => [...prev, {
@@ -93,15 +125,22 @@ index 9d88d62..632a453 100644
    const confirm = useCallback(async (actionId) => {
      try {
        const res = await apiConfirm(actionId);
-@@ -678,6 +748,7 @@ export function AIProvider({ children }) {
+@@ -676,8 +764,14 @@ export function AIProvider({ children }) {
+       form.append('audio', { uri, name: 'voice.m4a', type: 'audio/m4a' });
+       const res = await apiUpload('/api/assistant/transcribe', form);
        const transcript = String(res?.text || '').trim();
++      // The real transcription model id travels with the response; the card
++      // header names it while listening on the next turns.
++      if (res?.model) {
++        setModels(prev => ({ ...prev, stt: String(res.model) }));
++      }
        // The reply, in text and voice, follows the speaker's language.
        heardLang = (res && typeof res.lang === 'string' && res.lang !== 'eng') ? res.lang : null;
 +      lastLangRef.current = heardLang;
  
        if (!res?.success || !transcript) {
          const line = 'I could not catch that. Please try again.';
-@@ -706,6 +777,13 @@ export function AIProvider({ children }) {
+@@ -706,6 +800,13 @@ export function AIProvider({ children }) {
        const chatBlock = result.ok && Array.isArray(result.structured)
          ? result.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId)
          : null;
@@ -115,7 +154,7 @@ index 9d88d62..632a453 100644
  
        setLastVoice({
          text: line,
-@@ -713,6 +791,7 @@ export function AIProvider({ children }) {
+@@ -713,6 +814,7 @@ export function AIProvider({ children }) {
          confirmation: result.ok ? (result.confirmation || null) : null,
          authUrl: authBlock || null,
          chatHandoff: chatBlock || null,
@@ -123,7 +162,7 @@ index 9d88d62..632a453 100644
          at: Date.now(),
        });
        if (!result.spoken) await speakReply(line, heardLang);
-@@ -823,8 +902,11 @@ export function AIProvider({ children }) {
+@@ -823,8 +925,11 @@ export function AIProvider({ children }) {
  
    // Seller-chat handoff: open ChatScreen with the AI draft and product card
    // pre-filled. The user presses send in the chat; nothing is auto-sent.
@@ -135,7 +174,7 @@ index 9d88d62..632a453 100644
      nav.push('chat', {
        partnerId: String(handoff.sellerId),
        ...(handoff.sellerName ? { name: String(handoff.sellerName).slice(0, 80) } : {}),
-@@ -838,15 +920,15 @@ export function AIProvider({ children }) {
+@@ -838,16 +943,16 @@ export function AIProvider({ children }) {
          },
        } : {}),
      });
@@ -144,31 +183,38 @@ index 9d88d62..632a453 100644
  
    const value = useMemo(() => ({
      conversationId, messages, status, error, isReady, recording, transcribing,
-     lastVoice, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
+-    lastVoice, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
 -    send, confirm, cancel, reset, openSellerChat, micNudge, nudgeMic,
++    lastVoice, models, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
 +    send, selectProduct, confirm, cancel, reset, openSellerChat, micNudge, nudgeMic,
      startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
    }), [
 -    conversationId, messages, status, error, isReady, send, confirm, cancel, reset,
+-    recording, transcribing, toggleRecording, lastVoice, dismissVoice, confirmVoice, cancelVoice,
 +    conversationId, messages, status, error, isReady, send, selectProduct, confirm, cancel, reset,
-     recording, transcribing, toggleRecording, lastVoice, dismissVoice, confirmVoice, cancelVoice,
++    recording, transcribing, toggleRecording, lastVoice, models, dismissVoice, confirmVoice, cancelVoice,
      openSellerChat, micNudge, nudgeMic,
      startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
+   ]);
 diff --git a/src/ai/AIModeButton.js b/src/ai/AIModeButton.js
-index 802e2d7..bbc36bc 100644
+index 802e2d7..2ace551 100644
 --- a/src/ai/AIModeButton.js
 +++ b/src/ai/AIModeButton.js
-@@ -8,6 +8,7 @@ import { useTheme } from '../theme/theme';
+@@ -8,6 +8,8 @@ import { useTheme } from '../theme/theme';
  import { useNavActions, useNavSelector } from '../state/Navigation';
  import { Small, Tiny } from '../ui/kit';
  import { useAI } from './AIContext';
++import { shortModelName } from './models';
 +import ProductPicker from './components/ProductPicker';
  import { useSplashVisible } from '../state/splash';
  
  /**
-@@ -49,10 +50,14 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -47,12 +49,16 @@ export default function AIModeButton({ extraContext } = {}) {
+   const inWeb = useNavSelector(s => s.inWeb);
+   const nav = useNavActions();
    const {
-     recording, transcribing, status, lastVoice,
+-    recording, transcribing, status, lastVoice,
++    recording, transcribing, status, lastVoice, models,
      toggleRecording, dismissVoice, confirmVoice, cancelVoice,
 -    startGoogleAuth, authBusy, micNudge,
 +    startGoogleAuth, authBusy, micNudge, selectProduct, openSellerChat,
@@ -182,7 +228,7 @@ index 802e2d7..bbc36bc 100644
    const longPressedRef = useRef(false);
    const splashVisible = useSplashVisible();
    const sending = status === 'sending';
-@@ -98,22 +103,42 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -98,30 +104,56 @@ export default function AIModeButton({ extraContext } = {}) {
    const glowOpacity = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [0.34, 0.02] });
    const glowScale = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.8] });
  
@@ -226,9 +272,27 @@ index 802e2d7..bbc36bc 100644
 -  const showCard = busy || !!lastVoice?.text || !!confirmation || !!authBlock;
 +  const showCard = busy || !!lastVoice?.text || !!confirmation || !!authBlock || !!chatHandoff;
  
++  // The header names the real model doing the work, from ids the server
++  // reported on earlier turns — never a hardcoded string. Before the first
++  // turn the ids are still unknown, so the header stays generic rather than
++  // guessing.
++  const sttName = shortModelName(models?.stt);
++  const brainName = shortModelName(models?.brain);
    const statusLabel = recording
-     ? 'Listening…'
-@@ -170,12 +195,22 @@ export default function AIModeButton({ extraContext } = {}) {
+-    ? 'Listening…'
++    ? (sttName ? `${sttName} is listening` : 'Listening…')
+     : transcribing
+-      ? 'Transcribing…'
++      ? (sttName ? `${sttName} is understanding you…` : 'Transcribing…')
+       : sending
+-        ? 'Thinking…'
+-        : 'Salmart AI';
++        ? (brainName ? `Response by ${brainName}…` : 'Thinking…')
++        : (lastVoice?.kind === 'reply' && brainName ? `Response by ${brainName}` : 'Salmart AI');
+ 
+   const body = recording
+     ? "I'm listening. Just stop talking and I'll pick it up — or tap the button."
+@@ -170,12 +202,22 @@ export default function AIModeButton({ extraContext } = {}) {
      });
    };
  
@@ -255,7 +319,7 @@ index 802e2d7..bbc36bc 100644
    const onPressMic = () => {
      if (longPressedRef.current) {
        longPressedRef.current = false;
-@@ -185,7 +220,15 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -185,7 +227,15 @@ export default function AIModeButton({ extraContext } = {}) {
    };
  
    return (
@@ -272,7 +336,7 @@ index 802e2d7..bbc36bc 100644
        {!!(nudgeVisible && micNudge && !busy) && (
          <View style={[styles.nudge, { backgroundColor: T.card, borderColor: T.border }]}>
            <Tiny style={{ color: T.ink, fontWeight: '700' }}>{micNudge.label || 'Tap to talk'}</Tiny>
-@@ -215,7 +258,13 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -215,7 +265,13 @@ export default function AIModeButton({ extraContext } = {}) {
            </View>
  
            {!!body && (
@@ -287,7 +351,7 @@ index 802e2d7..bbc36bc 100644
                {body}
              </Small>
            )}
-@@ -280,6 +329,24 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -280,6 +336,24 @@ export default function AIModeButton({ extraContext } = {}) {
                </Small>
              </Pressable>
            )}
@@ -312,7 +376,7 @@ index 802e2d7..bbc36bc 100644
          </View>
        )}
  
-@@ -312,6 +379,13 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -312,6 +386,13 @@ export default function AIModeButton({ extraContext } = {}) {
          <Ionicons name={fabIcon} size={26} color="#fff" />
        </Pressable>
        </Animated.View>
@@ -326,7 +390,7 @@ index 802e2d7..bbc36bc 100644
      </View>
    );
  }
-@@ -328,6 +402,9 @@ const styles = StyleSheet.create({
+@@ -328,6 +409,9 @@ const styles = StyleSheet.create({
    card: {
      width: Math.min(WINDOW_WIDTH - 40, 340),
      marginBottom: 12,
@@ -337,24 +401,28 @@ index 802e2d7..bbc36bc 100644
      borderRadius: 18,
      borderWidth: 1,
 diff --git a/src/ai/AIModeScreen.js b/src/ai/AIModeScreen.js
-index bf694b1..8d27e0d 100644
+index bf694b1..d38bf2b 100644
 --- a/src/ai/AIModeScreen.js
 +++ b/src/ai/AIModeScreen.js
-@@ -11,6 +11,7 @@ import { useNav } from '../state/Navigation';
+@@ -9,8 +9,10 @@ import { Ionicons } from '@expo/vector-icons';
+ import { createThemed, useTheme } from '../theme/theme';
+ import { useNav } from '../state/Navigation';
  import { useAI } from './AIContext';
++import { shortModelName } from './models';
  import { IconButton, Small, Tiny, T2, T3, Body } from '../ui/kit';
  import MessageBubble from './components/MessageBubble';
 +import ProductPicker from './components/ProductPicker';
  
  /**
   * Full AI conversation screen.
-@@ -32,11 +33,16 @@ export default function AIModeScreen({ route }) {
+@@ -32,11 +34,17 @@ export default function AIModeScreen({ route }) {
    const insets = useSafeAreaInsets();
    const nav = useNav();
    const {
 -    messages, status, send, confirm, cancel, reset, isReady,
 +    messages, status, send, selectProduct, confirm, cancel, reset, isReady,
      recording, transcribing, toggleRecording, startGoogleAuth, speak, openSellerChat,
++    models,
    } = useAI();
  
    const [draft, setDraft] = useState('');
@@ -366,7 +434,7 @@ index bf694b1..8d27e0d 100644
    const listRef = useRef(null);
  
    // Screen context tells the assistant where the user came from. Only
-@@ -64,6 +70,21 @@ export default function AIModeScreen({ route }) {
+@@ -64,6 +72,21 @@ export default function AIModeScreen({ route }) {
      if (messages.length) scrollToEnd();
    }, [messages.length, scrollToEnd]);
  
@@ -388,7 +456,7 @@ index bf694b1..8d27e0d 100644
    const onSend = useCallback(async (text) => {
      const clean = String(text ?? draft).trim();
      if (!clean || sending) return;
-@@ -96,6 +117,10 @@ export default function AIModeScreen({ route }) {
+@@ -96,6 +119,10 @@ export default function AIModeScreen({ route }) {
      });
    }, [nav]);
  
@@ -399,7 +467,33 @@ index bf694b1..8d27e0d 100644
    const onPickMethod = useCallback((methodId) => {
      if (methodId === 'google') {
        // Ask the assistant for the Google sign-in URL. The auth_url block it
-@@ -181,10 +206,12 @@ export default function AIModeScreen({ route }) {
+@@ -121,8 +148,14 @@ export default function AIModeScreen({ route }) {
+       </View>
+       <View style={{ flex: 1, marginLeft: 10 }}>
+         <T2 numberOfLines={1}>Salmart AI</T2>
+-        <Tiny numberOfLines={1} style={{ color: sending ? T.emerald : T.inkMuted, marginTop: 1 }}>
+-          {sending ? 'Thinking…' : 'Ready to help'}
++        <Tiny numberOfLines={1} style={{ color: (sending || recording || transcribing) ? T.emerald : T.inkMuted, marginTop: 1 }}>
++          {recording
++            ? (shortModelName(models?.stt) ? `${shortModelName(models.stt)} is listening` : 'Listening…')
++            : transcribing
++              ? 'Understanding you…'
++              : sending
++                ? (shortModelName(models?.brain) ? `Response by ${shortModelName(models.brain)}…` : 'Thinking…')
++                : 'Ready to help'}
+         </Tiny>
+       </View>
+       {messages.length > 0 && (
+@@ -134,7 +167,7 @@ export default function AIModeScreen({ route }) {
+         />
+       )}
+     </View>
+-  ), [T, insets.top, sending, messages.length, reset, nav, styles]);
++  ), [T, insets.top, sending, recording, transcribing, models, messages.length, reset, nav, styles]);
+ 
+   const welcome = (
+     <View style={styles.welcome}>
+@@ -181,10 +214,12 @@ export default function AIModeScreen({ route }) {
                onConfirm={confirm}
                onCancel={cancel}
                onOpenProduct={onOpenProduct}
@@ -412,7 +506,7 @@ index bf694b1..8d27e0d 100644
              />
            )}
            ListHeaderComponent={messages.length === 0 ? welcome : <View style={{ height: 4 }} />}
-@@ -247,6 +274,13 @@ export default function AIModeScreen({ route }) {
+@@ -247,6 +282,13 @@ export default function AIModeScreen({ route }) {
            </View>
          </View>
        </KeyboardAvoidingView>
@@ -866,3 +960,26 @@ index c51cf62..82b9eb6 100644
 +  },
  });
 \ No newline at end of file
+diff --git a/src/ai/models.js b/src/ai/models.js
+new file mode 100644
+index 0000000..5b7a3c1
+--- /dev/null
++++ b/src/ai/models.js
+@@ -0,0 +1,17 @@
++/**
++ * Display names for the real model ids the server reports.
++ *
++ * Every id shown here arrives from the backend (`models.brain`,
++ * `models.stt`, or the transcribe `model` field) — nothing is hardcoded as
++ * the answering model. This file only shortens known Muse id prefixes for a
++ * small card header; an unknown id is shown verbatim.
++ */
++
++export function shortModelName(id) {
++  const raw = String(id || '').trim();
++  if (!raw) return '';
++  // muse-voice-transcribe-1.0 -> "Muse transcribe"
++  const voice = raw.match(/^muse-voice-([a-z]+)(?:[-_][\d.]+)?$/i);
++  if (voice) return `Muse ${voice[1].toLowerCase()}`;
++  return raw;
++}

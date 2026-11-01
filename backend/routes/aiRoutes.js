@@ -66,6 +66,8 @@ const metrics = require('../services/ai/metrics');
 const { runTurn } = require('../services/ai/agentRunner');
 const { executeConfirmed } = require('../services/ai/toolExecutor');
 const metaProvider = require('../services/ai/metaProvider');
+const { config: aiConfig } = require('../lib/assistant/config');
+const { activeBrainModel } = require('../lib/assistant/llama');
 const cartTools = require('../services/ai/tools/cartTools');
 const messagingTools = require('../services/ai/tools/messagingTools');
 const touchBuy = require('../services/ai/touchBuy');
@@ -693,6 +695,13 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       conversationId,
       reply: result.finalText,
       stopReason: result.stopReason,
+      // Real attribution for the app's card header: the exact chat model id
+      // that answered this turn, and the configured transcription model.
+      // `brain` is null when no model call succeeded (error fallback text).
+      models: {
+        brain: result.model || (result.stopReason === 'error' ? null : activeBrainModel().active),
+        stt: aiConfig.stt.model,
+      },
     };
     if (structured.length > 0) response.structured = structured;
     if (result.pendingConfirmation) response.confirmation_required = result.pendingConfirmation;
@@ -812,6 +821,9 @@ router.post('/cart/select', hardAuth, actionLimiter, async (req, res) => {
     // delivery/payment claim, and the template speaks instead.
     let reply = '';
     let replySource = 'template';
+    // The exact chat model id that wrote the spoken line. Stays null when the
+    // deterministic template speaks, so the app never credits the model.
+    let pickModel = null;
     try {
       const prompt = touchBuy.buildPickPrompt({
         title: added.title,
@@ -842,6 +854,7 @@ router.post('/cart/select', hardAuth, actionLimiter, async (req, res) => {
       if (accepted) {
         reply = accepted;
         replySource = 'ai';
+        pickModel = ai.model || activeBrainModel().active;
       }
       logger.info(`[aiRoutes] cart select reply source=${replySource} ms=${Date.now() - aiStarted} requestId=${requestId}${accepted ? '' : ' (checker rejected)'}`);
     } catch (e) {
@@ -918,6 +931,11 @@ router.post('/cart/select', hardAuth, actionLimiter, async (req, res) => {
       requestId,
       reply,
       replySource,
+      // Real attribution: the chat model id only when it wrote the line.
+      models: {
+        brain: pickModel,
+        stt: aiConfig.stt.model,
+      },
       structured,
       product,
       cartCount: added.cartCount,

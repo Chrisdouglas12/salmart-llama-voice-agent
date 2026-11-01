@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { createThemed, useTheme } from '../theme/theme';
 import { useNav } from '../state/Navigation';
 import { useAI } from './AIContext';
+import { shortModelName } from './models';
 import { IconButton, Small, Tiny, T2, T3, Body } from '../ui/kit';
 import MessageBubble from './components/MessageBubble';
 import ProductPicker from './components/ProductPicker';
@@ -35,6 +36,7 @@ export default function AIModeScreen({ route }) {
   const {
     messages, status, send, selectProduct, confirm, cancel, reset, isReady,
     recording, transcribing, toggleRecording, startGoogleAuth, speak, openSellerChat,
+    models,
   } = useAI();
 
   const [draft, setDraft] = useState('');
@@ -146,8 +148,14 @@ export default function AIModeScreen({ route }) {
       </View>
       <View style={{ flex: 1, marginLeft: 10 }}>
         <T2 numberOfLines={1}>Salmart AI</T2>
-        <Tiny numberOfLines={1} style={{ color: sending ? T.emerald : T.inkMuted, marginTop: 1 }}>
-          {sending ? 'Thinking…' : 'Ready to help'}
+        <Tiny numberOfLines={1} style={{ color: (sending || recording || transcribing) ? T.emerald : T.inkMuted, marginTop: 1 }}>
+          {recording
+            ? (shortModelName(models?.stt) ? `${shortModelName(models.stt)} is listening` : 'Listening…')
+            : transcribing
+              ? 'Understanding you…'
+              : sending
+                ? (shortModelName(models?.brain) ? `Response by ${shortModelName(models.brain)}…` : 'Thinking…')
+                : 'Ready to help'}
         </Tiny>
       </View>
       {messages.length > 0 && (
@@ -159,7 +167,7 @@ export default function AIModeScreen({ route }) {
         />
       )}
     </View>
-  ), [T, insets.top, sending, messages.length, reset, nav, styles]);
+  ), [T, insets.top, sending, recording, transcribing, models, messages.length, reset, nav, styles]);
 
   const welcome = (
     <View style={styles.welcome}>

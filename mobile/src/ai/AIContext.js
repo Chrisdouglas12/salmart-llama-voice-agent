@@ -36,7 +36,7 @@ import {
 import { apiUpload } from '../api/client';
 
 import { useAuth } from '../state/AuthContext';
-import { useNavActions } from '../state/Navigation';
+import { useNavActions, useNavSelector } from '../state/Navigation';
 import { TAB_ROOTS } from '../state/routes';
 import { runGoogleAuth } from '../utils/oauth';
 import {
@@ -48,8 +48,16 @@ import { speakReply, queueSpeech, stopSpeaking } from './speak';
 import { takeAuthOutcome } from './authOutcome';
 import { peekFormSnapshot } from './formSnapshot';
 import { peekRegistrationSnapshot, takeRegistrationSnapshot } from './registrationSnapshot';
+import { getLiveScreen, setLiveScreen } from './liveScreen';
 
 const ANON_KEY = 'salmart:ai:anonymousId';
+
+// Screens whose whole purpose is getting the user signed in. A conversation
+// that was last used here is about registration, not shopping: once the account
+// exists it must not be resumed, or the server replays its registration goal.
+const AUTH_SCREENS = new Set([
+  'signin', 'register', 'verifyEmail', 'passwordReset', 'completeProfile',
+]);
 
 // Mirrors the server allowlist in services/ai/tools/navigationTools.js. The
 // client checks again so a malformed response cannot open an unknown screen.
@@ -75,6 +83,20 @@ function referralFromUrl(url) {
   } catch (_e) {
     return undefined;
   }
+}
+
+/**
+ * Mirrors the live route into `liveScreen` without re-rendering the provider.
+ *
+ * Rendered inside AIProvider (which itself sits inside NavigationProvider), it
+ * subscribes to the route and writes it to the module store. Returning null
+ * keeps navigation changes from touching the provider's render tree.
+ */
+function NavMirror() {
+  const current = useNavSelector(s => s.current);
+  const panel = useNavSelector(s => s.currentPanel);
+  setLiveScreen(current?.name, current?.params, panel);
+  return null;
 }
 
 export function AIProvider({ children }) {
@@ -136,6 +158,13 @@ export function AIProvider({ children }) {
   // Screen context from the last turn, used to avoid opening the chat when the
   // user is already in that thread.
   const lastContextRef = useRef(null);
+  // The route the last turn ran on. An auth-screen turn means the conversation
+  // is a registration flow, which must not be carried across sign-in.
+  const lastTurnScreenRef = useRef(null);
+  // True when the anonymous conversation was used on an auth screen. Checked on
+  // the false→true auth transition to decide between rebinding and starting a
+  // clean authenticated conversation.
+  const preAuthFlowRef = useRef(false);
 
   const ensureConversation = useCallback(async () => {
     if (convRef.current) return convRef.current;
@@ -189,6 +218,36 @@ export function AIProvider({ children }) {
     if (isAuthenticated) {
       const anonymousId = anonRef.current;
       const cid = convRef.current;
+      // A conversation used on an auth screen belongs to the registration flow.
+      // Continuing it once the account exists makes the server replay its
+      // "what is your email?" goal instead of answering the user's new request,
+      // so drop it and start a clean authenticated conversation instead.
+      const live = getLiveScreen();
+      // The route the AI was last used on is the reliable signal; the screen
+      // showing at this instant may already have flipped to the panel behind
+      // SessionGate, which would otherwise discard a genuine shopping chat.
+      const staleAuthFlow = skipResumeRef.current
+        || preAuthFlowRef.current
+        || AUTH_SCREENS.has(lastTurnScreenRef.current);
+      skipResumeRef.current = false;
+      preAuthFlowRef.current = false;
+      lastTurnScreenRef.current = null;
+      resumeRef.current = false;
+
+      if (staleAuthFlow) {
+        convRef.current = null;
+        anonRef.current = null;
+        setConversationId(null);
+        setMessages([]);
+        setStatus('idle');
+        setError(null);
+        AsyncStorage.removeItem(ANON_KEY).catch(() => {});
+        rebindPromiseRef.current = (async () => {
+          try { await ensureConversation(); } catch (_e) { /* surfaced on first send */ }
+        })();
+        return;
+      }
+
       if (!anonymousId || !cid) {
         // Nothing to rebind. A registration greeting still runs on the new
         // signed-in conversation.
@@ -203,8 +262,7 @@ export function AIProvider({ children }) {
           await rebindConversation({ conversationId: cid, anonymousId });
           anonRef.current = null;
           AsyncStorage.removeItem(ANON_KEY).catch(() => {});
-          if (hadConversation && !skipResumeRef.current) resumeRef.current = true;
-          skipResumeRef.current = false;
+          if (hadConversation) resumeRef.current = true;
         } catch (_e) {
           // 404 means the anonymous id was lost or belongs to another
           // conversation. Start clean instead of leaving the session stuck.
@@ -225,6 +283,9 @@ export function AIProvider({ children }) {
       setError(null);
       setLastVoice(null);
       stopSpeaking();
+      resumeRef.current = false;
+      preAuthFlowRef.current = false;
+      lastTurnScreenRef.current = null;
       AsyncStorage.removeItem(ANON_KEY).catch(() => {});
     }
   }, [authReady, isAuthenticated, ensureConversation]);
@@ -362,7 +423,26 @@ export function AIProvider({ children }) {
     if (status === 'sending') {
       return { ok: false, code: 'busy', message: 'One moment — I am still working on the last request.' };
     }
-    lastContextRef.current = context || null;
+    const live = getLiveScreen();
+    const authed = authRef.current.isAuthenticated;
+    // The screen the user is looking at right now, not the one a screen passed
+    // in when it opened. `screen` stays the caller's hint (where the user came
+    // from, for AI Mode); `activeScreen` is the live truth.
+    const activeScreen = live.name || context?.screen || null;
+
+    // Every turn tells the server the real auth state and route, so a signed-in
+    // user is never asked to sign in again and a question asked on Checkout is
+    // not answered as if the user were still on Market.
+    const baseContext = {
+      ...(context || {}),
+      platform: Platform.OS,
+      authState: authed ? 'signed_in' : 'guest',
+      authed,
+      ...(activeScreen ? { activeScreen } : {}),
+    };
+    lastContextRef.current = baseContext;
+    lastTurnScreenRef.current = activeScreen;
+    if (activeScreen && AUTH_SCREENS.has(activeScreen)) preAuthFlowRef.current = true;
 
     // Carry a real auth outcome code from the screen (401/403/429/offline)
     // into this turn. Only the fixed code travels, never the server text.
@@ -372,19 +452,21 @@ export function AIProvider({ children }) {
     // Registration flags belong to the register screen. Once the user moves
     // away, the old form state must not ride along with an unrelated turn.
     const registration = context?.screen === 'register' ? peekRegistrationSnapshot() : null;
-    const turnContext = (authOutcome || listing || registration)
-      ? {
-        ...(context || {}),
-        ...(authOutcome ? { authOutcome } : {}),
-        ...(listing ? { listing } : {}),
-        ...(registration ? { registration } : {}),
-      }
-      : (context || undefined);
+    const turnContext = {
+      ...baseContext,
+      ...(authOutcome ? { authOutcome } : {}),
+      ...(listing ? { listing } : {}),
+      ...(registration ? { registration } : {}),
+    };
     if (authOutcome || listing || registration) lastContextRef.current = turnContext;
 
     setStatus('sending');
     setError(null);
-    setMessages(prev => [...prev, { key: newKey(), role: 'user', text: clean, at: Date.now() }]);
+    // A voice-unclear continuation is not something the user said, so it must
+    // not appear as a user bubble.
+    if (!opts?.hidden) {
+      setMessages(prev => [...prev, { key: newKey(), role: 'user', text: clean, at: Date.now() }]);
+    }
 
     try {
       const cid = await ensureConversation();
@@ -661,6 +743,10 @@ export function AIProvider({ children }) {
 
     authBusyRef.current = true;
     setAuthBusy(true);
+    // This conversation is now about getting signed in. If it succeeds, the
+    // anonymous conversation must not be rebound: the server would keep its
+    // registration goal and ask the new account for the same details again.
+    preAuthFlowRef.current = true;
     try {
       const { status, params } = await runGoogleAuth({
         forceAccountPicker: true,
@@ -774,8 +860,24 @@ export function AIProvider({ children }) {
       lastLangRef.current = heardLang;
 
       if (!res?.success || !transcript) {
-        const line = 'I could not catch that. Please try again.';
+        // Nothing usable was heard. A canned "I did not hear you" is wrong
+        // here: the phone number or price may already be filled, and asking
+        // again makes the assistant look deaf. Hand the turn to the model with
+        // the real form state so it says what is done and asks only the next
+        // missing thing.
         setTranscribing(false);
+        const unclearContext = {
+          ...(context || {}),
+          event: 'voice_unclear',
+          ...(heardLang ? { lang: heardLang } : {}),
+        };
+        const continued = await send('(silence)', unclearContext, { streamSpeech: true, hidden: true })
+          .catch(() => null);
+        if (continued && continued.ok) return;
+
+        // The turn itself failed (offline, session expired): only now fall back
+        // to a spoken retry line.
+        const line = continued?.message || 'I could not catch that. Please try again.';
         setLastVoice({ text: line, kind: 'error', at: Date.now() });
         await speakReply(line, heardLang);
         return;
@@ -957,7 +1059,12 @@ export function AIProvider({ children }) {
     startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
   ]);
 
-  return <AIContext.Provider value={value}>{children}</AIContext.Provider>;
+  return (
+    <AIContext.Provider value={value}>
+      <NavMirror />
+      {children}
+    </AIContext.Provider>
+  );
 }
 
 export function useAI() {

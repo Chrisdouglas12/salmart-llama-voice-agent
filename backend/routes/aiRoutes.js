@@ -153,6 +153,13 @@ SELLING WORKFLOW (one question at a time — highest priority)
   prepareAdForm with ONLY the field just answered — one call per field. If
   one sentence contains several details, make one call per field, then read
   the next [Selling state] before continuing. Never guess a missing value.
+- The result of prepareAdForm and prepareRegistration is the truth about the
+  form. It names what was just saved (filled) and the only allowed next
+  question (nextAsk). After such a call your whole reply is one short
+  sentence about what was just saved, then that exact question and nothing
+  else. Never ask for anything already saved — the price you just saved is
+  done. When the result says complete, say the form is complete and name the
+  final tap.
 - After the photo auto-fill lands, say in ONE short sentence what you filled
   ("I filled the name, description and price from your photo") and ask only
   the next missing question — never re-ask what the photo already filled.
@@ -234,6 +241,9 @@ AUTHENTICATION COACH
   other network. A phone-only account is valid, and no OTP is sent. If they give
   an email, call prepareRegistration with it. Never make email mandatory and
   never invent an address.
+- Once a name, email or phone number is in the form, it stays in. Confirm it in
+  half a sentence and move to the next step; never ask for it again, and never
+  say you did not hear a value the form already holds.
 - After the name and email-or-phone are in, call beginAuthHelp(REGISTER) and
   follow the 'field' it returns. When it asks for a password, the phone opens
   one secure box; tell them not to share the code with anyone. Never ask for,
@@ -478,6 +488,11 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
           for (const [sk, sv] of Object.entries(v).slice(0, 24)) {
             if (!/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(sk)) continue;
             if (typeof sv === 'boolean') snap[sk] = sv;
+            // Numeric price and quantity are kept: the selling walkthrough
+            // needs the real count for the discount step and the model needs
+            // the price it just filled. No other field value is accepted.
+            else if (typeof sv === 'number' && Number.isFinite(sv)
+              && (sk === 'price' || sk === 'quantity')) snap[sk] = sv;
           }
           if (typeof v.postType === 'string' && v.postType.length <= 20) snap.postType = v.postType;
           safeContext[k] = snap;
@@ -531,7 +546,13 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     // model to write the welcome without asking for registration details again.
     const eventBlock = safeContext?.event === 'registration_complete'
       ? '\n\n[App event — the account was just created on the server and the user is signed in. Greet them warmly, say you are glad to have them, and ask whether they want to buy or sell. Do not ask for any registration detail again.]'
-      : '';
+      // The phone heard nothing usable. This is not a failed question: the
+      // form keeps everything already filled, so the next line must continue
+      // from that state instead of saying "I did not hear you" and repeating
+      // a step that is already done.
+      : safeContext?.event === 'voice_unclear'
+        ? '\n\n[App event — the microphone captured no usable words on this turn. Nothing new was filled. Do NOT say you could not hear, and do not apologize. Using the form state above, say in one short sentence what is already done, then ask only the next missing question from the state block. If everything is done, say so and name the last tap.]'
+        : '';
 
     // Secrets typed into chat are removed before the model, the store, or a
     // log line can see them. The guard only fires when a value is present.
@@ -607,6 +628,14 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       emailDeclined: !!task.emailDeclined || registrationSnapshot?.emailDeclined === true,
       passwordSet: registrationSnapshot?.password === true,
       agreed: registrationSnapshot?.agreed === true,
+      // Multi-turn task memory. `adDraft` holds only values a validating tool
+      // already accepted, so it is safe for the same-turn "what is left"
+      // computation.
+      adDraft: task.adDraft,
+      // Listing walkthrough: the phone's post-fill flags and the steps already
+      // asked, so `prepareAdForm` can name the real next question.
+      listing: listingSnapshot,
+      sellingAsked: Array.isArray(sellingPrior?.asked) ? sellingPrior.asked : [],
     };
 
     const result = await runTurn({ ctx, messages: modelMessages });
@@ -687,6 +716,41 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       }
     }
 
+    const responseModels = {
+      brain: result.model || (result.stopReason === 'error' ? null : activeBrainModel().active),
+      stt: aiConfig.stt.model,
+    };
+
+    // The AI interaction log. One structured record per turn: the client's
+    // request, the model's answer, which models actually answered, and every
+    // tool the turn ran with its outcome and duration. `logs/ai.log` is the
+    // only request-level log kept on this server (see app.js LOG_SCOPE).
+    logger.info('[ai.trace]', {
+      kind: 'turn',
+      requestId,
+      conversationId,
+      userId: req.userId || null,
+      anonymous: !req.userId,
+      screen: safeContext?.screen || null,
+      event: safeContext?.event || null,
+      platform: safeContext?.platform || null,
+      request: {
+        message: safeMessage,
+        context: safeContext || null,
+      },
+      reply: result.finalText || '',
+      stopReason: result.stopReason,
+      models: responseModels,
+      tools: (result.toolLog || []).map(t => ({
+        name: t.name,
+        ok: t.ok,
+        code: t.code || null,
+        ms: t.ms,
+        ...(t.summary ? { summary: t.summary } : {}),
+      })),
+      timings: { ...result.timings, totalMs: Date.now() - turnStarted },
+    });
+
     logger.info(`[aiRoutes] turn ok: requestId=${requestId} totalMs=${Date.now() - turnStarted} llmMs=${result.timings?.llmMs} llmCalls=${result.timings?.llmCalls} stop=${result.stopReason}`);
 
     const response = {
@@ -698,10 +762,7 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       // Real attribution for the app's card header: the exact chat model id
       // that answered this turn, and the configured transcription model.
       // `brain` is null when no model call succeeded (error fallback text).
-      models: {
-        brain: result.model || (result.stopReason === 'error' ? null : activeBrainModel().active),
-        stt: aiConfig.stt.model,
-      },
+      models: responseModels,
     };
     if (structured.length > 0) response.structured = structured;
     if (result.pendingConfirmation) response.confirmation_required = result.pendingConfirmation;
@@ -924,6 +985,25 @@ router.post('/cart/select', hardAuth, actionLimiter, async (req, res) => {
         }
       } catch (_e) { /* task memory is best-effort */ }
     }
+
+    // Same interaction record as /turn, for the touch-to-buy tap: the exact
+    // product the buyer touched, the line spoken, who wrote it, and the tools
+    // that ran.
+    logger.info('[ai.trace]', {
+      kind: 'cart_select',
+      requestId,
+      conversationId: typeof conversationId === 'string' && conversationId ? conversationId : null,
+      userId: req.userId || null,
+      request: {
+        productId,
+        itemType: itemType || 'post',
+        lang: replyLang,
+      },
+      reply,
+      replySource,
+      models: { brain: pickModel, stt: aiConfig.stt.model },
+      tools: [{ name: 'cart.addToCart', ok: true, productId }],
+    });
 
     logger.info(`[aiRoutes] cart select ok user=${req.userId} product=${productId} reply=${replySource} requestId=${requestId}`);
     return res.json({

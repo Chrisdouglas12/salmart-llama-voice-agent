@@ -1,19 +1,20 @@
 /* lib/assistant/sellingFlow.js
  *
- * The selling half of Salmart AI, mirroring lib/assistant/authIntents.js.
- * Pure data + pure functions: no database, no network, no secrets.
+ * Listing steps for the selling flow. Pure data and pure functions: no
+ * database, no network, no secrets.
  *
- * The Meta model may NEVER decide the question order itself. It reads the
- * [Selling state] prompt block (built from the phone's real form snapshot)
- * and asks exactly the next question it names, one per turn, filling one
- * field per prepareAdForm call. This module owns the order, the questions,
- * and the validation helpers the backend trusts.
+ * The assistant model does not choose the question order. It reads the
+ * [Selling state] prompt block (built from the phone's form snapshot) and
+ * asks the next question named there, one per turn, filling one field per
+ * prepareAdForm call. This module owns the order, the questions and the
+ * validation helpers used by the backend.
  *
- * Step orders follow the CreateAdScreen visual order and its required sets
- * (postRoutes.js): regular needs title, caption, price, quantity, condition,
- * category, location, photo; service needs title, caption, category, type,
- * location (price optional = negotiable); digital needs title, price,
- * category, file (caption optional).
+ * The step orders follow the CreateAdScreen visual order and its required
+ * sets (postRoutes.js). A regular listing needs title, caption, price,
+ * quantity, condition, category, location and photo. A service needs title,
+ * caption, category, type and location, and its price is optional because it
+ * may be negotiable. A digital listing needs title, price, category and file,
+ * and its caption is optional.
  */
 
 'use strict';
@@ -160,19 +161,26 @@ function cleanType(value) {
 
 /**
  * First incomplete step for this type, from the phone's snapshot flags.
- * Returns { step, ask, optional, done, missing[] } — missing lists every
- * required step still open so "what remains?" is answered from truth.
- * `asked` (steps already offered) lets an optional step stay skipped: once
- * offered, it is never asked again. Steps marked `defer` wait until every
- * in-order step before them is done (the old optional-last behaviour); the
- * discount is deliberately NOT deferred, so it is offered right after
- * quantity instead of after location.
+ * Returns { step, ask, optional, done, missing[] }, where `missing` lists
+ * every required step still open.
+ *
+ * `asked` holds steps already offered, so an optional step is asked once and
+ * then left alone. Steps marked `defer` wait until the earlier steps are
+ * done. The discount step is not deferred: it is offered right after
+ * quantity, not after location.
  */
 function nextStep(postType, snapshot = {}, asked = []) {
   const type = cleanType(postType) || 'regular';
   const order = ORDERS[type];
   const offered = new Set(Array.isArray(asked) ? asked : []);
-  const qty = Number(snapshot.quantity);
+  // `quantity` arrives as a completion flag, and the count (when the phone
+  // knows it) as `quantityCount`. A boolean must never be read as the number 1,
+  // or the discount step would be skipped for every listing.
+  const qty = Number.isFinite(Number(snapshot.quantityCount))
+    ? Number(snapshot.quantityCount)
+    : (typeof snapshot.quantity === 'number' && Number.isFinite(snapshot.quantity)
+      ? snapshot.quantity
+      : null);
 
   const open = order.filter((s) => {
     if (snapshot[s.flag]) return false;
@@ -281,6 +289,39 @@ function validateQuantity(n) {
   return null;
 }
 
+/**
+ * Snapshot flags for fields a patch just wrote, so the same turn can tell the
+ * model what is now done. Mirrors the flag names CreateAdScreen reports in
+ * `reportFormSnapshot`, which is what `nextStep` reads.
+ */
+function flagsForFields(postType, fields = {}) {
+  const type = cleanType(postType) || 'regular';
+  const f = fields && typeof fields === 'object' ? fields : {};
+  const out = {};
+  if (f.title !== undefined) out.title = true;
+  if (f.description !== undefined) out.caption = true;
+  if (f.price !== undefined) out.priceValid = true;
+  if (f.quantity !== undefined) {
+    out.quantity = true;
+    out.quantityCount = Number(f.quantity) || null;
+  }
+  if (f.bulkDiscountMinQty !== undefined || f.bulkDiscountOff !== undefined
+    || f.bulkDiscountPrice !== undefined) out.bulkDiscount = true;
+  if (f.condition !== undefined) out.condition = true;
+  if (f.category !== undefined) {
+    if (type === 'service') out.serviceCategory = true;
+    else if (type === 'digital') out.digitalCategory = true;
+    else out.category = true;
+  }
+  if (f.location !== undefined) {
+    if (type === 'service') out.serviceLocation = true;
+    else out.location = true;
+  }
+  if (f.serviceType !== undefined) out.serviceType = true;
+  if (f.postType !== undefined) out.postType = type;
+  return out;
+}
+
 module.exports = {
   POST_TYPES,
   STEPS,
@@ -290,6 +331,7 @@ module.exports = {
   readableCategory,
   cleanType,
   nextStep,
+  flagsForFields,
   discountSuggestion,
   parsePriceWords,
   validatePrice,

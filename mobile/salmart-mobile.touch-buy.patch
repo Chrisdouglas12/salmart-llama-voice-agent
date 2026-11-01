@@ -1,8 +1,14 @@
 diff --git a/src/ai/AIContext.js b/src/ai/AIContext.js
-index 9d88d62..0455844 100644
+index 9d88d62..de3f23d 100644
 --- a/src/ai/AIContext.js
 +++ b/src/ai/AIContext.js
-@@ -41,6 +41,7 @@ import { TAB_ROOTS } from '../state/routes';
+@@ -36,20 +36,29 @@ import {
+ import { apiUpload } from '../api/client';
+ 
+ import { useAuth } from '../state/AuthContext';
+-import { useNavActions } from '../state/Navigation';
++import { useNavActions, useNavSelector } from '../state/Navigation';
+ import { TAB_ROOTS } from '../state/routes';
  import { runGoogleAuth } from '../utils/oauth';
  import {
    createConversation, rebindConversation, sendTurn, sendTurnStream,
@@ -10,7 +16,45 @@ index 9d88d62..0455844 100644
    confirmAction as apiConfirm, cancelAction as apiCancel,
  } from './api';
  import { speakReply, queueSpeech, stopSpeaking } from './speak';
-@@ -90,6 +91,10 @@ export function AIProvider({ children }) {
+ import { takeAuthOutcome } from './authOutcome';
+ import { peekFormSnapshot } from './formSnapshot';
+ import { peekRegistrationSnapshot, takeRegistrationSnapshot } from './registrationSnapshot';
++import { getLiveScreen, setLiveScreen } from './liveScreen';
+ 
+ const ANON_KEY = 'salmart:ai:anonymousId';
+ 
++// Screens whose whole purpose is getting the user signed in. A conversation
++// that was last used here is about registration, not shopping: once the account
++// exists it must not be resumed, or the server replays its registration goal.
++const AUTH_SCREENS = new Set([
++  'signin', 'register', 'verifyEmail', 'passwordReset', 'completeProfile',
++]);
++
+ // Mirrors the server allowlist in services/ai/tools/navigationTools.js. The
+ // client checks again so a malformed response cannot open an unknown screen.
+ const NAVIGABLE_SCREENS = new Set([
+@@ -76,6 +85,20 @@ function referralFromUrl(url) {
+   }
+ }
+ 
++/**
++ * Mirrors the live route into `liveScreen` without re-rendering the provider.
++ *
++ * Rendered inside AIProvider (which itself sits inside NavigationProvider), it
++ * subscribes to the route and writes it to the module store. Returning null
++ * keeps navigation changes from touching the provider's render tree.
++ */
++function NavMirror() {
++  const current = useNavSelector(s => s.current);
++  const panel = useNavSelector(s => s.currentPanel);
++  setLiveScreen(current?.name, current?.params, panel);
++  return null;
++}
++
+ export function AIProvider({ children }) {
+   const { ready: authReady, isAuthenticated, adoptWebSession } = useAuth();
+   const nav = useNavActions();
+@@ -90,6 +113,10 @@ export function AIProvider({ children }) {
    // Latest content for the global mic card. `confirmation` keeps the turn's
    // Confirm/Cancel actions available inline.
    const [lastVoice, setLastVoice] = useState(null);
@@ -21,7 +65,7 @@ index 9d88d62..0455844 100644
    const [authBusy, setAuthBusy] = useState(false);
    // Attention nudge for the mic button (welcome pulse, "Tap to talk"). It does
    // not record; it only animates the button. Cleared when recording starts.
-@@ -107,6 +112,9 @@ export function AIProvider({ children }) {
+@@ -107,6 +134,9 @@ export function AIProvider({ children }) {
  
    const anonRef = useRef(null);
    const convRef = useRef(null);
@@ -31,7 +75,78 @@ index 9d88d62..0455844 100644
    const authBusyRef = useRef(false);
    const messagesRef = useRef([]);
    messagesRef.current = messages;
-@@ -247,6 +255,13 @@ export function AIProvider({ children }) {
+@@ -128,6 +158,13 @@ export function AIProvider({ children }) {
+   // Screen context from the last turn, used to avoid opening the chat when the
+   // user is already in that thread.
+   const lastContextRef = useRef(null);
++  // The route the last turn ran on. An auth-screen turn means the conversation
++  // is a registration flow, which must not be carried across sign-in.
++  const lastTurnScreenRef = useRef(null);
++  // True when the anonymous conversation was used on an auth screen. Checked on
++  // the false→true auth transition to decide between rebinding and starting a
++  // clean authenticated conversation.
++  const preAuthFlowRef = useRef(false);
+ 
+   const ensureConversation = useCallback(async () => {
+     if (convRef.current) return convRef.current;
+@@ -181,6 +218,36 @@ export function AIProvider({ children }) {
+     if (isAuthenticated) {
+       const anonymousId = anonRef.current;
+       const cid = convRef.current;
++      // A conversation used on an auth screen belongs to the registration flow.
++      // Continuing it once the account exists makes the server replay its
++      // "what is your email?" goal instead of answering the user's new request,
++      // so drop it and start a clean authenticated conversation instead.
++      const live = getLiveScreen();
++      // The route the AI was last used on is the reliable signal; the screen
++      // showing at this instant may already have flipped to the panel behind
++      // SessionGate, which would otherwise discard a genuine shopping chat.
++      const staleAuthFlow = skipResumeRef.current
++        || preAuthFlowRef.current
++        || AUTH_SCREENS.has(lastTurnScreenRef.current);
++      skipResumeRef.current = false;
++      preAuthFlowRef.current = false;
++      lastTurnScreenRef.current = null;
++      resumeRef.current = false;
++
++      if (staleAuthFlow) {
++        convRef.current = null;
++        anonRef.current = null;
++        setConversationId(null);
++        setMessages([]);
++        setStatus('idle');
++        setError(null);
++        AsyncStorage.removeItem(ANON_KEY).catch(() => {});
++        rebindPromiseRef.current = (async () => {
++          try { await ensureConversation(); } catch (_e) { /* surfaced on first send */ }
++        })();
++        return;
++      }
++
+       if (!anonymousId || !cid) {
+         // Nothing to rebind. A registration greeting still runs on the new
+         // signed-in conversation.
+@@ -195,8 +262,7 @@ export function AIProvider({ children }) {
+           await rebindConversation({ conversationId: cid, anonymousId });
+           anonRef.current = null;
+           AsyncStorage.removeItem(ANON_KEY).catch(() => {});
+-          if (hadConversation && !skipResumeRef.current) resumeRef.current = true;
+-          skipResumeRef.current = false;
++          if (hadConversation) resumeRef.current = true;
+         } catch (_e) {
+           // 404 means the anonymous id was lost or belongs to another
+           // conversation. Start clean instead of leaving the session stuck.
+@@ -217,6 +283,9 @@ export function AIProvider({ children }) {
+       setError(null);
+       setLastVoice(null);
+       stopSpeaking();
++      resumeRef.current = false;
++      preAuthFlowRef.current = false;
++      lastTurnScreenRef.current = null;
+       AsyncStorage.removeItem(ANON_KEY).catch(() => {});
+     }
+   }, [authReady, isAuthenticated, ensureConversation]);
+@@ -247,6 +316,13 @@ export function AIProvider({ children }) {
    // is in.
    const finishTurn = useCallback((res, context) => {
      const reply = res.reply || '';
@@ -45,7 +160,66 @@ index 9d88d62..0455844 100644
      setMessages(prev => [...prev, {
        key: newKey(),
        role: 'assistant',
-@@ -452,6 +467,79 @@ export function AIProvider({ children }) {
+@@ -347,7 +423,26 @@ export function AIProvider({ children }) {
+     if (status === 'sending') {
+       return { ok: false, code: 'busy', message: 'One moment — I am still working on the last request.' };
+     }
+-    lastContextRef.current = context || null;
++    const live = getLiveScreen();
++    const authed = authRef.current.isAuthenticated;
++    // The screen the user is looking at right now, not the one a screen passed
++    // in when it opened. `screen` stays the caller's hint (where the user came
++    // from, for AI Mode); `activeScreen` is the live truth.
++    const activeScreen = live.name || context?.screen || null;
++
++    // Every turn tells the server the real auth state and route, so a signed-in
++    // user is never asked to sign in again and a question asked on Checkout is
++    // not answered as if the user were still on Market.
++    const baseContext = {
++      ...(context || {}),
++      platform: Platform.OS,
++      authState: authed ? 'signed_in' : 'guest',
++      authed,
++      ...(activeScreen ? { activeScreen } : {}),
++    };
++    lastContextRef.current = baseContext;
++    lastTurnScreenRef.current = activeScreen;
++    if (activeScreen && AUTH_SCREENS.has(activeScreen)) preAuthFlowRef.current = true;
+ 
+     // Carry a real auth outcome code from the screen (401/403/429/offline)
+     // into this turn. Only the fixed code travels, never the server text.
+@@ -357,19 +452,21 @@ export function AIProvider({ children }) {
+     // Registration flags belong to the register screen. Once the user moves
+     // away, the old form state must not ride along with an unrelated turn.
+     const registration = context?.screen === 'register' ? peekRegistrationSnapshot() : null;
+-    const turnContext = (authOutcome || listing || registration)
+-      ? {
+-        ...(context || {}),
+-        ...(authOutcome ? { authOutcome } : {}),
+-        ...(listing ? { listing } : {}),
+-        ...(registration ? { registration } : {}),
+-      }
+-      : (context || undefined);
++    const turnContext = {
++      ...baseContext,
++      ...(authOutcome ? { authOutcome } : {}),
++      ...(listing ? { listing } : {}),
++      ...(registration ? { registration } : {}),
++    };
+     if (authOutcome || listing || registration) lastContextRef.current = turnContext;
+ 
+     setStatus('sending');
+     setError(null);
+-    setMessages(prev => [...prev, { key: newKey(), role: 'user', text: clean, at: Date.now() }]);
++    // A voice-unclear continuation is not something the user said, so it must
++    // not appear as a user bubble.
++    if (!opts?.hidden) {
++      setMessages(prev => [...prev, { key: newKey(), role: 'user', text: clean, at: Date.now() }]);
++    }
+ 
+     try {
+       const cid = await ensureConversation();
+@@ -452,6 +549,79 @@ export function AIProvider({ children }) {
      })();
    }, [welcomeTick, authReady, isAuthenticated, send]);
  
@@ -125,7 +299,18 @@ index 9d88d62..0455844 100644
    const confirm = useCallback(async (actionId) => {
      try {
        const res = await apiConfirm(actionId);
-@@ -676,8 +764,14 @@ export function AIProvider({ children }) {
+@@ -573,6 +743,10 @@ export function AIProvider({ children }) {
+ 
+     authBusyRef.current = true;
+     setAuthBusy(true);
++    // This conversation is now about getting signed in. If it succeeds, the
++    // anonymous conversation must not be rebound: the server would keep its
++    // registration goal and ask the new account for the same details again.
++    preAuthFlowRef.current = true;
+     try {
+       const { status, params } = await runGoogleAuth({
+         forceAccountPicker: true,
+@@ -676,12 +850,34 @@ export function AIProvider({ children }) {
        form.append('audio', { uri, name: 'voice.m4a', type: 'audio/m4a' });
        const res = await apiUpload('/api/assistant/transcribe', form);
        const transcript = String(res?.text || '').trim();
@@ -139,8 +324,29 @@ index 9d88d62..0455844 100644
 +      lastLangRef.current = heardLang;
  
        if (!res?.success || !transcript) {
-         const line = 'I could not catch that. Please try again.';
-@@ -706,6 +800,13 @@ export function AIProvider({ children }) {
+-        const line = 'I could not catch that. Please try again.';
++        // Nothing usable was heard. A canned "I did not hear you" is wrong
++        // here: the phone number or price may already be filled, and asking
++        // again makes the assistant look deaf. Hand the turn to the model with
++        // the real form state so it says what is done and asks only the next
++        // missing thing.
+         setTranscribing(false);
++        const unclearContext = {
++          ...(context || {}),
++          event: 'voice_unclear',
++          ...(heardLang ? { lang: heardLang } : {}),
++        };
++        const continued = await send('(silence)', unclearContext, { streamSpeech: true, hidden: true })
++          .catch(() => null);
++        if (continued && continued.ok) return;
++
++        // The turn itself failed (offline, session expired): only now fall back
++        // to a spoken retry line.
++        const line = continued?.message || 'I could not catch that. Please try again.';
+         setLastVoice({ text: line, kind: 'error', at: Date.now() });
+         await speakReply(line, heardLang);
+         return;
+@@ -706,6 +902,13 @@ export function AIProvider({ children }) {
        const chatBlock = result.ok && Array.isArray(result.structured)
          ? result.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId)
          : null;
@@ -154,7 +360,7 @@ index 9d88d62..0455844 100644
  
        setLastVoice({
          text: line,
-@@ -713,6 +814,7 @@ export function AIProvider({ children }) {
+@@ -713,6 +916,7 @@ export function AIProvider({ children }) {
          confirmation: result.ok ? (result.confirmation || null) : null,
          authUrl: authBlock || null,
          chatHandoff: chatBlock || null,
@@ -162,7 +368,7 @@ index 9d88d62..0455844 100644
          at: Date.now(),
        });
        if (!result.spoken) await speakReply(line, heardLang);
-@@ -823,8 +925,11 @@ export function AIProvider({ children }) {
+@@ -823,8 +1027,11 @@ export function AIProvider({ children }) {
  
    // Seller-chat handoff: open ChatScreen with the AI draft and product card
    // pre-filled. The user presses send in the chat; nothing is auto-sent.
@@ -174,7 +380,7 @@ index 9d88d62..0455844 100644
      nav.push('chat', {
        partnerId: String(handoff.sellerId),
        ...(handoff.sellerName ? { name: String(handoff.sellerName).slice(0, 80) } : {}),
-@@ -838,16 +943,16 @@ export function AIProvider({ children }) {
+@@ -838,21 +1045,26 @@ export function AIProvider({ children }) {
          },
        } : {}),
      });
@@ -196,8 +402,19 @@ index 9d88d62..0455844 100644
      openSellerChat, micNudge, nudgeMic,
      startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
    ]);
+ 
+-  return <AIContext.Provider value={value}>{children}</AIContext.Provider>;
++  return (
++    <AIContext.Provider value={value}>
++      <NavMirror />
++      {children}
++    </AIContext.Provider>
++  );
+ }
+ 
+ export function useAI() {
 diff --git a/src/ai/AIModeButton.js b/src/ai/AIModeButton.js
-index 802e2d7..2ace551 100644
+index 802e2d7..4095a72 100644
 --- a/src/ai/AIModeButton.js
 +++ b/src/ai/AIModeButton.js
 @@ -8,6 +8,8 @@ import { useTheme } from '../theme/theme';
@@ -228,7 +445,30 @@ index 802e2d7..2ace551 100644
    const longPressedRef = useRef(false);
    const splashVisible = useSplashVisible();
    const sending = status === 'sending';
-@@ -98,30 +104,56 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -79,10 +85,10 @@ export default function AIModeButton({ extraContext } = {}) {
+   }, [micNudge, recording, transcribing, sending, pulseAnim]);
+   const pulseScale = pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
+ 
+-  // Always-on invitation glow: a soft brand halo that keeps breathing from
+-  // under the mic. A first-time user reads the animated green bubble as "tap
+-  // me" before the welcome nudge fires. It is native-driven, so it does not
+-  // block the tap or cost JS frames.
++  // Intro invitation glow: a soft brand halo that breathes a few times when
++  // the mic mounts. It used to loop forever, which kept a native animation
++  // running on every screen for the whole session; a finite intro gives the
++  // same "tap me" cue without spending frames while the user scrolls.
+   const glowAnim = useRef(new Animated.Value(0)).current;
+   useEffect(() => {
+     const useNative = Platform.OS !== 'web';
+@@ -91,6 +97,7 @@ export default function AIModeButton({ extraContext } = {}) {
+         Animated.timing(glowAnim, { toValue: 1, duration: 1400, useNativeDriver: useNative }),
+         Animated.timing(glowAnim, { toValue: 0, duration: 1400, useNativeDriver: useNative }),
+       ]),
++      { iterations: 4 },
+     );
+     loop.start();
+     return () => loop.stop();
+@@ -98,30 +105,56 @@ export default function AIModeButton({ extraContext } = {}) {
    const glowOpacity = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [0.34, 0.02] });
    const glowScale = glowAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.8] });
  
@@ -288,11 +528,11 @@ index 802e2d7..2ace551 100644
 -        ? 'Thinking…'
 -        : 'Salmart AI';
 +        ? (brainName ? `Response by ${brainName}…` : 'Thinking…')
-+        : (lastVoice?.kind === 'reply' && brainName ? `Response by ${brainName}` : 'Salmart AI');
++        : (lastVoice?.kind === 'reply' && brainName ? `Response by ${brainName}` : 'Salmart Intelligence');
  
    const body = recording
      ? "I'm listening. Just stop talking and I'll pick it up — or tap the button."
-@@ -170,12 +202,22 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -170,12 +203,22 @@ export default function AIModeButton({ extraContext } = {}) {
      });
    };
  
@@ -319,7 +559,7 @@ index 802e2d7..2ace551 100644
    const onPressMic = () => {
      if (longPressedRef.current) {
        longPressedRef.current = false;
-@@ -185,7 +227,15 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -185,7 +228,15 @@ export default function AIModeButton({ extraContext } = {}) {
    };
  
    return (
@@ -336,7 +576,7 @@ index 802e2d7..2ace551 100644
        {!!(nudgeVisible && micNudge && !busy) && (
          <View style={[styles.nudge, { backgroundColor: T.card, borderColor: T.border }]}>
            <Tiny style={{ color: T.ink, fontWeight: '700' }}>{micNudge.label || 'Tap to talk'}</Tiny>
-@@ -215,7 +265,13 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -215,7 +266,13 @@ export default function AIModeButton({ extraContext } = {}) {
            </View>
  
            {!!body && (
@@ -351,7 +591,7 @@ index 802e2d7..2ace551 100644
                {body}
              </Small>
            )}
-@@ -280,6 +336,24 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -280,6 +337,24 @@ export default function AIModeButton({ extraContext } = {}) {
                </Small>
              </Pressable>
            )}
@@ -376,7 +616,18 @@ index 802e2d7..2ace551 100644
          </View>
        )}
  
-@@ -312,6 +386,13 @@ export default function AIModeButton({ extraContext } = {}) {
+@@ -301,8 +376,8 @@ export default function AIModeButton({ extraContext } = {}) {
+         onPressIn={() => { longPressedRef.current = false; }}
+         delayLongPress={LONG_PRESS_MS}
+         accessibilityRole="button"
+-        accessibilityLabel={recording ? 'Stop talking to Salmart AI' : 'Talk to Salmart AI'}
+-        accessibilityHint="Tap to talk. Hold to open the Salmart AI screen."
++        accessibilityLabel={recording ? 'Stop talking to Salmart Intelligence' : 'Talk to Salmart Intelligence'}
++        accessibilityHint="Tap to talk. Hold to open the Salmart Intelligence screen."
+         style={({ pressed }) => [
+           styles.fab,
+           { backgroundColor: recording ? T.danger : transcribing || sending ? T.inkMuted : T.emerald },
+@@ -312,6 +387,13 @@ export default function AIModeButton({ extraContext } = {}) {
          <Ionicons name={fabIcon} size={26} color="#fff" />
        </Pressable>
        </Animated.View>
@@ -390,7 +641,7 @@ index 802e2d7..2ace551 100644
      </View>
    );
  }
-@@ -328,6 +409,9 @@ const styles = StyleSheet.create({
+@@ -328,6 +410,9 @@ const styles = StyleSheet.create({
    card: {
      width: Math.min(WINDOW_WIDTH - 40, 340),
      marginBottom: 12,
@@ -401,7 +652,7 @@ index 802e2d7..2ace551 100644
      borderRadius: 18,
      borderWidth: 1,
 diff --git a/src/ai/AIModeScreen.js b/src/ai/AIModeScreen.js
-index bf694b1..d38bf2b 100644
+index bf694b1..23ae1ca 100644
 --- a/src/ai/AIModeScreen.js
 +++ b/src/ai/AIModeScreen.js
 @@ -9,8 +9,10 @@ import { Ionicons } from '@expo/vector-icons';
@@ -467,12 +718,14 @@ index bf694b1..d38bf2b 100644
    const onPickMethod = useCallback((methodId) => {
      if (methodId === 'google') {
        // Ask the assistant for the Google sign-in URL. The auth_url block it
-@@ -121,8 +148,14 @@ export default function AIModeScreen({ route }) {
+@@ -120,9 +147,15 @@ export default function AIModeScreen({ route }) {
+         <Ionicons name="sparkles" size={16} color="#fff" />
        </View>
        <View style={{ flex: 1, marginLeft: 10 }}>
-         <T2 numberOfLines={1}>Salmart AI</T2>
+-        <T2 numberOfLines={1}>Salmart AI</T2>
 -        <Tiny numberOfLines={1} style={{ color: sending ? T.emerald : T.inkMuted, marginTop: 1 }}>
 -          {sending ? 'Thinking…' : 'Ready to help'}
++        <T2 numberOfLines={1}>Salmart Intelligence</T2>
 +        <Tiny numberOfLines={1} style={{ color: (sending || recording || transcribing) ? T.emerald : T.inkMuted, marginTop: 1 }}>
 +          {recording
 +            ? (shortModelName(models?.stt) ? `${shortModelName(models.stt)} is listening` : 'Listening…')
@@ -484,7 +737,7 @@ index bf694b1..d38bf2b 100644
          </Tiny>
        </View>
        {messages.length > 0 && (
-@@ -134,7 +167,7 @@ export default function AIModeScreen({ route }) {
+@@ -134,14 +167,14 @@ export default function AIModeScreen({ route }) {
          />
        )}
      </View>
@@ -493,6 +746,14 @@ index bf694b1..d38bf2b 100644
  
    const welcome = (
      <View style={styles.welcome}>
+       <View style={styles.welcomeAvatar}>
+         <Ionicons name="sparkles" size={26} color="#fff" />
+       </View>
+-      <T2 style={styles.welcomeTitle}>Hi! I'm Salmart AI.</T2>
++      <T2 style={styles.welcomeTitle}>Hi! I'm Salmart Intelligence.</T2>
+       <Body style={styles.welcomeSub}>
+         Tell me what you want to do. I'll help you get it done.
+       </Body>
 @@ -181,10 +214,12 @@ export default function AIModeScreen({ route }) {
                onConfirm={confirm}
                onCancel={cancel}
@@ -506,6 +767,24 @@ index bf694b1..d38bf2b 100644
              />
            )}
            ListHeaderComponent={messages.length === 0 ? welcome : <View style={{ height: 4 }} />}
+@@ -202,7 +237,7 @@ export default function AIModeScreen({ route }) {
+               onPress={() => toggleRecording(turnContext)}
+               disabled={transcribing || sending}
+               accessibilityRole="button"
+-              accessibilityLabel={recording ? 'Stop recording' : 'Talk to Salmart AI'}
++              accessibilityLabel={recording ? 'Stop recording' : 'Talk to Salmart Intelligence'}
+               accessibilityState={{ busy: transcribing, disabled: transcribing || sending }}
+               style={({ pressed }) => [
+                 styles.micBtn,
+@@ -228,7 +263,7 @@ export default function AIModeScreen({ route }) {
+               style={styles.input}
+               onSubmitEditing={() => onSend()}
+               blurOnSubmit={false}
+-              accessibilityLabel="Message Salmart AI"
++              accessibilityLabel="Message Salmart Intelligence"
+             />
+             <Pressable
+               onPress={() => onSend()}
 @@ -247,6 +282,13 @@ export default function AIModeScreen({ route }) {
            </View>
          </View>

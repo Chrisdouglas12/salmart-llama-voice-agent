@@ -15,6 +15,8 @@
  */
 
 // ── Vocabulary (kept in sync with theme.js on the frontend) ─────────────────
+const selling = require('../../../lib/assistant/sellingFlow');
+
 const AD_CATEGORIES = [
   'electronics', 'fashion', 'home', 'vehicles', 'music',
   'books', 'food_items', 'others', 'services', 'digital',
@@ -44,8 +46,7 @@ const LOCATION_ALIASES = {
 };
 const REQUEST_CATEGORIES = ['electronics', 'fashion', 'home', 'vehicles', 'music', 'others'];
 
-const clean = (v, n = 200) => String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim().slice(0, n);
-const matchList = (arr, v) => {
+const clean = (v, n = 200) => String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim().slice(0, n);const matchList = (arr, v) => {
   const s = String(v == null ? '' : v).trim().toLowerCase();
   return arr.find(x => x.toLowerCase() === s) || '';
 };
@@ -109,7 +110,7 @@ function normalizeAdFields(raw, currentType = 'regular') {
 
 const SKIPPABLE_STEPS = ['discount', 'servicePrice', 'digitalCaption'];
 
-async function prepareAdForm(_ctx, args) {
+async function prepareAdForm(ctx, args) {
   const fields = normalizeAdFields(args || {}, 'regular');
   const skipStep = SKIPPABLE_STEPS.includes(args?.skipStep) ? args.skipStep : null;
   if (!Object.keys(fields).length && !skipStep) {
@@ -129,12 +130,40 @@ async function prepareAdForm(_ctx, args) {
     e.code = 'TOOL_BAD_ARGS';
     throw e;
   }
+  // Three sources, freshest last: what earlier turns filled (the validated
+  // draft), what the phone reported before this turn, and what this patch
+  // writes now. The model sees the result in the same turn (the tool result
+  // feeds the next model call), so a reply written after a fill can never ask
+  // for the value it just received — the "tell me the price" loop stops here.
+  const draft = ctx?.adDraft && typeof ctx.adDraft === 'object' ? ctx.adDraft : {};
+  const phone = ctx?.listing && typeof ctx.listing === 'object' ? ctx.listing : {};
+  const type = selling.cleanType(fields.postType) || selling.cleanType(phone.postType)
+    || selling.cleanType(draft.postType) || 'regular';
+  const after = {
+    ...selling.flagsForFields(type, draft),
+    ...phone,
+    ...selling.flagsForFields(type, fields),
+  };
+  const asked = Array.isArray(ctx?.sellingAsked) ? ctx.sellingAsked : [];
+  if (skipStep) asked.push(skipStep);
+  const next = selling.nextStep(type, after, asked);
+
   return {
     fields,
+    // The phone's form state after this patch: the model must not ask for these
+    // again, and `next` is the only question it may ask.
+    filled: Object.keys(fields),
+    remaining: next.missing,
+    nextStep: next.step,
+    nextAsk: next.ask,
+    complete: next.done,
     ...(skipStep ? { skipStep } : {}),
     note: skipStep
-      ? 'That optional step was skipped. Ask the next question only.'
-      : 'Fields applied to the form. The user still has to review and tap Post.',
+      ? `That optional step was skipped. Ask only: "${next.ask}"`
+      : `Saved: ${Object.keys(fields).join(', ') || 'nothing'}. `
+        + (next.done
+          ? 'The listing is complete. Show the review step and nothing else.'
+          : `Now ask only: "${next.ask}"`),
   };
 }
 
@@ -291,15 +320,55 @@ async function prepareRegistration(_ctx, args) {
   }
 
   let note = 'I filled what you gave me.';
+
+  // What the register screen holds after this patch, computed the same way on
+  // every turn. The reply after a fill therefore names the real next step and
+  // can never claim a saved field is still missing.
+  const snap = _ctx?.registration && typeof _ctx.registration === 'object'
+    ? _ctx.registration
+    : {};
+  const draft = _ctx?.registerDraft && typeof _ctx.registerDraft === 'object'
+    ? _ctx.registerDraft
+    : {};
+  const hasName = !!(fields.firstName && fields.lastName)
+    || (snap.firstName === true && snap.lastName === true)
+    || !!(draft.firstName && draft.lastName)
+    || !!(draft.fullName && String(draft.fullName).trim().split(/\s+/).length >= 2);
+  const hasEmail = !!fields.email || !!_ctx?.emailProvided || snap.email === true;
+  const hasPhone = !!fields.phoneNumber || !!_ctx?.phoneProvided || snap.phone === true;
+  const declined = noEmail || !!_ctx?.emailDeclined || snap.emailDeclined === true;
+  const passwordSet = !!_ctx?.passwordSet || snap.password === true;
+  const agreed = !!_ctx?.agreed || snap.agreed === true;
+
   if (noEmail) note += ' They have no email, so ask for their phone number next.';
-  else if (!fields.email && !fields.phoneNumber) note += ' I still need an email address or a phone number.';
-  else if (!fields.firstName || !fields.lastName) note += ' I still need their full name, first and last.';
-  else note += ' Ask only for the next missing step. The password and agreement are handled on the screen.';
+
+  const remaining = [];
+  if (!hasName) remaining.push('full name');
+  if (!hasEmail && !hasPhone && !declined) remaining.push('email or phone number');
+  if (!passwordSet) remaining.push('secret code (on the screen, never in chat)');
+  if (!agreed) remaining.push('agree to the terms (on the screen)');
+  const nextAction = remaining[0] || 'create account';
+  const nextAsk = !hasName
+    ? 'What is your full name, first and last?'
+    : (remaining.includes('email or phone number')
+      ? 'Do you have an email address, or should we use a phone number instead?'
+      : (!passwordSet
+        ? 'Now tap the secret code box and type the code you want. I will not see it.'
+        : (!agreed
+          ? 'Now read the agreement and tick the box, then tell me when it is done.'
+          : 'Tap Create account when you are ready.')));
 
   return {
     fields,
+    filled: Object.keys(fields),
+    remaining,
+    nextAction,
+    nextAsk,
+    note: `${note} Saved: ${Object.keys(fields).join(', ') || 'nothing'}. `
+      + (remaining.length
+        ? `The only thing left is: ${remaining.join(', ')}. Say or ask only: "${nextAsk}"`
+        : 'Everything on this form is done. Tell them to tap Create account.'),
     ...(noEmail ? { emailDeclined: true } : {}),
-    note,
     // These are never part of `fields`, so the model can never report that it
     // filled a password or accepted the agreement for the user.
     manualSteps: ['password', 'agreement', 'create_account'],

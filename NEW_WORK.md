@@ -51,6 +51,8 @@ Fourth patch: selling completion — CreateAd auto-scroll keeps the filled field
 
 Fifth patch: first-run voice onboarding. On a fresh install, once the splash clears, a centered welcome shows the Salmart logo, a pulsing mic and the welcome text. The assistant speaks the welcome and, only after the user taps "Yes, allow me to speak", requests microphone permission with the phone's own prompt and on-screen instruction to press Allow. Granting it speaks the thanks line and points at the global mic; denying it explains that typing and the mic button still work. "Maybe later" dismisses silently. The onboarding reuses the existing global speech and permission pipeline, polls nothing, and the auth screens no longer speak a competing welcome.
 
+Sixth patch: the native shell no longer mounts a WebView. Web-only routes (`nav.openWeb`, and any route without a native screen) open in the system browser — static files directly, SPA routes through `/index.html#/…` — so the native tree keeps one fixed layout instead of resizing around a loading browser view. Deep links still push native screens and only hand web-only targets to the browser, and Android back keeps unwinding the native stack instead of waiting on a page.
+
 ## Keyless judge run (no keys, no DB, no install)
 
 - `backend/demo-flows.js` (`npm run demo`): registration, buying and selling walkthroughs through the real modules, with machine-readable proof per step.

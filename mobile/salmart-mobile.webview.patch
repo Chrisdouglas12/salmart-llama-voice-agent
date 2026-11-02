@@ -1,0 +1,316 @@
+diff --git a/App.js b/App.js
+index 21af228..72b23bd 100644
+--- a/App.js
++++ b/App.js
+@@ -59,7 +59,9 @@ import {
+   initialWindowMetrics,
+ } from 'react-native-safe-area-context';
+ import NetInfo from '@react-native-community/netinfo';
+-import { WebView } from 'react-native-webview';
++// NOTE: react-native-webview is intentionally NOT imported. Web pages open in
++// the system browser (see src/state/Navigation.js), so the native tree no longer
++// mounts a WebView that can resize or stall the app.
+ import { enableScreens } from 'react-native-screens';
+ import * as Notifications from 'expo-notifications';
+ import * as Device from 'expo-device';
+@@ -859,7 +861,7 @@ const MainApp = React.memo(function MainApp({ webPath = null }) {
+   // tree containing the WebView — two layout passes, one visible resize.
+   const [webViewUrl,       setWebViewUrl]       = useState(CONFIG.MAIN_URL);
+ 
+-  const [webViewProgress,  setWebViewProgress]  = useState(0);
++  const [webViewProgress,  setWebViewProgress]  = useState(1);
+   const [updateAvailable,  setUpdateAvailable]  = useState(false);
+   const [appUpdate,        setAppUpdate]        = useState(null);
+   const appUpdateBusyRef = useRef(false);
+@@ -1112,24 +1114,7 @@ const MainApp = React.memo(function MainApp({ webPath = null }) {
+           const url = new URL(payload);
+           const setupToken = url.searchParams.get('setup_token');
+           if (setupToken) {
+-            const encodedToken = encodeURIComponent(setupToken);
+-            if (webViewRef.current && hasLoadedOnceRef.current) {
+-              webViewRef.current.injectJavaScript(`
+-                (function() {
+-                  try {
+-                    if (typeof window.spaNavigate === 'function') {
+-                      window.spaNavigate('/complete-profile?setup_token=${encodedToken}', true);
+-                    } else {
+-                      window.location.hash = '#/complete-profile?setup_token=${encodedToken}';
+-                    }
+-                  } catch(e) {
+-                    window.location.hash = '#/complete-profile?setup_token=${encodedToken}';
+-                  }
+-                })(); true;
+-              `);
+-            } else {
+-              setWebViewUrl(`${CONFIG.MAIN_URL}/#/complete-profile?setup_token=${encodedToken}`);
+-            }
++            navigateTo(`${CONFIG.MAIN_URL}/#/complete-profile?setup_token=${encodeURIComponent(setupToken)}`);
+             return;
+           }
+         } catch (e) {}
+@@ -1161,11 +1146,8 @@ const MainApp = React.memo(function MainApp({ webPath = null }) {
+     }
+ 
+     if (typeof payload === 'string') {
+-      if (hasLoadedOnceRef.current) {
+-        navigateTo(payload);
+-      } else {
+-        pendingDeepLinkRef.current = payload;
+-      }
++      // Native routes push as before; anything web-only opens in the browser.
++      navigateTo(payload);
+     }
+   }, [navigateTo, handleOAuthSuccess]);
+ 
+@@ -1657,50 +1639,12 @@ const MainApp = React.memo(function MainApp({ webPath = null }) {
+         return true;
+       }
+ 
+-      // The page has not booted yet: swallow the press instead of killing the
+-      // app mid-launch.
+-      if (!webViewRef.current || !hasLoadedOnceRef.current) return true;
+-
+-      // The native layer owns the screen whenever the WebView overlay is not up,
+-      // so leave the app right here. By the time a press reaches this handler,
+-      // NavigationProvider has already unwound the native stack or closed the
+-      // web overlay, so a press on a bare panel means "exit". Previously this
+-      // fell through to asking the hidden page, whose stale history swallowed
+-      // the first press — which is why leaving a panel took two taps.
+-      if (!inWebRef.current) {
+-        clearBackTimeout();
+-        BackHandler.exitApp();
+-        return true;
+-      }
+-
+-      const requestId = ++backRequestIdRef.current;
+-
+-      webViewRef.current.injectJavaScript(`
+-        (function(){
+-          try {
+-            if (typeof window.__salmartNativeBack === 'function') {
+-              window.__salmartNativeBack(${requestId});
+-            } else {
+-              window.ReactNativeWebView.postMessage(JSON.stringify({
+-                type: 'NATIVE_BACK_RESULT', id: ${requestId}, action: 'exit'
+-              }));
+-            }
+-          } catch(e) {
+-            try {
+-              window.ReactNativeWebView.postMessage(JSON.stringify({
+-                type: 'NATIVE_BACK_RESULT', id: ${requestId}, action: 'exit'
+-              }));
+-            } catch(_e) {}
+-          }
+-        })(); true;
+-      `);
+-
++      // A web page is never rendered in-app now, so the native layer always
++      // owns the screen. NavigationProvider has already unwound the stack by
++      // the time a press reaches here, which means "exit". (Without this the
++      // old WebView-readiness gate swallowed every press.)
+       clearBackTimeout();
+-      backTimeoutRef.current = setTimeout(() => {
+-        backTimeoutRef.current = null;
+-        if (backRequestIdRef.current === requestId) exitFromRoot();
+-      }, CONFIG.NATIVE_BACK_TIMEOUT_MS);
+-
++      BackHandler.exitApp();
+       return true;
+     });
+ 
+@@ -2005,78 +1949,9 @@ const MainApp = React.memo(function MainApp({ webPath = null }) {
+           }
+         ]} />
+ 
+-        <WebView
+-          ref={webViewRef}
+-          source={webViewSource}
+-          style={[
+-            styles.webview,
+-            { backgroundColor },
+-            !webViewVisible && { opacity: 0 }
+-          ]}
+-
+-          contentInsetAdjustmentBehavior="never"
+-          automaticallyAdjustContentInsets={false}
+-          keyboardDisplayRequiresUserAction={false}
+-          overScrollMode="never"
+-          nestedScrollEnabled={true}
+-          scrollEnabled={true}
+-          bounces={false}
+-
+-          renderError={() => null}
+-          onError={handleError}
+-          onHttpError={handleHttpError}
+-          onLoadEnd={handleLoadEnd}
+-          onLoadProgress={handleLoadProgress}
+-          onNavigationStateChange={handleNavigationStateChange}
+-          onMessage={handleWebViewMessage}
+-          onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
+-          onContentProcessDidTerminate={handleWebViewProcessGone}
+-          onRenderProcessGone={({ nativeEvent }) => { if (nativeEvent?.didCrash !== false) handleWebViewProcessGone(); }}
+-
+-          injectedJavaScriptBeforeContentLoaded={INJECTED_JS_BEFORE_LOAD}
+-          injectedJavaScript={INJECTED_JAVASCRIPT}
+-
+-          cacheEnabled={true}
+-          cacheMode="LOAD_DEFAULT"
+-          incognito={false}
+-
+-          javaScriptEnabled={true}
+-          domStorageEnabled={true}
+-          thirdPartyCookiesEnabled={true}
+-          setSupportMultipleWindows={false}
+-          setSaveFormData={false}
+-          allowsBackForwardNavigationGestures={Platform.OS === 'ios'}
+-          allowsInlineMediaPlayback={true}
+-          mediaPlaybackRequiresUserAction={false}
+-          allowsCameraAndMicrophone={true}
+-
+-          allowFileAccess={false}
+-          allowFileAccessFromFileURLs={false}
+-          allowUniversalAccessFromFileURLs={false}
+-          mixedContentMode="never"
+-          originWhitelist={['https://*', 'salmart://*']}
+-
+-          // Must stay "hardware". With LAYER_TYPE_NONE (the library default)
+-          // the WebView has no hardware layer of its own, so Android discards
+-          // the composited frame while the app is backgrounded and returning to
+-          // the foreground reveals a blank white view until a touch forces a
+-          // redraw (react-native-webview#3427, #3524). A hardware layer keeps
+-          // the last frame resident, so the page reappears as the user left it.
+-          androidLayerType="hardware"
+-          androidHardwareAccelerationDisabled={false}
+-          showsVerticalScrollIndicator={false}
+-          showsHorizontalScrollIndicator={false}
+-          // Inset handling: the shell reserves insets.bottom exactly the way
+-          // the native TabBar and screens do, so nothing shifts when
+-          // `showNative` flips.
+-          containerStyle={[
+-            styles.webviewContainer,
+-            { backgroundColor, paddingBottom: insets.bottom },
+-          ]}
+-
+-          userAgent={userAgent}
+-          setWebContentsDebuggingEnabled={IS_DEV}
+-        />
++        {/* Web pages now open in the system browser. The shell deliberately has
++            no in-app WebView: it used to resize and stall the native tree while
++            loading, and nothing below the native layer needs it any more. */}
+ 
+         {showSplash && (
+           <View style={[StyleSheet.absoluteFillObject, { pointerEvents: 'none' }]}>
+@@ -2710,8 +2585,6 @@ function Root() {
+   const { T } = useTheme();
+   const { ready, isAuthenticated } = useAuth();
+   const currentName = useNavSelector(s => s.current.name);
+-  const inWeb = useNavSelector(s => s.inWeb);
+-  const webPath = useNavSelector(s => s.webPath);
+   const scheme = useColorScheme();
+   const isDark = scheme === 'dark';
+ 
+@@ -2757,7 +2630,7 @@ function Root() {
+   }, []);
+ 
+   const onAuthRoute = SIGNED_OUT_ROUTES.includes(currentName);
+-  const showNative = ready && (isAuthenticated || onAuthRoute) && !inWeb;
++  const showNative = ready && (isAuthenticated || onAuthRoute);
+ 
+   return (
+     <View style={{ flex: 1 }}>
+@@ -2775,20 +2648,15 @@ function Root() {
+       />
+ 
+       {/*
+-        The WebView shell stays MOUNTED underneath the native layer. It owns
+-        notification listeners, deep links, update checks and the non-critical
+-        pages, and all of that has to keep running while a native panel is on
+-        screen — unmounting it would silently kill those subscriptions.
+-
+-        It is memoized and receives only `webPath`, so a native navigation does
+-        not re-render it. MainApp reads the actions it needs through
+-        useNavActions() rather than a merged useNav() bag.
+-
+-        `webPath` is how a native screen hands a route to that shell
+-        (nav.openWeb). While it is set the WebView owns the screen, so the
+-        native overlay steps aside and MainApp navigates the page.
++        The shell stays mounted underneath the native layer. It owns
++        notification listeners, deep links and update checks, and all of that
++        has to keep running while a native panel is on screen.
++
++        It no longer contains a WebView. Web routes are handed to the system
++        browser by Navigation.openWeb/go, so the native tree keeps its own
++        fixed layout instead of resizing around a loading browser view.
+       */}
+-      <MainApp webPath={webPath} />
++      <MainApp />
+ 
+       {showNative && (
+         <View style={[StyleSheet.absoluteFillObject, { backgroundColor: T.bg }]}>
+diff --git a/src/state/Navigation.js b/src/state/Navigation.js
+index bdaaf96..ab30815 100644
+--- a/src/state/Navigation.js
++++ b/src/state/Navigation.js
+@@ -21,8 +21,11 @@ import {
+   BackHandler,
+   Platform,
+   InteractionManager,
++  Linking,
+ } from 'react-native';
+ 
++import { CONFIG } from '../../config';
++
+ import {
+   resolveRoute,
+   parseTarget,
+@@ -265,14 +268,36 @@ export function NavigationProvider({
+     });
+   }, []);
+ 
+-  const openWeb = useCallback(path => setWebPath(path || '/'), []);
++  /**
++   * Web pages no longer render inside the app. They open in the system browser
++   * so the native tree keeps its own layout and never resizes or stalls waiting
++   * for a WebView to load.
++   */
++  const openWeb = useCallback(path => {
++    const raw = typeof path === 'string' && path ? path : '/';
++    const suffix = raw.startsWith('#') ? raw.slice(1) || '/' : raw;
++    if (/^https?:\/\//i.test(suffix)) {
++      Linking.openURL(suffix).catch(() => {});
++      return;
++    }
++    const main = String(CONFIG.MAIN_URL || '').replace(/\/+$/, '');
++    // Static files (resources, hub pages) load as real pages; everything else
++    // is an SPA route and must go through the hash router, exactly like the
++    // WebView did before.
++    const isStatic = /\.html(?:[?#]|$)/i.test(suffix)
++      || suffix.startsWith('/content/')
++      || suffix.startsWith('/app/');
++    const route = suffix.startsWith('/') ? suffix : `/${suffix}`;
++    const url = isStatic ? `${main}${route}` : `${main}/index.html#${route}`;
++    Linking.openURL(url).catch(() => {});
++  }, []);
+   const closeWeb = useCallback(() => setWebPath(null), []);
+ 
+   const go = useCallback(target => {
+     const resolved = resolveRoute(target);
+     if (resolved.kind === 'native') {
+       if (!requireScreen(resolved.name)) {
+-        setWebPath(resolved.path);
++        openWeb(resolved.path);
+         return resolved;
+       }
+       if (isPanelRoot(resolved.name, resolved.params)) {
+@@ -282,9 +307,9 @@ export function NavigationProvider({
+       }
+       return resolved;
+     }
+-    setWebPath(resolved.path);
++    openWeb(typeof target === 'string' ? target : resolved.path);
+     return resolved;
+-  }, [push, selectTab]);
++  }, [push, selectTab, openWeb]);
+ 
+   /* ---------------------------------------------------------------------- */
+   /* ANDROID BACK */

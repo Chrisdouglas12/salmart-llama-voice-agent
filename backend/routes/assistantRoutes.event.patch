@@ -1094,7 +1094,7 @@ index eb30b55..2be6138 100644
  });
  
 +/* ------------------------------------------------------------------ */
-+/* Aya Shelfie: one photo of a shelf -> several priced drafts         */
++/* Salmart Intelligence Shelfie: one photo of a shelf -> several priced drafts         */
 +/* ------------------------------------------------------------------ */
 +/**
 + * POST /scan-shop (multipart: image, text?, location?)

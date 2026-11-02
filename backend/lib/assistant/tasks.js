@@ -1,5 +1,5 @@
 /* ------------------------------------------------------------------
- * Aya task planning helpers (Phase 3: multi-turn task state).
+ * Salmart Intelligence task planning helpers (Phase 3: multi-turn task state).
  *
  * The ReAct tool loop stays in routes/assistantRoutes.js. Multi-turn memory
  * lives here, dependency-free, so the planning layer can be unit-tested

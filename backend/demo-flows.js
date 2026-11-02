@@ -25,8 +25,8 @@ const guidance = require('./lib/assistant/authGuidance.js');
 function line(title) {
   console.log(`\n── ${title} ──────────────────────────────────────`);
 }
-function aya(say) {
-  console.log(`  AYA: ${say}`);
+function say(say) {
+  console.log(`  Salmart Intelligence: ${say}`);
 }
 function you(say) {
   console.log(`  YOU: ${say}`);
@@ -38,16 +38,16 @@ function proof(obj) {
 // ─── Act 1 — Registration ──────────────────────────────────────────
 line('Act 1 — Registration (voice-first, password never spoken)');
 you('I want to join.');
-aya('Welcome! What is your full name? (spoken first, typed once)');
+say('Welcome! What is your full name? (spoken first, typed once)');
 you('Adaeze Okafor.');
-aya('Welcome, Adaeze! Do you have an email address — Google, Yahoo, or any other?');
+say('Welcome, Adaeze! Do you have an email address — Google, Yahoo, or any other?');
 you('No, I only have my phone.');
-aya('No problem. What is your phone number — MTN, Airtel, Glo, or any other? (reads it back, never invents digits)');
-aya('[The secure password box opens itself with the keyboard. Passwords never reach the model, history, or speech.]');
-aya('[The agreement is read aloud; only an explicit "I agree" counts — never auto-accepted.]');
-aya('Here is what I have: Adaeze Okafor, phone 0803 123 4567. Should I create your account, or change something?');
+say('No problem. What is your phone number — MTN, Airtel, Glo, or any other? (reads it back, never invents digits)');
+say('[The secure password box opens itself with the keyboard. Passwords never reach the model, history, or speech.]');
+say('[The agreement is read aloud; only an explicit "I agree" counts — never auto-accepted.]');
+say('Here is what I have: Adaeze Okafor, phone 0803 123 4567. Should I create your account, or change something?');
 you('Create it.');
-aya('[Only your tap on the confirm card calls POST /register. Then: congratulations, Market opens signed in.]');
+say('[Only your tap on the confirm card calls POST /register. Then: congratulations, Market opens signed in.]');
 line('Plain-language errors (structured codes, never raw tech text)');
 for (const code of ['email_exists', 'invalid_password', 'no_account']) {
   const g = guidance.explainAuthError
@@ -59,9 +59,9 @@ for (const code of ['email_exists', 'invalid_password', 'no_account']) {
 // ─── Act 2 — Buying ────────────────────────────────────────────────
 line('Act 2 — Buying (touch first, save only after "save it")');
 you('I want to buy a bag.');
-aya('What kind of bag do you want? (ONE short question)');
+say('What kind of bag do you want? (ONE short question)');
 you('A black leather bag.');
-aya('[Search runs; a big picture picker opens. Touch the one you want — no reading, no pronouncing.]');
+say('[Search runs; a big picture picker opens. Touch the one you want — no reading, no pronouncing.]');
 you('[touches the black leather bag]');
 const selection = touchBuy.buildSelectionReply({
   title: 'Black leather bag',
@@ -69,7 +69,7 @@ const selection = touchBuy.buildSelectionReply({
   description: 'Strong leather bag with a long strap.',
   hasSeller: true,
 });
-aya(selection);
+say(selection);
 proof({ cartWritten: false, saved: false });
 
 // The tap is remembered on the conversation task, still unsaved.
@@ -108,19 +108,19 @@ const toolResult = {
   },
 };
 taskState.applyToolResults(task, [toolResult]);
-aya(`${touchBuy.buildSavedReply({ title: 'Black leather bag', hasSeller: true })}`);
+say(`${touchBuy.buildSavedReply({ title: 'Black leather bag', hasSeller: true })}`);
 proof({ cartCard: buildStructured([toolResult])[0] });
 proof({ secondSaveAttempt: task.lastPick.saved === true ? 'blocked — already saved, never added twice' : 'BUG' });
 
 // ─── Act 3 — Selling ───────────────────────────────────────────────
 line('Act 3 — Selling (one question at a time, seller taps Post)');
 you('I want to sell my phone.');
-aya('[CreateAd opens; the gallery opens by itself. Close it and the camera opens.]');
+say('[CreateAd opens; the gallery opens by itself. Close it and the camera opens.]');
 const snap = { photo: false, title: false, caption: false, priceValid: false, quantity: false };
 let state = { postType: 'regular', asked: [], currentStep: null, updatedAt: Date.now() };
-aya(sellingSession.promptBlock(state, snap, null).split('\n').find((l) => l.startsWith('Next question')));
+say(sellingSession.promptBlock(state, snap, null).split('\n').find((l) => l.startsWith('Next question')));
 you('[picks a photo of the iPhone]');
-aya('I read your photo — I filled title, price. What is the item called? (never re-asks what the photo filled)');
+say('I read your photo — I filled title, price. What is the item called? (never re-asks what the photo filled)');
 you('iPhone 12, 150 thousand, 3 pieces, Lagos.');
 const doneTask = {
   adDraft: {
@@ -136,9 +136,9 @@ const complete = sellingSession.promptBlock(
   { postType: 'regular', asked: [], currentStep: null, updatedAt: Date.now() },
   doneSnap, doneTask,
 );
-aya(complete.split('\n').find((l) => l.includes('Status:')));
+say(complete.split('\n').find((l) => l.includes('Status:')));
 you('Yes, read it for me.');
-for (const l of complete.split('\n').filter((l) => /^\d+\. /.test(l))) aya(l);
-aya('Do you want to correct anything, or tap Publish/Post? (the seller always posts — there is no publish tool)');
+for (const l of complete.split('\n').filter((l) => /^\d+\. /.test(l))) say(l);
+say('Do you want to correct anything, or tap Publish/Post? (the seller always posts — there is no publish tool)');
 
 console.log('\nDone. Registration + buying + selling, keyless. Nothing was published; the seller always taps Post.');

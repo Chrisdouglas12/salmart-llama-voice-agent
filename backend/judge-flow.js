@@ -1,5 +1,5 @@
 /* ------------------------------------------------------------------
- * Aya judge flow — keyless standalone runner (no keys, no DB, no app).
+ * Salmart Intelligence judge flow — keyless standalone runner (no keys, no DB, no app).
  *
  * Runs the 7-turn judge script through the REAL deterministic brain
  * (lib/assistant/mockAgent.js) and the REAL tool contract
@@ -55,7 +55,7 @@ const TURNS = [
 async function main() {
   const session = { draft: {}, products: [] };
   const context = { screen: 'market', searchProducts };
-  console.log('Aya judge flow — deterministic brain + SAMPLE catalogue (keyless)\n');
+  console.log('Salmart Intelligence judge flow — deterministic brain + SAMPLE catalogue (keyless)\n');
 
   for (const say of TURNS) {
     const collected = { actions: [], navigations: [] };
@@ -67,7 +67,7 @@ async function main() {
       collected,
     });
     console.log(`YOU: ${say}`);
-    console.log(`AYA: ${res.message}`);
+    console.log(`Salmart Intelligence: ${res.message}`);
     for (const a of collected.actions) console.log(`  action: ${JSON.stringify(a)}`);
     for (const n of collected.navigations) console.log(`  nav:    ${JSON.stringify(n)}`);
     if (collected.products?.length) {

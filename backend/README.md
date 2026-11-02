@@ -97,7 +97,7 @@ lib/assistant/tools.js        tool schemas → app actions
 lib/assistant/form.js         Pidgin/English parsing → exact form values
 lib/assistant/mockAgent.js    deterministic fallback brain
 lib/assistant/mongoSearch.js  catalogue search (calls the host Post model)
-lib/assistant/shelfie.js      Aya Shelfie: boxes, crops, price bands
+lib/assistant/shelfie.js      Salmart Intelligence Shelfie: boxes, crops, price bands
 routes/visionRoutes.js        standalone vision routes (reference, NOT mounted)
 routes/voiceRoutes.js         standalone transcribe route (reference, NOT mounted)
 

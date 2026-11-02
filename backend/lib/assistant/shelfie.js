@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Aya Shelfie: one photo of a table, shelf or stall becomes several draft
+ * Salmart Intelligence Shelfie: one photo of a table, shelf or stall becomes several draft
  * listings.
  *
  * CommonJS port of salmart-llama-voice-agent/backend/lib/shelfie.js. Same
@@ -83,7 +83,7 @@ const CATEGORY_KEYWORDS = {
 
 // ── Vision prompt ────────────────────────────────────────────────────────────
 
-const SHELF_PROMPT = `You are Aya, the shelf scanner for Salmart, a Nigerian marketplace. You see ONE photo of a table, shelf, stall, bed or floor where a seller has arranged several different items for sale.
+const SHELF_PROMPT = `You are Salmart Intelligence, the shelf scanner for Salmart, a Nigerian marketplace. You see ONE photo of a table, shelf, stall, bed or floor where a seller has arranged several different items for sale.
 
 Find every distinct, sellable physical item. Ignore the surface itself, the wall, hands, price tags, packaging and duplicates of the same physical object.
 

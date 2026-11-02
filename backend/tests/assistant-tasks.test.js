@@ -1,4 +1,4 @@
-/* Aya agent eval — task-planning layer (Phase 4).
+/* Salmart Intelligence agent eval — task-planning layer (Phase 4).
  *
  * Covers the prompt's evaluation categories that are unit-testable without
  * Mongo or providers: scope-change detection, mid-task correction (draft

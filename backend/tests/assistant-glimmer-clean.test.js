@@ -1,4 +1,4 @@
-/* Aya eval — Glimmer client + background-clean contract (Phase 5).
+/* Salmart Intelligence eval — Glimmer client + background-clean contract (Phase 5).
  *
  * Unit-testable without keys, network, Mongo or sharp: fetch is stubbed,
  * sharp loads lazily only on the composite path (never exercised here).

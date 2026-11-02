@@ -24,7 +24,7 @@ Salmart Intelligence helps users:
 - Buy through conversation: Add products to the cart, contact sellers and navigate checkout with voice guidance.
 - Pay with guidance: Follow clear payment instructions through the existing Paystack checkout.
 
-Aya understands user intentions, remembers the current application context and executes approved actions through Salmart's existing systems.
+Salmart Intelligence understands user intentions, remembers the current application context and executes approved actions through Salmart's existing systems.
 
 Powered by Meta AI
 

@@ -1147,7 +1147,7 @@ index eff30a0..630ebc8 100644
 +  const res = await assistantSpeak({ text: line });
 +  if (!res || !res.success || !res.audio) throw new Error((res && res.code) || 'tts_failed');
 +  const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
-+  const uri = `${dir}aya-reply-${Date.now()}.wav`;
++  const uri = `${dir}salmart-intelligence-reply-${Date.now()}.wav`;
 +  await FileSystem.writeAsStringAsync(uri, res.audio, { encoding: FileSystem.EncodingType.Base64 });
 +  await stopServerVoice();
 +  const { sound } = await Audio.Sound.createAsync({ uri }, { shouldPlay: true });
@@ -1273,7 +1273,7 @@ index eff30a0..630ebc8 100644
 +          },
 +        ]);
 +        // A voice search from the market must open the thread, or the buyer
-+        // never sees the cards Aya just found.
++        // never sees the cards Salmart Intelligence just found.
 +        if (screenRef.current !== ASSISTANT_ROUTE) {
 +          lastNavRef.current = Date.now();
 +          nav.push(ASSISTANT_ROUTE);

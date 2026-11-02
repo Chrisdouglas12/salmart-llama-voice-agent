@@ -1456,7 +1456,7 @@ router.post('/ad-from-image', verifyToken, receiveImage, async (req, res) => {
 });
 
 /* ------------------------------------------------------------------ */
-/* Aya Shelfie: one photo of a shelf -> several priced drafts         */
+/* Salmart Intelligence Shelfie: one photo of a shelf -> several priced drafts         */
 /* ------------------------------------------------------------------ */
 /**
  * POST /scan-shop (multipart: image, text?, location?)

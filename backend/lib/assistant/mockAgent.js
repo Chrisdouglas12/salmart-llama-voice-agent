@@ -281,7 +281,7 @@ async function runMockAgent({ messages = [], history = [], context = {}, session
 
   // ── 9. Small talk ─────────────────────────────────────────────────────────
   if (GREETING.test(s)) {
-    return { message: "How far! I be Aya, your Salmart voice helper. You wan buy, sell, or check your photos?" };
+    return { message: "How far! I be Salmart Intelligence, your Salmart voice helper. You wan buy, sell, or check your photos?" };
   }
   if (THANKS.test(s)) {
     return { message: "You welcome. Anything else?" };

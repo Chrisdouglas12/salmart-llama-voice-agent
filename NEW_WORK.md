@@ -39,7 +39,7 @@
 | `routes/userRoutes.registration.patch` | `/register` accepts email or Nigerian phone, returns fixed error codes and the exact field, checks both for duplicates, marks the account verified, and returns a 30-day JWT; `/login` accepts either identifier |
 | `app.ai.patch` | Mount `/api/ai` |
 
-## Mobile (`mobile/salmart-mobile.ai-voice.patch` + `mobile/salmart-mobile.registration.patch`)
+## Mobile (`mobile/*.patch`)
 
 First patch: global mic FAB (+ above the "+" button, hidden on splash, present over Paystack), AI chat screen, auth screens (verify/resend, Google + verify actions), tick-to-pay cart, seller-chat draft handoff, outcome codes feeding the next AI turn. Selling: photo-first walkthrough (gallery/camera choice sheet on arrival, vision auto-fill with "I filled X" summary), quantity→discount offer with concrete suggestion, assistant-filled bulk tier, skip-once optionals, no-repeat missing-field steps.
 
@@ -48,6 +48,8 @@ Second patch: voice-first registration. Full name collected in one question; ema
 Third patch: touch-to-buy for people who cannot read or pronounce a listing name. The user says they want to buy; the assistant asks one question, searches with their words, and says "touch the one you want". A large picture sheet opens by itself, both from the AI screen and from the global mic on any screen. Touching a card sends that exact `productId` to `POST /api/ai/cart/select`, which only PREVIEWS the listing: it reads the title and description back and asks whether to save it or chat the seller — the tap never writes the cart. Saying "save it" runs the validated `addToCart` tool once with the remembered `productId`; the reply tells the buyer to ask for the cart when ready and offers the seller-availability chat. A saved pick is marked on the task so a second "save it" never adds it twice; a fresh search clears it. The seller chat opens with a ready draft and the user still presses send. Spoken replies never carry instruction prefixes ("Next, say: …" is stripped before speech and display).
 
 Fourth patch: selling completion — CreateAd auto-scroll keeps the filled field in view (quantity/discount rows registered, re-jump after fills); quantity/discount fills speak without a toast; when the form is finished the assistant says to tap Publish/Post and offers one read-back from Description to the end, then asks for corrections or the tap.
+
+Fifth patch: first-run voice onboarding. On a fresh install, once the splash clears, a centered welcome shows the Salmart logo, a pulsing mic and the welcome text. The assistant speaks the welcome and, only after the user taps "Yes, allow me to speak", requests microphone permission with the phone's own prompt and on-screen instruction to press Allow. Granting it speaks the thanks line and points at the global mic; denying it explains that typing and the mic button still work. "Maybe later" dismisses silently. The onboarding reuses the existing global speech and permission pipeline, polls nothing, and the auth screens no longer speak a competing welcome.
 
 ## Keyless judge run (no keys, no DB, no install)
 

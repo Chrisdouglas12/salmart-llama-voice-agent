@@ -1,0 +1,520 @@
+diff --git a/App.js b/App.js
+index 69fa6bf..21af228 100644
+--- a/App.js
++++ b/App.js
+@@ -96,6 +96,7 @@ import { ChatProvider } from './src/state/ChatContext';
+ import { CartProvider } from './src/state/CartContext';
+ import { AIProvider } from './src/ai/AIContext';
+ import AIModeButton from './src/ai/AIModeButton';
++import FirstRunWelcome from './src/ai/FirstRunWelcome';
+ import { useChatCacheSync } from './src/services/chatSync';
+ import TabBar from './src/ui/TabBar';
+ import {
+@@ -2812,6 +2813,7 @@ export default function App() {
+                   </SessionGate>
+                 </ChatGate>
+                 <AIModeButton />
++                <FirstRunWelcome />
+               </AIProvider>
+             </CartProvider>
+           </NavigationProvider>
+diff --git a/src/ai/AuthWelcome.js b/src/ai/AuthWelcome.js
+index 7ce255b..4eb7b38 100644
+--- a/src/ai/AuthWelcome.js
++++ b/src/ai/AuthWelcome.js
+@@ -1,9 +1,9 @@
+ /**
+  * Voice-help hint for the sign-in and registration screens.
+  *
+- * Shows a short line about the green mic button and a mute toggle. The spoken
+- * welcome and mic pulse start once per mount through welcome.js; nothing here
+- * records audio.
++ * Shows a short line about the green mic button and a mute toggle. The first
++ * spoken welcome belongs to FirstRunWelcome; these screens only pulse the mic
++ * once per mount through welcome.js, and nothing here records audio.
+  */
+ 
+ import React, { useEffect, useRef, useState } from 'react';
+diff --git a/src/ai/FirstRunWelcome.js b/src/ai/FirstRunWelcome.js
+new file mode 100644
+index 0000000..a38f2eb
+--- /dev/null
++++ b/src/ai/FirstRunWelcome.js
+@@ -0,0 +1,345 @@
++/**
++ * First-run voice onboarding.
++ *
++ * Shown once per install, on top of the app, after the launch splash hides.
++ * It explains the voice assistant and asks for microphone permission before
++ * the user reaches the sign-in screen.
++ *
++ * The welcome uses the same TTS and permission pipeline as the floating mic:
++ * `speak()` from AIContext and expo-audio's recording permission request. No
++ * second recorder or speech provider is created here.
++ */
++
++import React, { useCallback, useEffect, useRef, useState } from 'react';
++import {
++  Animated,
++  Easing,
++  Platform,
++  Pressable,
++  ScrollView,
++  StyleSheet,
++  Text,
++  View,
++} from 'react-native';
++import { Image } from 'expo-image';
++import { Ionicons } from '@expo/vector-icons';
++import { useSafeAreaInsets } from 'react-native-safe-area-context';
++import { requestRecordingPermissionsAsync } from 'expo-audio';
++
++import { createThemed, useTheme } from '../theme/theme';
++import { useSplashVisible } from '../state/splash';
++import { useAI } from './AIContext';
++import { stopSpeaking } from './speak';
++import {
++  FIRST_RUN_WELCOME,
++  FIRST_RUN_THANKS,
++  FIRST_RUN_DENIED,
++  FIRST_RUN_ALLOW_HINT,
++  hasSeenFirstRun,
++  markFirstRunSeen,
++} from './firstRun';
++
++const RING_COUNT = 3;
++const RING_DURATION = 2100;
++const RING_STAGGER = 700;
++
++export default function FirstRunWelcome() {
++  const { T } = useTheme();
++  const styles = useStyles();
++  const insets = useSafeAreaInsets();
++  const splashVisible = useSplashVisible();
++  const { speak, nudgeMic } = useAI();
++
++  const [visible, setVisible] = useState(false);
++  const [asking, setAsking] = useState(false);
++  const decidedRef = useRef(false);
++  const startedRef = useRef(false);
++  const rings = useRef(
++    Array.from({ length: RING_COUNT }, () => new Animated.Value(0)),
++  ).current;
++
++  // Wait for the splash to finish, then decide once whether this is a first run.
++  useEffect(() => {
++    if (splashVisible || startedRef.current) return undefined;
++    startedRef.current = true;
++    let cancelled = false;
++
++    (async () => {
++      const seen = await hasSeenFirstRun();
++      if (cancelled || seen) return;
++      setVisible(true);
++      await speak(FIRST_RUN_WELCOME);
++    })();
++
++    return () => {
++      cancelled = true;
++    };
++  }, [splashVisible, speak]);
++
++  // A slow outward ring behind the mic, like the splash's single brand motion.
++  useEffect(() => {
++    if (!visible) return undefined;
++
++    const loops = rings.map((value, index) => {
++      const animation = Animated.loop(
++        Animated.sequence([
++          Animated.delay(index * RING_STAGGER),
++          Animated.timing(value, {
++            toValue: 1,
++            duration: RING_DURATION,
++            easing: Easing.out(Easing.quad),
++            useNativeDriver: true,
++          }),
++          Animated.timing(value, {
++            toValue: 0,
++            duration: 0,
++            useNativeDriver: true,
++          }),
++          Animated.delay((RING_COUNT - 1 - index) * RING_STAGGER),
++        ]),
++      );
++      animation.start();
++      return animation;
++    });
++
++    return () => loops.forEach(animation => animation.stop());
++  }, [visible, rings]);
++
++  const closeAndRemember = useCallback(async () => {
++    await markFirstRunSeen();
++    setVisible(false);
++    setAsking(false);
++  }, []);
++
++  const onAllow = useCallback(async () => {
++    if (asking || decidedRef.current) return;
++    decidedRef.current = true;
++    setAsking(true);
++    // The question has been answered; stop the welcome before the phone's
++    // permission prompt appears so the two audio sources never overlap.
++    await stopSpeaking();
++
++    let granted = false;
++    try {
++      const permission = await requestRecordingPermissionsAsync();
++      granted = !!permission?.granted;
++    } catch (_e) {
++      granted = false;
++    }
++
++    await closeAndRemember();
++    if (granted) {
++      nudgeMic('Tap to talk');
++      await speak(FIRST_RUN_THANKS);
++    } else {
++      await speak(FIRST_RUN_DENIED);
++    }
++  }, [asking, closeAndRemember, nudgeMic, speak]);
++
++  const onLater = useCallback(async () => {
++    if (decidedRef.current) return;
++    decidedRef.current = true;
++    await stopSpeaking();
++    await closeAndRemember();
++  }, [closeAndRemember]);
++
++  if (!visible) return null;
++
++  return (
++    <View
++      style={[styles.overlay, { backgroundColor: T.bg, paddingTop: insets.top, paddingBottom: insets.bottom }]}
++      accessibilityViewIsModal
++      importantForAccessibility="yes"
++    >
++      <ScrollView
++        contentContainerStyle={styles.content}
++        bounces={false}
++        showsVerticalScrollIndicator={false}
++      >
++        <View style={styles.logoBadge}>
++          <Image
++            source={require('../../assets/salmart-logo-2.png')}
++            contentFit="cover"
++            cachePolicy="memory-disk"
++            transition={0}
++            style={styles.logo}
++          />
++        </View>
++        <Text style={[styles.wordmark, { color: T.inkStrong }]}>Salmart</Text>
++
++        <View style={styles.micStage}>
++          {rings.map((value, index) => (
++            <Animated.View
++              key={index}
++              pointerEvents="none"
++              style={[
++                styles.ring,
++                {
++                  borderColor: T.emerald,
++                  opacity: value.interpolate({
++                    inputRange: [0, 0.15, 1],
++                    outputRange: [0, 0.4, 0],
++                  }),
++                  transform: [{
++                    scale: value.interpolate({
++                      inputRange: [0, 1],
++                      outputRange: [1, 2.05],
++                    }),
++                  }],
++                },
++              ]}
++            />
++          ))}
++          <View style={[styles.micOrb, { backgroundColor: T.emerald }]}>
++            <Ionicons name="mic" size={38} color="#FFFFFF" />
++          </View>
++        </View>
++
++        <Text style={[styles.body, { color: T.inkMuted }]}>{FIRST_RUN_WELCOME}</Text>
++
++        <Text style={[styles.hint, { color: T.inkMuted }]}>{FIRST_RUN_ALLOW_HINT}</Text>
++
++        <Pressable
++          onPress={onAllow}
++          disabled={asking}
++          accessibilityRole="button"
++          accessibilityLabel="Yes, allow me to speak"
++          style={({ pressed }) => [
++            styles.allowButton,
++            { backgroundColor: T.emerald },
++            pressed && !asking && styles.pressed,
++            asking && styles.disabled,
++          ]}
++        >
++          <Ionicons name="mic" size={20} color="#FFFFFF" />
++          <Text style={styles.allowText}>
++            {asking ? 'Waiting for permission…' : 'Yes, allow me to speak'}
++          </Text>
++        </Pressable>
++
++        <Pressable
++          onPress={onLater}
++          disabled={asking}
++          hitSlop={12}
++          accessibilityRole="button"
++          accessibilityLabel="Maybe later"
++          style={({ pressed }) => [styles.later, pressed && styles.pressed]}
++        >
++          <Text style={[styles.laterText, { color: T.inkSubtle }]}>Maybe later</Text>
++        </Pressable>
++      </ScrollView>
++    </View>
++  );
++}
++
++const useStyles = createThemed(({ T }) => StyleSheet.create({
++  overlay: {
++    ...StyleSheet.absoluteFillObject,
++    zIndex: 9500,
++  },
++  content: {
++    flexGrow: 1,
++    alignItems: 'center',
++    justifyContent: 'center',
++    paddingHorizontal: 28,
++    paddingVertical: 28,
++  },
++  logoBadge: {
++    width: 88,
++    height: 88,
++    borderRadius: 44,
++    overflow: 'hidden',
++    backgroundColor: '#FFFFFF',
++    borderWidth: 2,
++    borderColor: 'rgba(0, 168, 107, 0.35)',
++    ...Platform.select({
++      ios: {
++        shadowColor: '#00A86B',
++        shadowOpacity: 0.22,
++        shadowRadius: 14,
++        shadowOffset: { width: 0, height: 5 },
++      },
++      android: { elevation: 6 },
++      default: {},
++    }),
++  },
++  logo: {
++    width: '100%',
++    height: '100%',
++  },
++  wordmark: {
++    marginTop: 12,
++    fontSize: 22,
++    fontWeight: '700',
++    letterSpacing: 0.2,
++  },
++  // Fixed square reserves the room the rings grow into, so the content below
++  // never moves while the animation runs.
++  micStage: {
++    width: 190,
++    height: 190,
++    alignItems: 'center',
++    justifyContent: 'center',
++    marginTop: 4,
++  },
++  ring: {
++    position: 'absolute',
++    width: 88,
++    height: 88,
++    borderRadius: 44,
++    borderWidth: 2,
++  },
++  micOrb: {
++    width: 88,
++    height: 88,
++    borderRadius: 44,
++    alignItems: 'center',
++    justifyContent: 'center',
++  },
++  body: {
++    maxWidth: 360,
++    textAlign: 'center',
++    fontSize: 16,
++    lineHeight: 24,
++    marginTop: 2,
++    marginBottom: 10,
++  },
++  allowButton: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'center',
++    gap: 9,
++    width: '100%',
++    maxWidth: 360,
++    minHeight: 54,
++    borderRadius: 16,
++    paddingHorizontal: 18,
++  },
++  allowText: {
++    color: '#FFFFFF',
++    fontSize: 16,
++    fontWeight: '700',
++  },
++  pressed: {
++    opacity: 0.82,
++  },
++  disabled: {
++    opacity: 0.7,
++  },
++  hint: {
++    maxWidth: 320,
++    textAlign: 'center',
++    fontSize: 13,
++    lineHeight: 19,
++    marginBottom: 18,
++  },
++  later: {
++    marginTop: 16,
++    paddingVertical: 6,
++  },
++  laterText: {
++    fontSize: 14,
++    fontWeight: '600',
++    textDecorationLine: 'underline',
++  },
++}));
+diff --git a/src/ai/firstRun.js b/src/ai/firstRun.js
+new file mode 100644
+index 0000000..07aa928
+--- /dev/null
++++ b/src/ai/firstRun.js
+@@ -0,0 +1,44 @@
++/**
++ * First-run voice onboarding state.
++ *
++ * The onboarding is shown once per install, before the user has done anything
++ * else. It owns the spoken welcome, so the auth screens no longer speak one of
++ * their own (see welcome.js).
++ *
++ * The flag is marked only after the user chooses "Yes" or "Maybe later". If the
++ * app is closed while the onboarding is still on screen, the welcome is shown
++ * again on the next launch instead of disappearing unanswered.
++ */
++
++import AsyncStorage from '@react-native-async-storage/async-storage';
++
++const SEEN_KEY = 'salmart:ai:firstRunSeen';
++
++export const FIRST_RUN_WELCOME =
++  "Welcome to Salmart, Nigeria's social marketplace. I can help you buy and sell " +
++  'with your voice, no typing needed. To hear you, I need to use your microphone. ' +
++  'Is that okay?';
++
++export const FIRST_RUN_THANKS =
++  'THANK YOU! Now just speak to me from anywhere. How can I help you today?';
++
++export const FIRST_RUN_DENIED =
++  'No problem, you can still type or allow permission later by clicking the mic ' +
++  'button from anywhere in the app.';
++
++export const FIRST_RUN_ALLOW_HINT =
++  'Press Allow on the microphone prompt to continue.';
++
++export async function hasSeenFirstRun() {
++  try {
++    return (await AsyncStorage.getItem(SEEN_KEY)) === '1';
++  } catch (_e) {
++    return false;
++  }
++}
++
++export async function markFirstRunSeen() {
++  try {
++    await AsyncStorage.setItem(SEEN_KEY, '1');
++  } catch (_e) { /* prefs are best-effort */ }
++}
+diff --git a/src/ai/welcome.js b/src/ai/welcome.js
+index 4347b5a..eb3172f 100644
+--- a/src/ai/welcome.js
++++ b/src/ai/welcome.js
+@@ -1,40 +1,17 @@
+ /**
+- * First-run voice welcome for the auth screens.
++ * Voice-help preference for the sign-in and registration screens.
+  *
+- * - The microphone is only pulsed; it is never started automatically.
+- * - First visit: one short spoken welcome, a mic pulse and a visual hint.
+- * - Later visits: the visual hint only.
+- * - When voice is muted: nothing.
+- *
+- * A ref in the component prevents repeat runs on re-render, and the stored
+- * `welcomeSeen` flag prevents the welcome from returning on later visits.
++ * The spoken first-run welcome now belongs to FirstRunWelcome (firstRun.js),
++ * so these screens only pulse the global mic button and offer the mute toggle.
++ * Keeping the spoken welcome out of this module means the onboarding can never
++ * be interrupted by a second welcome starting behind it.
+  */
+ 
+ import AsyncStorage from '@react-native-async-storage/async-storage';
+ import * as Speech from 'expo-speech';
+ 
+-const SEEN_KEY = 'salmart:ai:welcomeSeen';
+ const MUTED_KEY = 'salmart:ai:voiceMuted';
+ 
+-export const WELCOME_LINE =
+-  'Welcome to Salmart! You can buy things, sell your products, or create an account. ' +
+-  'If you need help, tap the green button and tell me what you want to do. ' +
+-  'You can also continue with the form yourself.';
+-
+-export async function hasSeenWelcome() {
+-  try {
+-    return (await AsyncStorage.getItem(SEEN_KEY)) === '1';
+-  } catch (_e) {
+-    return false;
+-  }
+-}
+-
+-export async function markWelcomeSeen() {
+-  try {
+-    await AsyncStorage.setItem(SEEN_KEY, '1');
+-  } catch (_e) { /* prefs are best-effort */ }
+-}
+-
+ export async function isVoiceMuted() {
+   try {
+     return (await AsyncStorage.getItem(MUTED_KEY)) === '1';
+@@ -52,29 +29,14 @@ export async function setVoiceMuted(muted) {
+   } catch (_e) { /* speech is optional */ }
+ }
+ 
+-export function stopWelcomeSpeech() {
+-  try {
+-    Speech.stop();
+-  } catch (_e) { /* speech is optional */ }
+-}
+-
+ /**
+- * Run the welcome once per screen visit. Returns 'spoken', 'visual' or
+- * 'silent'. It does not record audio or open the mic.
++ * Run the auth-screen voice hint once per visit. It never records audio and
++ * never speaks; the first-run welcome is handled by FirstRunWelcome.
+  */
+ export async function runAuthWelcome({ nudgeMic }) {
+   if (await isVoiceMuted()) return 'silent';
+-  const seen = await hasSeenWelcome();
+   try {
+     nudgeMic?.('Tap to talk');
+   } catch (_e) { /* pulse is best-effort */ }
+-  if (!seen) {
+-    try {
+-      Speech.stop();
+-      Speech.speak(WELCOME_LINE, { rate: 0.95 });
+-    } catch (_e) { /* speech is optional */ }
+-    await markWelcomeSeen();
+-    return 'spoken';
+-  }
+   return 'visual';
+ }

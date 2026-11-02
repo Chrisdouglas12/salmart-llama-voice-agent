@@ -1,9 +1,9 @@
 /**
  * Voice-help hint for the sign-in and registration screens.
  *
- * Shows a short line about the green mic button and a mute toggle. The spoken
- * welcome and mic pulse start once per mount through welcome.js; nothing here
- * records audio.
+ * Shows a short line about the green mic button and a mute toggle. The first
+ * spoken welcome belongs to FirstRunWelcome; these screens only pulse the mic
+ * once per mount through welcome.js, and nothing here records audio.
  */
 
 import React, { useEffect, useRef, useState } from 'react';

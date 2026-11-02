@@ -452,7 +452,7 @@ function classifyAuthIntent(text) {
     return 'ACCOUNT_ACCESS';
   }
 
-  if (/sign ?up|register|create.*account|new (here|account)|first time|never used|join salmart|want to join/.test(s)) {
+  if (/sign ?up|register|create.*account|new (here|account|user)|first time|never used|join salmart|want to join|i'?m new|\bam new\b|new to salmart/.test(s)) {
     return 'REGISTER';
   }
   if (/sign ?in|log ?in|already have an account|used (this|it) before|existing account/.test(s)) {

@@ -1,8 +1,8 @@
 diff --git a/src/ai/AIContext.js b/src/ai/AIContext.js
-index 9d88d62..de3f23d 100644
+index 9d88d62..29505f9 100644
 --- a/src/ai/AIContext.js
 +++ b/src/ai/AIContext.js
-@@ -36,20 +36,29 @@ import {
+@@ -36,20 +36,30 @@ import {
  import { apiUpload } from '../api/client';
  
  import { useAuth } from '../state/AuthContext';
@@ -17,6 +17,7 @@ index 9d88d62..de3f23d 100644
  } from './api';
  import { speakReply, queueSpeech, stopSpeaking } from './speak';
  import { takeAuthOutcome } from './authOutcome';
++import { takeListingOutcome } from './listingOutcome';
  import { peekFormSnapshot } from './formSnapshot';
  import { peekRegistrationSnapshot, takeRegistrationSnapshot } from './registrationSnapshot';
 +import { getLiveScreen, setLiveScreen } from './liveScreen';
@@ -33,7 +34,7 @@ index 9d88d62..de3f23d 100644
  // Mirrors the server allowlist in services/ai/tools/navigationTools.js. The
  // client checks again so a malformed response cannot open an unknown screen.
  const NAVIGABLE_SCREENS = new Set([
-@@ -76,6 +85,20 @@ function referralFromUrl(url) {
+@@ -76,6 +86,20 @@ function referralFromUrl(url) {
    }
  }
  
@@ -54,7 +55,7 @@ index 9d88d62..de3f23d 100644
  export function AIProvider({ children }) {
    const { ready: authReady, isAuthenticated, adoptWebSession } = useAuth();
    const nav = useNavActions();
-@@ -90,6 +113,10 @@ export function AIProvider({ children }) {
+@@ -90,6 +114,10 @@ export function AIProvider({ children }) {
    // Latest content for the global mic card. `confirmation` keeps the turn's
    // Confirm/Cancel actions available inline.
    const [lastVoice, setLastVoice] = useState(null);
@@ -65,7 +66,7 @@ index 9d88d62..de3f23d 100644
    const [authBusy, setAuthBusy] = useState(false);
    // Attention nudge for the mic button (welcome pulse, "Tap to talk"). It does
    // not record; it only animates the button. Cleared when recording starts.
-@@ -107,6 +134,9 @@ export function AIProvider({ children }) {
+@@ -107,6 +135,9 @@ export function AIProvider({ children }) {
  
    const anonRef = useRef(null);
    const convRef = useRef(null);
@@ -75,7 +76,7 @@ index 9d88d62..de3f23d 100644
    const authBusyRef = useRef(false);
    const messagesRef = useRef([]);
    messagesRef.current = messages;
-@@ -128,6 +158,13 @@ export function AIProvider({ children }) {
+@@ -128,6 +159,13 @@ export function AIProvider({ children }) {
    // Screen context from the last turn, used to avoid opening the chat when the
    // user is already in that thread.
    const lastContextRef = useRef(null);
@@ -89,7 +90,7 @@ index 9d88d62..de3f23d 100644
  
    const ensureConversation = useCallback(async () => {
      if (convRef.current) return convRef.current;
-@@ -181,6 +218,36 @@ export function AIProvider({ children }) {
+@@ -181,6 +219,36 @@ export function AIProvider({ children }) {
      if (isAuthenticated) {
        const anonymousId = anonRef.current;
        const cid = convRef.current;
@@ -126,7 +127,7 @@ index 9d88d62..de3f23d 100644
        if (!anonymousId || !cid) {
          // Nothing to rebind. A registration greeting still runs on the new
          // signed-in conversation.
-@@ -195,8 +262,7 @@ export function AIProvider({ children }) {
+@@ -195,8 +263,7 @@ export function AIProvider({ children }) {
            await rebindConversation({ conversationId: cid, anonymousId });
            anonRef.current = null;
            AsyncStorage.removeItem(ANON_KEY).catch(() => {});
@@ -136,7 +137,7 @@ index 9d88d62..de3f23d 100644
          } catch (_e) {
            // 404 means the anonymous id was lost or belongs to another
            // conversation. Start clean instead of leaving the session stuck.
-@@ -217,6 +283,9 @@ export function AIProvider({ children }) {
+@@ -217,6 +284,9 @@ export function AIProvider({ children }) {
        setError(null);
        setLastVoice(null);
        stopSpeaking();
@@ -146,7 +147,7 @@ index 9d88d62..de3f23d 100644
        AsyncStorage.removeItem(ANON_KEY).catch(() => {});
      }
    }, [authReady, isAuthenticated, ensureConversation]);
-@@ -247,6 +316,13 @@ export function AIProvider({ children }) {
+@@ -247,6 +317,13 @@ export function AIProvider({ children }) {
    // is in.
    const finishTurn = useCallback((res, context) => {
      const reply = res.reply || '';
@@ -160,7 +161,7 @@ index 9d88d62..de3f23d 100644
      setMessages(prev => [...prev, {
        key: newKey(),
        role: 'assistant',
-@@ -347,7 +423,26 @@ export function AIProvider({ children }) {
+@@ -347,29 +424,53 @@ export function AIProvider({ children }) {
      if (status === 'sending') {
        return { ok: false, code: 'busy', message: 'One moment — I am still working on the last request.' };
      }
@@ -188,7 +189,11 @@ index 9d88d62..de3f23d 100644
  
      // Carry a real auth outcome code from the screen (401/403/429/offline)
      // into this turn. Only the fixed code travels, never the server text.
-@@ -357,19 +452,21 @@ export function AIProvider({ children }) {
+     // The listing snapshot follows the same rule: flags only, never values.
+     const authOutcome = takeAuthOutcome();
++    // A failed ad post rides the same way: one fixed code, never server text.
++    const listingOutcome = takeListingOutcome();
+     const listing = peekFormSnapshot();
      // Registration flags belong to the register screen. Once the user moves
      // away, the old form state must not ride along with an unrelated turn.
      const registration = context?.screen === 'register' ? peekRegistrationSnapshot() : null;
@@ -200,13 +205,15 @@ index 9d88d62..de3f23d 100644
 -        ...(registration ? { registration } : {}),
 -      }
 -      : (context || undefined);
+-    if (authOutcome || listing || registration) lastContextRef.current = turnContext;
 +    const turnContext = {
 +      ...baseContext,
 +      ...(authOutcome ? { authOutcome } : {}),
++      ...(listingOutcome ? { listingOutcome } : {}),
 +      ...(listing ? { listing } : {}),
 +      ...(registration ? { registration } : {}),
 +    };
-     if (authOutcome || listing || registration) lastContextRef.current = turnContext;
++    if (authOutcome || listingOutcome || listing || registration) lastContextRef.current = turnContext;
  
      setStatus('sending');
      setError(null);
@@ -219,7 +226,7 @@ index 9d88d62..de3f23d 100644
  
      try {
        const cid = await ensureConversation();
-@@ -452,6 +549,79 @@ export function AIProvider({ children }) {
+@@ -452,6 +553,79 @@ export function AIProvider({ children }) {
      })();
    }, [welcomeTick, authReady, isAuthenticated, send]);
  
@@ -299,7 +306,7 @@ index 9d88d62..de3f23d 100644
    const confirm = useCallback(async (actionId) => {
      try {
        const res = await apiConfirm(actionId);
-@@ -573,6 +743,10 @@ export function AIProvider({ children }) {
+@@ -573,6 +747,10 @@ export function AIProvider({ children }) {
  
      authBusyRef.current = true;
      setAuthBusy(true);
@@ -310,7 +317,7 @@ index 9d88d62..de3f23d 100644
      try {
        const { status, params } = await runGoogleAuth({
          forceAccountPicker: true,
-@@ -676,12 +850,34 @@ export function AIProvider({ children }) {
+@@ -676,12 +854,34 @@ export function AIProvider({ children }) {
        form.append('audio', { uri, name: 'voice.m4a', type: 'audio/m4a' });
        const res = await apiUpload('/api/assistant/transcribe', form);
        const transcript = String(res?.text || '').trim();
@@ -346,7 +353,7 @@ index 9d88d62..de3f23d 100644
          setLastVoice({ text: line, kind: 'error', at: Date.now() });
          await speakReply(line, heardLang);
          return;
-@@ -706,6 +902,13 @@ export function AIProvider({ children }) {
+@@ -706,6 +906,13 @@ export function AIProvider({ children }) {
        const chatBlock = result.ok && Array.isArray(result.structured)
          ? result.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId)
          : null;
@@ -360,7 +367,7 @@ index 9d88d62..de3f23d 100644
  
        setLastVoice({
          text: line,
-@@ -713,6 +916,7 @@ export function AIProvider({ children }) {
+@@ -713,6 +920,7 @@ export function AIProvider({ children }) {
          confirmation: result.ok ? (result.confirmation || null) : null,
          authUrl: authBlock || null,
          chatHandoff: chatBlock || null,
@@ -368,7 +375,7 @@ index 9d88d62..de3f23d 100644
          at: Date.now(),
        });
        if (!result.spoken) await speakReply(line, heardLang);
-@@ -823,8 +1027,11 @@ export function AIProvider({ children }) {
+@@ -823,8 +1031,11 @@ export function AIProvider({ children }) {
  
    // Seller-chat handoff: open ChatScreen with the AI draft and product card
    // pre-filled. The user presses send in the chat; nothing is auto-sent.
@@ -380,7 +387,7 @@ index 9d88d62..de3f23d 100644
      nav.push('chat', {
        partnerId: String(handoff.sellerId),
        ...(handoff.sellerName ? { name: String(handoff.sellerName).slice(0, 80) } : {}),
-@@ -838,21 +1045,26 @@ export function AIProvider({ children }) {
+@@ -838,21 +1049,26 @@ export function AIProvider({ children }) {
          },
        } : {}),
      });
@@ -1239,6 +1246,87 @@ index c51cf62..82b9eb6 100644
 +  },
  });
 \ No newline at end of file
+diff --git a/src/ai/listingOutcome.js b/src/ai/listingOutcome.js
+new file mode 100644
+index 0000000..1a5e4da
+--- /dev/null
++++ b/src/ai/listingOutcome.js
+@@ -0,0 +1,43 @@
++/**
++ * Listing post outcome passed to the next AI turn.
++ *
++ * CreateAdScreen knows why a post failed (validation message, offline,
++ * server rejection). Only the fixed outcome code is passed on, never raw
++ * server text, so the assistant can explain the failure and name the fix
++ * using a real code.
++ *
++ * The value is kept in memory because it is only useful for the next sentence.
++ */
++
++// Must match LISTING_GUIDANCE in lib/assistant/sellingFlow.js on the backend.
++const VALID = new Set([
++  'photo_missing',
++  'price_invalid',
++  'quantity_invalid',
++  'field_missing',
++  'content_blocked',
++  'network_unavailable',
++  'publish_failed',
++]);
++
++let pending = null;
++
++/** Record the code for the next AI turn. Unknown codes are ignored. */
++export function reportListingOutcome(code) {
++  const key = String(code || '').trim().toLowerCase();
++  if (VALID.has(key)) pending = key;
++}
++
++/** Read and clear the pending code. */
++export function takeListingOutcome() {
++  const value = pending;
++  pending = null;
++  return value;
++}
++
++/** Inspect without clearing. Used by tests and debugging. */
++export function peekListingOutcome() {
++  return pending;
++}
++
++export const LISTING_OUTCOME_CODES = Array.from(VALID);
+diff --git a/src/ai/liveScreen.js b/src/ai/liveScreen.js
+new file mode 100644
+index 0000000..b03acf7
+--- /dev/null
++++ b/src/ai/liveScreen.js
+@@ -0,0 +1,26 @@
++/**
++ * The route the user is actually looking at.
++ *
++ * AIProvider sits above every screen, so it cannot read the top screen's route
++ * params from the screen itself. A tiny non-rendering mirror (NavMirror in
++ * AIContext) writes the live route here on every navigation, and every turn
++ * reads it at send time. Keeping this outside React state means navigation
++ * never re-renders the AI provider or its consumers.
++ *
++ * Only the route name and its params are kept; the params object is already the
++ * one the navigation stack owns, so nothing is copied or serialized per turn.
++ */
++
++let live = { name: null, params: {}, panel: null };
++
++export function setLiveScreen(name, params, panel) {
++  live = {
++    name: name ? String(name).slice(0, 120) : null,
++    params: params && typeof params === 'object' ? params : {},
++    panel: panel ? String(panel).slice(0, 120) : null,
++  };
++}
++
++export function getLiveScreen() {
++  return live;
++}
 diff --git a/src/ai/models.js b/src/ai/models.js
 new file mode 100644
 index 0000000..5b7a3c1

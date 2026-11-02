@@ -396,12 +396,25 @@ async function requestListingPhoto(_ctx, args) {
   };
 }
 
+/**
+ * Explain a listing post failure in one short spoken sentence.
+ *
+ * `code` is a fixed allowlist (photo_missing, price_invalid,
+ * quantity_invalid, field_missing, content_blocked, network_unavailable,
+ * publish_failed). Raw backend messages are never passed through. Unknown
+ * codes get the generic guidance, never an invented diagnosis.
+ */
+function explainListingError(ctx, { code } = {}) {
+  return selling.explainListingError(code);
+}
+
 module.exports = {
   prepareAdForm,
   fillRequestForm,
   fillProfileForm,
   prepareRegistration,
   requestListingPhoto,
+  explainListingError,
   // Exposed for tests
   _internal: {
     normalizeAdFields,

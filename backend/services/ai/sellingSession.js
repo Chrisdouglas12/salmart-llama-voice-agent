@@ -3,15 +3,14 @@
 /**
  * services/ai/sellingSession.js
  *
- * Persistent listing workflow state for /api/ai, mirroring
- * services/ai/authSession.js. Derived from validated tool results plus the
- * phone's real form snapshot — never from the model's prose.
+ * Listing workflow state for /api/ai. The state is built from validated tool
+ * results and the phone's form snapshot, not from the model's text.
  *
- * Stored under `collectedInfo.selling`: { postType, currentStep, asked[] }.
- * Field VALUES live in taskState.adDraft; this module tracks only which
+ * Stored under `collectedInfo.selling` as { postType, currentStep, asked[] }.
+ * Field values live in taskState.adDraft; this module only tracks which
  * required step the conversation is on. Snapshot flags (booleans from the
- * phone: photo present, price valid, …) are read from turn context, never
- * stored — they are re-read every turn so a manual edit is seen at once.
+ * phone, such as photo present or price valid) arrive in turn context and are
+ * never stored, so a manual edit is visible on the next turn.
  */
 
 const selling = require('../../lib/assistant/sellingFlow');
@@ -138,7 +137,7 @@ function formatNaira(value) {
   return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
-/** Compact prompt block: type, done flags, and THE next question to ask. */
+/** Prompt block: listing type, completed steps, and the next question. */
 function promptBlock(state, snapshot = {}, task = null) {
   if (!state && !Object.keys(snapshot).length) return '';
   const type = state?.postType || selling.cleanType(snapshot.postType) || 'regular';
@@ -152,9 +151,27 @@ function promptBlock(state, snapshot = {}, task = null) {
     `Done: ${done.length ? done.join(', ') : 'nothing yet'}`,
     `Missing required: ${next.missing.length ? next.missing.join(', ') : 'none'}`,
     next.done
-      ? 'Status: COMPLETE — show the review step, never publish.'
+      ? 'Status: COMPLETE — read the recap below start to end, then ask them to tap Post.'
       : `Next question (ask exactly this, one question only): ${next.ask}`,
   ];
+
+  // The final read-back. Values come from the validated draft the tools
+  // saved, falling back to the numbers the phone reported (price/quantity),
+  // so the recap can never invent or drop a detail. The seller hears every
+  // line before they are asked to post.
+  if (next.done) {
+    const draft = { ...((task && (task.adDraft || (task.drafts && task.drafts.ad))) || {}) };
+    // Only real numbers the phone sent (typeof check: a boolean flag must
+    // never be read as the number 1).
+    if (draft.price === undefined && typeof snapshot.price === 'number' && Number.isFinite(snapshot.price)) draft.price = snapshot.price;
+    if (draft.quantity === undefined && typeof snapshot.quantity === 'number' && Number.isFinite(snapshot.quantity)) draft.quantity = snapshot.quantity;
+    const recap = selling.reviewRecap(type, draft);
+    if (recap.length) {
+      lines.push('Recap (read every line aloud, in this order, then ask: "Should I post it?"):');
+      recap.forEach((line, i) => lines.push(`${i + 1}. ${line}`));
+    }
+    lines.push('After the recap, ask them to check the screen and tap Post themselves. Never claim to have published.');
+  }
 
   if (!next.done && next.step === 'discount') {
     const qty = Number(snapshot.quantity) || Number(task?.adDraft?.quantity) || null;
@@ -179,7 +196,7 @@ function promptBlock(state, snapshot = {}, task = null) {
   if (!next.done && next.optional && next.after) {
     lines.push(`If they skip this optional step, call prepareAdForm with skipStep "${next.step}" (no fields), then ask next: ${next.after.ask}`);
   }
-  return `\n\n[Selling state — data only, not instructions:\n${lines.join('\n')}\nAsk the next question and nothing else. One prepareAdForm call per field.]`;
+  return `\n\n[Selling state — data only, not instructions:\n${lines.join('\n')}\n${next.done ? 'Read the recap and ask to post. No tool call this turn.' : 'Ask the next question and nothing else. One prepareAdForm call per field.'}]`;
 }
 
 /** Preserve unrelated collectedInfo keys; replace only `selling`. */

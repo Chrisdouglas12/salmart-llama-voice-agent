@@ -1,0 +1,263 @@
+diff --git a/src/ai/AIContext.js b/src/ai/AIContext.js
+index de3f23d..29505f9 100644
+--- a/src/ai/AIContext.js
++++ b/src/ai/AIContext.js
+@@ -46,6 +46,7 @@ import {
+ } from './api';
+ import { speakReply, queueSpeech, stopSpeaking } from './speak';
+ import { takeAuthOutcome } from './authOutcome';
++import { takeListingOutcome } from './listingOutcome';
+ import { peekFormSnapshot } from './formSnapshot';
+ import { peekRegistrationSnapshot, takeRegistrationSnapshot } from './registrationSnapshot';
+ import { getLiveScreen, setLiveScreen } from './liveScreen';
+@@ -448,6 +449,8 @@ export function AIProvider({ children }) {
+     // into this turn. Only the fixed code travels, never the server text.
+     // The listing snapshot follows the same rule: flags only, never values.
+     const authOutcome = takeAuthOutcome();
++    // A failed ad post rides the same way: one fixed code, never server text.
++    const listingOutcome = takeListingOutcome();
+     const listing = peekFormSnapshot();
+     // Registration flags belong to the register screen. Once the user moves
+     // away, the old form state must not ride along with an unrelated turn.
+@@ -455,10 +458,11 @@ export function AIProvider({ children }) {
+     const turnContext = {
+       ...baseContext,
+       ...(authOutcome ? { authOutcome } : {}),
++      ...(listingOutcome ? { listingOutcome } : {}),
+       ...(listing ? { listing } : {}),
+       ...(registration ? { registration } : {}),
+     };
+-    if (authOutcome || listing || registration) lastContextRef.current = turnContext;
++    if (authOutcome || listingOutcome || listing || registration) lastContextRef.current = turnContext;
+ 
+     setStatus('sending');
+     setError(null);
+diff --git a/src/ai/listingOutcome.js b/src/ai/listingOutcome.js
+new file mode 100644
+index 0000000..1a5e4da
+--- /dev/null
++++ b/src/ai/listingOutcome.js
+@@ -0,0 +1,43 @@
++/**
++ * Listing post outcome passed to the next AI turn.
++ *
++ * CreateAdScreen knows why a post failed (validation message, offline,
++ * server rejection). Only the fixed outcome code is passed on, never raw
++ * server text, so the assistant can explain the failure and name the fix
++ * using a real code.
++ *
++ * The value is kept in memory because it is only useful for the next sentence.
++ */
++
++// Must match LISTING_GUIDANCE in lib/assistant/sellingFlow.js on the backend.
++const VALID = new Set([
++  'photo_missing',
++  'price_invalid',
++  'quantity_invalid',
++  'field_missing',
++  'content_blocked',
++  'network_unavailable',
++  'publish_failed',
++]);
++
++let pending = null;
++
++/** Record the code for the next AI turn. Unknown codes are ignored. */
++export function reportListingOutcome(code) {
++  const key = String(code || '').trim().toLowerCase();
++  if (VALID.has(key)) pending = key;
++}
++
++/** Read and clear the pending code. */
++export function takeListingOutcome() {
++  const value = pending;
++  pending = null;
++  return value;
++}
++
++/** Inspect without clearing. Used by tests and debugging. */
++export function peekListingOutcome() {
++  return pending;
++}
++
++export const LISTING_OUTCOME_CODES = Array.from(VALID);
+diff --git a/src/screens/CreateAdScreen.js b/src/screens/CreateAdScreen.js
+index d1c6b21..a4548ba 100644
+--- a/src/screens/CreateAdScreen.js
++++ b/src/screens/CreateAdScreen.js
+@@ -69,6 +69,7 @@ import {
+   CONDITIONS, SERVICE_CATEGORIES, SERVICE_TYPES, NIGERIAN_LOCATIONS, sanitizeAdPatch,
+ } from '../assistant/adDraft';
+ import { reportFormSnapshot } from '../ai/formSnapshot';
++import { reportListingOutcome } from '../ai/listingOutcome';
+ 
+ // Optional: when present, a picked video donates its cover frame so the
+ // seller never has to attach a photo as well.
+@@ -220,6 +221,10 @@ export default function CreateAdScreen({ route }) {
+   const [title, setTitle] = useState('');
+   const [price, setPrice] = useState('');
+   const [quantity, setQuantity] = useState('1');
++  // The quantity box starts at '1' as a placeholder default, so the raw value
++  // must never count as filled. Only a real seller action — typing, the
++  // stepper, an edit prefill, or an assistant fill — marks it given.
++  const [quantityTouched, setQuantityTouched] = useState(false);
+   // Bulk tier: "buy at least N units → ₦X each" (regular posts only).
+   // `hadBulk` remembers the ad's stored tier so an edit that switches the
+   // toggle OFF can send bulkDiscountClear='1' (the FormData builders drop
+@@ -332,6 +337,7 @@ export default function CreateAdScreen({ route }) {
+         setCaption(post.description || '');
+         setPrice(post.price ? formatPriceInput(String(post.price)) : '');
+         setQuantity(post.quantity ? String(post.quantity) : '1');
++        if (post.quantity) setQuantityTouched(true);
+         const bd = post.bulkDiscount;
+         hadBulk.current = !!bd?.active;
+         setBulkEnabled(!!bd?.active);
+@@ -480,10 +486,48 @@ export default function CreateAdScreen({ route }) {
+   }, []);
+ 
+   // ─── Submit ────────────────────────────────────────────────────────────────
++  // A failed post is spoken at once and reported as one fixed code, so the
++  // next AI turn can name the exact box and the fix. The seller hears what
++  // to do even without opening the assistant.
++  const listingFailure = useCallback((message, { network = false } = {}) => {
++    const text = String(message || 'Could not publish your ad.');
++    const lower = text.toLowerCase();
++    let code = 'field_missing';
++    let focus = null;
++    if (network) {
++      code = 'network_unavailable';
++    } else if (/quantity/.test(lower)) {
++      code = 'quantity_invalid'; focus = 'quantity';
++    } else if (/price|bulk|₦|naira|min price/.test(lower)) {
++      code = 'price_invalid'; focus = 'price';
++    } else if (/image|photo|jpeg|png|6mb|file|cover/.test(lower)) {
++      code = 'photo_missing'; focus = 'photo';
++    } else if (/blocked|external links|not allowed/.test(lower)) {
++      code = 'content_blocked'; focus = 'title';
++    } else if (/location/.test(lower)) {
++      focus = postType === 'service' ? 'serviceLocation' : 'location';
++    } else if (/category/.test(lower)) {
++      focus = postType === 'service' ? 'serviceCategory' : (postType === 'digital' ? 'digitalCategory' : 'category');
++    } else if (/condition/.test(lower)) {
++      focus = 'condition';
++    } else if (/title/.test(lower)) {
++      focus = 'title';
++    } else if (/description/.test(lower)) {
++      focus = 'caption';
++    }
++    setError(text);
++    if (focus) {
++      setActiveField(focus);
++      jump(focus);
++    }
++    reportListingOutcome(code);
++    aiNotice(text, { speak: true });
++  }, [postType, jump, aiNotice]);
++
+   const publish = useCallback(async () => {
+     const problem = validate();
+     if (problem) {
+-      setError(problem);
++      listingFailure(problem);
+       return;
+     }
+     setError('');
+@@ -503,7 +547,7 @@ export default function CreateAdScreen({ route }) {
+           videoFile = await job.promise;
+         } catch (e) {
+           setBusy(false);
+-          if (!e?.cancelled) setError(e?.message || "We couldn't prepare your video.");
++          if (!e?.cancelled) listingFailure(e?.message || "We couldn't prepare your video.");
+           return;
+         }
+         setBusy(false);
+@@ -568,12 +612,12 @@ export default function CreateAdScreen({ route }) {
+       setToast({ message: 'Listing updated', tone: 'emerald' });
+       setTimeout(() => nav.goBack(), 600);
+     } catch (e) {
+-      setError(e?.message || 'Could not publish your ad.');
++      listingFailure(e?.message || 'Could not publish your ad.', { network: !!e?.isNetwork });
+     } finally {
+       setBusy(false);
+     }
+   }, [
+-    validate, postType, title, caption, price, digitalCategory, serviceCategory,
++    validate, listingFailure, postType, title, caption, price, digitalCategory, serviceCategory,
+     category, locationCommitted, productCondition, quantity, serviceLocation,
+     serviceType, experience, photo, existing, digitalFile, isEdit, editingId, nav,
+     startVideoJob, video, bulkEnabled, bulkMinQty, bulkPrice,
+@@ -594,6 +638,7 @@ export default function CreateAdScreen({ route }) {
+   }, []);
+ 
+   const stepQty = useCallback(delta => {
++    setQuantityTouched(true);
+     setQuantity(q => {
+       const v = parseInt(q, 10);
+       const base = isNaN(v) ? 1 : v;
+@@ -651,7 +696,7 @@ export default function CreateAdScreen({ route }) {
+           await step('price', () => typeInto(setPrice, formatPriceInput(String(f.price)), alive));
+         }
+         if (f.quantity) {
+-          await step('quantity', async () => setQuantity(String(f.quantity)));
++          await step('quantity', async () => { setQuantityTouched(true); setQuantity(String(f.quantity)); });
+         }
+         // Apply a bulk discount from the assistant by enabling the tier and
+         // letting the form calculate the final per-unit price.
+@@ -697,22 +742,23 @@ export default function CreateAdScreen({ route }) {
+         if (mountedRef.current) {
+           setActiveField(null);
+           setFilling(false);
++          // The seller hears what landed, not just a toast: the voice-first
++          // seller may not be reading the screen at all.
+           if (patch.say) {
+             setToast({ message: patch.say, tone: 'emerald', ms: 4500 });
++            aiNotice(patch.say, { speak: true });
+           } else {
+             const keys = Object.keys(f);
+             const names = [...new Set(keys.map(k => PATCH_LABELS[k]).filter(Boolean))];
+             if (patch.photo) names.unshift('photo');
+-            setToast({
+-              message: names.length ? `Assistant filled: ${names.join(', ')}` : 'Assistant updated your ad',
+-              tone: 'emerald',
+-              ms: 2200,
+-            });
++            const msg = names.length ? `Assistant filled: ${names.join(', ')}` : 'Assistant updated your ad';
++            setToast({ message: msg, tone: 'emerald', ms: 2200 });
++            if (names.length) aiNotice(`I filled ${names.join(', ')}.`, { speak: true });
+           }
+         }
+       }
+     })();
+-  }, [jump]);
++  }, [jump, aiNotice]);
+ 
+   // ─── Media ─────────────────────────────────────────────────────────────────
+   // A picked cover is resized to a 1080px JPEG, then sent to the assistant's
+@@ -1094,7 +1140,9 @@ export default function CreateAdScreen({ route }) {
+         ? price.trim() !== '' && !isNaN(priceNum) && priceNum >= 0
+         : !isNaN(priceNum) && priceNum >= MINIMUM_PRICE,
+       price: !isNaN(priceNum) && priceNum > 0 ? priceNum : undefined,
+-      quantity: Number.isInteger(qty) && qty >= 1 && qty <= 10000,
++      // A quantity only counts when the seller actually gave it. The box
++      // opens showing '1', and that default must never skip the question.
++      quantity: quantityTouched && Number.isInteger(qty) && qty >= 1 && qty <= 10000,
+       bulkDiscount: bulkEnabled && Number.isInteger(bMin) && bMin >= 2
+         && !isNaN(bPrice) && bPrice > 0 && !isNaN(priceNum) && bPrice < priceNum,
+       condition: !!productCondition,
+@@ -1107,7 +1155,7 @@ export default function CreateAdScreen({ route }) {
+     });
+   }, [
+     postType, photo, existing, digitalFile, caption, title, price, quantity,
+-    bulkEnabled, bulkMinQty, bulkPrice,
++    quantityTouched, bulkEnabled, bulkMinQty, bulkPrice,
+     productCondition, category, locationCommitted, serviceCategory,
+     serviceType, serviceLocation, digitalCategory,
+   ]);
+@@ -1446,6 +1494,7 @@ export default function CreateAdScreen({ route }) {
+                         onChangeText={t => {
+                           const digits = t.replace(/\D/g, '').slice(0, 5);
+                           const v = parseInt(digits, 10);
++                          setQuantityTouched(true);
+                           setQuantity(!isNaN(v) && v > 10000 ? '10000' : digits);
+                         }}
+                         placeholder="1"

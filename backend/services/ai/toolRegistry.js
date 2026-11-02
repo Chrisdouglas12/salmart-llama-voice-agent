@@ -149,6 +149,31 @@ define({
   handler: (ctx, args) => authTools.explainAuthenticationError(ctx, args),
 });
 
+define({
+  name: 'explainListingError',
+  category: 'form',
+  description:
+    'Explain a failed ad post in one short spoken sentence. ' +
+    'Call with the outcome code only (photo_missing, price_invalid, ' +
+    'quantity_invalid, field_missing, content_blocked, network_unavailable, ' +
+    'publish_failed). NEVER pass raw backend messages — they are rejected. ' +
+    'Then name the exact fix from the returned sentence.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      code: { type: 'string', maxLength: 32 },
+    },
+    additionalProperties: false,
+  },
+  requiresAuth: false,
+  permissions: [],
+  requiresConfirmation: false,
+  mutates: false,
+  idempotent: true,
+  wired: true,
+  handler: (ctx, args) => formTools.explainListingError(ctx, args),
+});
+
 // ─── PRODUCTS ────────────────────────────────────────────────────────────────
 
 define({

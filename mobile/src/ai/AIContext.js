@@ -46,6 +46,7 @@ import {
 } from './api';
 import { speakReply, queueSpeech, stopSpeaking } from './speak';
 import { takeAuthOutcome } from './authOutcome';
+import { takeListingOutcome } from './listingOutcome';
 import { peekFormSnapshot } from './formSnapshot';
 import { peekRegistrationSnapshot, takeRegistrationSnapshot } from './registrationSnapshot';
 import { getLiveScreen, setLiveScreen } from './liveScreen';
@@ -448,6 +449,8 @@ export function AIProvider({ children }) {
     // into this turn. Only the fixed code travels, never the server text.
     // The listing snapshot follows the same rule: flags only, never values.
     const authOutcome = takeAuthOutcome();
+    // A failed ad post rides the same way: one fixed code, never server text.
+    const listingOutcome = takeListingOutcome();
     const listing = peekFormSnapshot();
     // Registration flags belong to the register screen. Once the user moves
     // away, the old form state must not ride along with an unrelated turn.
@@ -455,10 +458,11 @@ export function AIProvider({ children }) {
     const turnContext = {
       ...baseContext,
       ...(authOutcome ? { authOutcome } : {}),
+      ...(listingOutcome ? { listingOutcome } : {}),
       ...(listing ? { listing } : {}),
       ...(registration ? { registration } : {}),
     };
-    if (authOutcome || listing || registration) lastContextRef.current = turnContext;
+    if (authOutcome || listingOutcome || listing || registration) lastContextRef.current = turnContext;
 
     setStatus('sending');
     setError(null);

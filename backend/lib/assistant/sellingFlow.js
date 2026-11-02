@@ -289,6 +289,64 @@ function validateQuantity(n) {
   return null;
 }
 
+// ─── Listing post-error guidance ─────────────────────────────────────────────
+// Fixed codes the phone reports when posting fails (validation or server).
+// Each maps to one short spoken sentence that names the fix. Unknown codes
+// get a gentle generic line, never an invented diagnosis.
+const LISTING_GUIDANCE = {
+  photo_missing: 'Your ad needs a photo. Choose one from your gallery or take a new one with the camera, then tap Post again.',
+  price_invalid: 'The price is not right. Type the price in naira, numbers only, at least 100, then tap Post again.',
+  quantity_invalid: 'Tell me how many you have. Type a number from 1 to 10,000, then tap Post again.',
+  field_missing: 'One box on the form is still empty. I have moved you to it. Fill it and tap Post again.',
+  content_blocked: 'Some words in the ad are not allowed. Remove phone numbers, account numbers and web links, then tap Post again.',
+  network_unavailable: 'No internet connection. Your ad is saved here. Check the network and tap Post again.',
+  publish_failed: 'Posting did not work just now. Nothing was lost. Check the connection and tap Post again.',
+};
+
+function explainListingError(code) {
+  const key = String(code || '').trim().toLowerCase().slice(0, 32);
+  const say = LISTING_GUIDANCE[key] || LISTING_GUIDANCE.publish_failed;
+  return { code: LISTING_GUIDANCE[key] ? key : 'publish_failed', say };
+}
+
+// ─── Review readout ──────────────────────────────────────────────────────────
+// Ordered recap of the validated draft for the final read-back. The model
+// reads these lines start to end before asking the seller to post. Values
+// come from tool-validated drafts only, never from model text.
+function reviewRecap(type, draft = {}) {
+  const d = draft && typeof draft === 'object' ? draft : {};
+  const naira = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0
+      ? `₦${String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`
+      : '';
+  };
+  const lines = [];
+  const title = String(d.title || '').trim();
+  if (title) lines.push(`Item: ${title}`);
+  const desc = String(d.description || '').trim();
+  if (desc) lines.push(`Description: ${desc.slice(0, 200)}`);
+  if (d.price !== undefined && d.price !== '') {
+    const p = naira(d.price);
+    if (p) lines.push(`Price: ${p}`);
+  }
+  if (type === 'regular') {
+    if (d.quantity !== undefined) lines.push(`Quantity: ${d.quantity}`);
+    if (d.bulkDiscountMinQty || d.bulkDiscountOff || d.bulkDiscountPrice) {
+      const bits = [];
+      if (d.bulkDiscountMinQty) bits.push(`from ${d.bulkDiscountMinQty} units`);
+      if (d.bulkDiscountOff) bits.push(`${naira(d.bulkDiscountOff)} off each`);
+      if (d.bulkDiscountPrice && !d.bulkDiscountOff) bits.push(`at ${naira(d.bulkDiscountPrice)} each`);
+      if (bits.length) lines.push(`Discount: ${bits.join(', ')}`);
+    }
+    if (d.condition) lines.push(`Condition: ${d.condition}`);
+  }
+  if (d.category) lines.push(`Category: ${readableCategory(d.category)}`);
+  if (d.location) lines.push(`Location: ${d.location}`);
+  if (d.serviceType) lines.push(`Service type: ${d.serviceType}`);
+  return lines;
+}
+
 /**
  * Snapshot flags for fields a patch just wrote, so the same turn can tell the
  * model what is now done. Mirrors the flag names CreateAdScreen reports in
@@ -336,4 +394,7 @@ module.exports = {
   parsePriceWords,
   validatePrice,
   validateQuantity,
+  LISTING_GUIDANCE,
+  explainListingError,
+  reviewRecap,
 };

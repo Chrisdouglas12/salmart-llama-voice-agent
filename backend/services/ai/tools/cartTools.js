@@ -29,23 +29,20 @@ function sellerIdOf(product, itemType) {
 }
 
 /**
- * addToCart({ productId, quantity?, itemType? })
- * Returns { added, title, quantity, cartCount }. Throws AUTH_REQUIRED,
- * TOOL_BAD_ARGS, or TOOL_FAILED with plain user-safe messages.
+ * Load and validate one buyable listing without writing anything.
+ *
+ * Shared by `previewProduct` (the touch picker) and `addToCart` (the save
+ * step), so the buyer can only preview and save an item the cart screen itself
+ * would accept. Throws AUTH_REQUIRED, TOOL_BAD_ARGS, or TOOL_FAILED with plain
+ * user-safe messages.
  */
-async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {}) {
-  if (!ctx.userId) {
-    const e = new Error('Sign in to add items to your cart.');
-    e.code = 'AUTH_REQUIRED';
-    throw e;
-  }
+async function loadProduct(ctx, { productId, itemType = 'post' } = {}) {
   if (!mongoose.Types.ObjectId.isValid(productId)) {
     const e = new Error('Invalid productId.');
     e.code = 'TOOL_BAD_ARGS';
     throw e;
   }
   const type = itemType === 'showroom' ? 'showroom' : 'post';
-  const qty = Math.min(Math.max(parseInt(quantity, 10) || 1, 1), MAX_QUANTITY);
 
   const product = type === 'showroom'
     ? await Showroom.findById(productId).lean()
@@ -67,11 +64,64 @@ async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {
     e.code = 'TOOL_FAILED';
     throw e;
   }
-  if (sellerId === String(ctx.userId)) {
+  if (ctx.userId && sellerId === String(ctx.userId)) {
     const e = new Error('You cannot add your own listing to the cart.');
     e.code = 'TOOL_BAD_ARGS';
     throw e;
   }
+
+  const photo = product.photo
+    || (Array.isArray(product.photos) && product.photos[0])
+    || null;
+  const sellerName = type === 'showroom'
+    ? (product.sellerName || product.businessName || null)
+    : (product.createdBy?.name || null);
+
+  return {
+    product,
+    type,
+    sellerId,
+    sellerName,
+    photo,
+    title: product.title || product.description || 'Item',
+    price: typeof product.price === 'number' ? product.price : null,
+    description: product.description ? String(product.description).slice(0, 600) : null,
+  };
+}
+
+/**
+ * Read-only preview for the touch picker. The buyer hears the title and
+ * description and decides whether to save it. Nothing is written here, so a
+ * tap alone never changes the cart.
+ */
+async function previewProduct(ctx, { productId, itemType = 'post' } = {}) {
+  const loaded = await loadProduct(ctx, { productId, itemType });
+  return {
+    productId: String(loaded.product._id),
+    itemType: loaded.type,
+    title: loaded.title,
+    price: loaded.price,
+    description: loaded.description,
+    photo: loaded.photo,
+    sellerId: loaded.sellerId,
+    sellerName: loaded.sellerName,
+  };
+}
+
+/**
+ * addToCart({ productId, quantity?, itemType? })
+ * Returns { added, title, quantity, cartCount }. Throws AUTH_REQUIRED,
+ * TOOL_BAD_ARGS, or TOOL_FAILED with plain user-safe messages.
+ */
+async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {}) {
+  if (!ctx.userId) {
+    const e = new Error('Sign in to add items to your cart.');
+    e.code = 'AUTH_REQUIRED';
+    throw e;
+  }
+  const loaded = await loadProduct(ctx, { productId, itemType });
+  const { product, type, sellerId, photo, sellerName } = loaded;
+  const qty = Math.min(Math.max(parseInt(quantity, 10) || 1, 1), MAX_QUANTITY);
 
   const isService = type === 'post' && product.postType === 'service';
   const isDigital = type === 'post' && product.postType === 'digital';
@@ -98,20 +148,13 @@ async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {
   }
   await cart.save();
 
-  const photo = product.photo
-    || (Array.isArray(product.photos) && product.photos[0])
-    || null;
-  const sellerName = type === 'showroom'
-    ? (product.sellerName || product.businessName || null)
-    : (product.createdBy?.name || null);
-
   return {
     added: true,
     productId: String(product._id),
     itemType: type,
-    title: product.title || product.description || 'Item',
-    price: typeof product.price === 'number' ? product.price : null,
-    description: product.description ? String(product.description).slice(0, 600) : null,
+    title: loaded.title,
+    price: loaded.price,
+    description: loaded.description,
     photo,
     sellerId,
     sellerName,
@@ -121,4 +164,4 @@ async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {
   };
 }
 
-module.exports = { addToCart };
+module.exports = { addToCart, previewProduct };

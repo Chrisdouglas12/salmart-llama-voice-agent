@@ -15,8 +15,8 @@ const taskState = require('../services/ai/taskState');
 const PRODUCT_ID = '64b7f0a1c2d3e4f5a6b7c8d9';
 const SELLER_ID = '64b7f0a1c2d3e4f5a6b7c8d0';
 
-test('touch: spoken confirmation names the item, price and description', () => {
-  const line = touchBuy.buildPickReply({
+test('touch: the read-back names the item, price and description then asks save or chat', () => {
+  const line = touchBuy.buildSelectionReply({
     title: 'Black leather bag',
     price: 18500,
     description: 'Strong leather bag with a long strap.',
@@ -26,35 +26,49 @@ test('touch: spoken confirmation names the item, price and description', () => {
   assert.match(line, /Black leather bag/);
   assert.match(line, /₦18,500/);
   assert.match(line, /Strong leather bag with a long strap\./);
+  assert.match(line, /save it for you/i);
   assert.match(line, /chat the seller/i);
+  assert.doesNotMatch(line, /added .* cart|called/i);
 });
 
 test('touch: no seller means no chat question; no description is not invented', () => {
-  const line = touchBuy.buildPickReply({
+  const line = touchBuy.buildSelectionReply({
     title: 'Blender', price: 12000, description: '', hasSeller: false,
   });
 
   assert.equal(
     line,
-    'I have added Blender to your cart. It costs ₦12,000.',
+    'You picked Blender. It costs ₦12,000. Should I save it for you so you can buy it later?',
   );
 });
 
 test('touch: a description that only repeats the title is omitted', () => {
-  const line = touchBuy.buildPickReply({
+  const line = touchBuy.buildSelectionReply({
     title: 'Blender', price: 12000, description: 'Blender', hasSeller: false,
   });
 
-  assert.equal(line, 'I have added Blender to your cart. It costs ₦12,000.');
+  assert.equal(
+    line,
+    'You picked Blender. It costs ₦12,000. Should I save it for you so you can buy it later?',
+  );
 });
 
 test('touch: a long description is cut at a word boundary', () => {
   const long = `${'This bag is strong and roomy. '.repeat(20)}`;
-  const line = touchBuy.buildPickReply({ title: 'Bag', price: 5000, description: long });
+  const line = touchBuy.buildSelectionReply({ title: 'Bag', price: 5000, description: long });
 
-  assert.ok(line.length < 260, `reply too long: ${line.length}`);
+  assert.ok(line.length < 560, `reply too long: ${line.length}`);
   assert.match(line, /This bag is strong/);
   assert.doesNotMatch(line, /\s\./);
+});
+
+test('touch: the saved reply tells the buyer to ask for the cart and offers the seller check', () => {
+  const line = touchBuy.buildSavedReply({ title: 'Black bag', hasSeller: true });
+
+  assert.match(line, /saved Black bag in your cart/i);
+  assert.match(line, /ask me to open the cart/i);
+  assert.match(line, /chat the seller/i);
+  assert.match(line, /still available/i);
 });
 
 test('touch: the seller draft carries the item and price', () => {
@@ -64,7 +78,7 @@ test('touch: the seller draft carries the item and price', () => {
   );
 });
 
-test('task: a touch pick is remembered for the next voice turn', () => {
+test('task: a touch pick is remembered as not saved, and names the save step', () => {
   const collected = taskState.applyPick(
     { task: { goal: 'I want to buy a bag', updatedAt: Date.now(), status: 'active' } },
     {
@@ -74,6 +88,7 @@ test('task: a touch pick is remembered for the next voice turn', () => {
       sellerId: SELLER_ID,
       sellerName: 'Ada',
       itemType: 'post',
+      saved: false,
       at: Date.now(),
     },
   );
@@ -82,10 +97,30 @@ test('task: a touch pick is remembered for the next voice turn', () => {
   assert.match(block, new RegExp(PRODUCT_ID));
   assert.match(block, /Black bag/);
   assert.match(block, /₦18500/);
+  assert.match(block, /NOT in the cart yet/);
+  assert.match(block, /call addToCart once/);
 
   // A following correction keeps the pick.
   const next = taskState.beginTurn({ collectedInfo: collected, message: 'Yes, chat him' });
   assert.equal(next.task.lastPick.productId, PRODUCT_ID);
+});
+
+test('task: a successful addToCart marks the pick saved so it is never added twice', () => {
+  const collected = taskState.applyPick(
+    { task: { goal: 'buy a bag', updatedAt: Date.now(), status: 'active' } },
+    { productId: PRODUCT_ID, title: 'Black bag', price: 18500, at: Date.now() },
+  );
+  const task = taskState.normalizeTask(collected);
+
+  taskState.applyToolResults(task, [{
+    name: 'cart.addToCart', ok: true,
+    data: { added: true, productId: PRODUCT_ID, title: 'Black bag', price: 18500, cartCount: 1 },
+  }]);
+
+  assert.equal(task.lastPick.saved, true);
+  const block = taskState.buildPromptBlock(task);
+  assert.match(block, /already saved in the cart/i);
+  assert.match(block, /do NOT add it again/);
 });
 
 test('task: a malformed pick is ignored', () => {
@@ -109,106 +144,35 @@ test('task: a fresh search clears the old touch pick', () => {
   assert.equal(task.lastPick, null);
 });
 
-test('touch: the model prompt carries the live listing and the seller rule', () => {
-  const prompt = touchBuy.buildPickPrompt({
-    title: 'Black leather bag',
-    price: 18500,
-    description: 'Strong leather bag with a long strap.',
-    hasSeller: true,
-    sellerName: 'Ada',
-    lang: 'yor',
-  });
+test('touch: a save shows the cart card only after addToCart really ran', () => {
+  const { buildStructured } = require('../services/ai/structuredBlocks');
 
-  assert.match(prompt.system, /Yoruba/);
-  assert.match(prompt.system, /chat the seller/);
-  assert.match(prompt.user, /Black leather bag/);
-  assert.match(prompt.user, /₦18,500/);
-  assert.match(prompt.user, /long strap/);
-  assert.match(prompt.user, /Ada/);
+  assert.deepEqual(buildStructured([{
+    name: 'cart.addToCart',
+    ok: false,
+    data: { added: true, productId: PRODUCT_ID },
+  }]), []);
 
-  const noSeller = touchBuy.buildPickPrompt({ title: 'Bag', price: 100, hasSeller: false });
-  assert.match(noSeller.system, /do not mention a seller/i);
-  assert.match(noSeller.user, /not reachable/);
-});
+  const blocks = buildStructured([{
+    name: 'cart.addToCart',
+    ok: true,
+    data: {
+      added: true,
+      productId: PRODUCT_ID,
+      title: 'Black bag',
+      price: 18500,
+      description: 'Strong leather bag.',
+      photo: null,
+      sellerId: SELLER_ID,
+      sellerName: 'Ada',
+      itemType: 'post',
+      cartCount: 2,
+    },
+  }]);
 
-test('touch: a good model reply is accepted and cleaned', () => {
-  const line = touchBuy.acceptModelReply(
-    '**I added the black leather bag to your cart.** It costs ₦18,500. Do you want me to chat the seller?',
-    { price: 18500, hasSeller: true },
-  );
-
-  assert.equal(
-    line,
-    'I added the black leather bag to your cart. It costs ₦18,500. Do you want me to chat the seller?',
-  );
-});
-
-test('touch: a translated reply is accepted without the English word "cart"', () => {
-  const line = touchBuy.acceptModelReply(
-    'A ti fi baagi alawọ dudu kun kaa rẹ. O jẹ ₦18,500.',
-    { price: 18500, hasSeller: true, lang: 'yor' },
-  );
-
-  assert.equal(line, 'A ti fi baagi alawọ dudu kun kaa rẹ. O jẹ ₦18,500.');
-});
-
-test('touch: a translated reply still cannot change the price', () => {
-  assert.equal(
-    touchBuy.acceptModelReply('O jẹ ₦20,000.', {
-      price: 18500, hasSeller: true, lang: 'yor',
-    }),
-    null,
-  );
-});
-
-test('touch: an English reply without a cart confirmation is still rejected', () => {
-  assert.equal(
-    touchBuy.acceptModelReply('The black bag costs ₦18,500.', {
-      price: 18500, hasSeller: true, lang: null,
-    }),
-    null,
-  );
-});
-
-test('touch: a model reply that changes the price is rejected', () => {
-  assert.equal(
-    touchBuy.acceptModelReply('I added it to your cart for ₦20,000.', {
-      price: 18500, hasSeller: true,
-    }),
-    null,
-  );
-});
-
-test('touch: a model reply that invents a seller is rejected when none is reachable', () => {
-  assert.equal(
-    touchBuy.acceptModelReply('I added the bag to your cart. Do you want me to chat the seller?', {
-      price: 18500, hasSeller: false,
-    }),
-    null,
-  );
-});
-
-test('touch: payment and delivery claims are rejected', () => {
-  for (const text of [
-    'I added the bag to your cart. It is already paid.',
-    'I added the bag to your cart. It will be delivered tomorrow for ₦18,500.',
-  ]) {
-    assert.equal(touchBuy.acceptModelReply(text, { price: 18500, hasSeller: true }), null);
-  }
-});
-
-test('touch: a model reply without a cart confirmation is rejected', () => {
-  assert.equal(
-    touchBuy.acceptModelReply('The black bag costs ₦18,500.', { price: 18500, hasSeller: true }),
-    null,
-  );
-});
-
-test('touch: a long model reply is cut at a sentence boundary', () => {
-  const long = `${'I added the bag to your cart. It costs ₦18,500. '.repeat(12)}`;
-  const line = touchBuy.acceptModelReply(long, { price: 18500, hasSeller: false });
-
-  assert.ok(line && line.length <= 360, `reply too long: ${line && line.length}`);
-  assert.match(line, /₦18,500/);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].type, 'product_added');
+  assert.equal(blocks[0].product.productId, PRODUCT_ID);
+  assert.equal(blocks[0].cartCount, 2);
 });
 

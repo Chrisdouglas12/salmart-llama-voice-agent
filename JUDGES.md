@@ -30,24 +30,30 @@ in this repo. You only need the URL and the test account below.
   honestly keeps original photos). Run `npm install` on the server for
   `sharp` (photo compositing).
 
-## Option B — verify from this repo alone (no server, no keys)
+## Option B — verify from this repo alone (no server, no keys, no install)
 
-Keyless and dependency-free. From `backend/`:
+Keyless and dependency-free — plain Node, nothing to install. From `backend/`:
 
 ```bash
-npm run demo    # the 7-turn judge script through the real deterministic
-                # brain + tool contracts (sample catalogue, clearly labelled)
-npm test        # 23/23: 16 legacy + 7 keyless AI form-normaliser tests
+npm run demo          # the 3-flow walkthrough (registration, buying, selling)
+                      # through the real wording, task memory and recap logic
+                      # (sample catalogue, clearly labelled)
+npm run test:keyless  # 127/127: registration script, touch-to-buy
+                      # (preview→save→never-twice), selling walkthrough +
+                      # recap, form tools, auth guidance, task memory
+node judge-flow.js  # legacy 7-turn script through the deterministic
+                      # brain + tool contracts
 ```
 
-`npm run demo` prints every turn with its real envelope — navigations,
-`pick_photo`/`choose_photo`, `fill_ad` with exact form values (₦50000,
-FCT - Abuja, New), budget-filtered search, `add_to_cart`, and checkout with
-verified title/price. Nothing is published; the seller always taps Post.
-`npm test` covers scope-change detection, correction-preserving draft merges,
-price-gate validation, confirm-gate shape, Glimmer payload shape, bg-clean
-contract rejections, task TTL/expiry, and prompt-block honesty, plus AI form
-aliases, dropped unknown values, and sensitive-field exclusion.
+`npm run demo` prints every turn of all three flows with its machine-readable
+proof — plain-language auth errors with `nextScreen`, the touch read-back
+with `saved:false`, the `product_added` cart card after "save it", the
+already-saved guard, and the selling COMPLETE recap read start to end.
+Nothing is published; the seller always taps Post.
+
+(`npm test` runs the whole file set, but 6 files need the live
+dependencies — `mongoose` or pre-hackathon server files deliberately excluded
+from this repo — so judges should use `test:keyless`.)
 
 The newer `/api/ai` agent (17 tools, confirmation flow, durable form bridge)
 needs Mongo and a Meta key for a live turn, so its full contract is documented

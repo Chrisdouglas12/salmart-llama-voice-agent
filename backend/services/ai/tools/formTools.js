@@ -162,7 +162,7 @@ async function prepareAdForm(ctx, args) {
       ? `That optional step was skipped. Ask only: "${next.ask}"`
       : `Saved: ${Object.keys(fields).join(', ') || 'nothing'}. `
         + (next.done
-          ? 'The listing is complete. Show the review step and nothing else.'
+          ? 'The listing is complete. Tell them they can tap Publish/Post now, and ask once whether they want the filled details read back first. Do not read the details unless they say yes.'
           : `Now ask only: "${next.ask}"`),
   };
 }
@@ -286,8 +286,31 @@ function normalizeRegistrationPatch(raw) {
 }
 
 async function prepareRegistration(_ctx, args) {
-  const fields = normalizeRegistrationPatch(args || {});
-  const noEmail = args?.noEmail === true;
+  const raw = args && typeof args === 'object' ? args : {};
+  const fields = normalizeRegistrationPatch(raw);
+  const noEmail = raw.noEmail === true;
+
+  // A partial email or phone is not saved, but the model must hear why so it
+  // can help the user finish it instead of silently asking again.
+  const rawEmail = String(raw.email == null ? '' : raw.email).trim();
+  if (rawEmail && !EMAIL_RE.test(rawEmail.toLowerCase())) {
+    const e = new Error(
+      'That email is not complete yet. Ask them to say it again slowly, one part at a time: '
+      + 'the name, then "at", then the mail service, then "dot com" or the ending. Never invent a domain.'
+    );
+    e.code = 'TOOL_BAD_ARGS';
+    throw e;
+  }
+  const rawPhone = String(raw.phoneNumber == null ? '' : raw.phoneNumber).trim();
+  if (rawPhone && !normalizeNgPhone(rawPhone)) {
+    const e = new Error(
+      'That phone number is not complete. Ask them to say the 11 digits again, starting with zero. '
+      + 'Never guess or add a missing digit.'
+    );
+    e.code = 'TOOL_BAD_ARGS';
+    throw e;
+  }
+
   if (!Object.keys(fields).length && !noEmail) {
     const e = new Error(
       'No usable sign-up fields. Ask for their full name, then an email address or a phone number.'
@@ -347,16 +370,42 @@ async function prepareRegistration(_ctx, args) {
   if (!hasEmail && !hasPhone && !declined) remaining.push('email or phone number');
   if (!passwordSet) remaining.push('secret code (on the screen, never in chat)');
   if (!agreed) remaining.push('agree to the terms (on the screen)');
-  const nextAction = remaining[0] || 'create account';
-  const nextAsk = !hasName
-    ? 'What is your full name, first and last?'
-    : (remaining.includes('email or phone number')
-      ? 'Do you have an email address, or should we use a phone number instead?'
-      : (!passwordSet
-        ? 'Now tap the secret code box and type the code you want. I will not see it.'
-        : (!agreed
-          ? 'Now read the agreement and tick the box, then tell me when it is done.'
-          : 'Tap Create account when you are ready.')));
+  const nextAction = remaining[0] || 'confirm account';
+
+  // The exact order from the walkthrough. The email question comes before the
+  // phone: only a "no" moves the user to the phone field.
+  let nextAsk;
+  if (!hasName) {
+    nextAsk = fields.firstName && !fields.lastName
+      ? 'Thank you. What is your last name?'
+      : 'What is your full name, first and last?';
+  } else if (!hasEmail && !declined) {
+    nextAsk = 'Do you have an email? It can be Google, Yahoo, or any other email.';
+  } else if (!hasEmail && !hasPhone) {
+    nextAsk = 'What phone number should we use? It can be MTN, Airtel, Glo, or any other network.';
+  } else if (!passwordSet) {
+    nextAsk = 'Now tap the secret code box and type the code you want. I will not see it.';
+  } else if (!agreed) {
+    nextAsk = 'Now read the agreement and tick the box if you accept, then tell me when it is done.';
+  } else {
+    nextAsk = 'Should I create your account now, or would you like to change something?';
+  }
+
+  // The name step is the one moment the user hears their own name back. It
+  // works when the first and last name arrive in the same turn or in two, and
+  // it never repeats once the name is complete.
+  const draftName = [draft.firstName, draft.lastName].filter(Boolean).join(' ').trim();
+  const fullName = fields.firstName && fields.lastName
+    ? `${fields.firstName} ${fields.lastName}`
+    : (draftName || draft.fullName || '');
+  const nameJustCompleted = !!(fullName && hasName && (fields.firstName || fields.lastName));
+  const welcome = nameJustCompleted ? `Welcome ${fullName}.` : null;
+
+  // A phone number is the one value a person cannot see themselves type when
+  // they speak it, so the model reads it back before the next step.
+  const readBackPhone = fields.phoneNumber
+    ? `Read the number back once ("${fields.phoneNumber}") and let them correct any digit. `
+    : '';
 
   return {
     fields,
@@ -364,14 +413,19 @@ async function prepareRegistration(_ctx, args) {
     remaining,
     nextAction,
     nextAsk,
+    ...(welcome ? { welcome } : {}),
     note: `${note} Saved: ${Object.keys(fields).join(', ') || 'nothing'}. `
+      + readBackPhone
+      + (welcome ? `Say "${welcome}" first, then ask only: "${nextAsk}". ` : '')
       + (remaining.length
-        ? `The only thing left is: ${remaining.join(', ')}. Say or ask only: "${nextAsk}"`
-        : 'Everything on this form is done. Tell them to tap Create account.'),
+        ? `The only thing left is: ${remaining.join(', ')}.`
+        : 'Everything on this form is done. Let them confirm, then the phone shows the final button.'),
+    // Short line for the phone's assistant card. Never contains a password.
+    say: welcome ? `${welcome} ${nextAsk}` : nextAsk,
     ...(noEmail ? { emailDeclined: true } : {}),
     // These are never part of `fields`, so the model can never report that it
     // filled a password or accepted the agreement for the user.
-    manualSteps: ['password', 'agreement', 'create_account'],
+    manualSteps: ['password', 'agreement', 'confirm', 'create_account'],
   };
 }
 

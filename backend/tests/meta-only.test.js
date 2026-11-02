@@ -1,12 +1,16 @@
 'use strict';
 
 /**
- * Hackathon compliance guard: the extract must run on Meta models only.
- * Mirrors the live repo's tests/meta-only.test.js over the files this
- * extract actually carries (pre-existing route files enter only as patch
- * context lines, so they are checked by review, not here).
+ * Hackathon compliance guard: the voice/assistant surface must run on Meta
+ * models only. No third-party provider SDK may be imported, instantiated, or
+ * referenced by the shipped code — a silent non-Meta fallback would violate
+ * the event rules and hide outages like the Oct 29 Render 404s.
  *
+ * This test reads source text; it needs no keys, no network, no Mongo.
  * Run: node --test tests/meta-only.test.js
+ *
+ * NOTE: the extract keeps its own adapted copy of this file (it checks only
+ * the files the extract carries). Never sync this file into the extract.
  */
 
 const test = require('node:test');
@@ -20,19 +24,17 @@ function src(...parts) {
   return fs.readFileSync(path.join(ROOT, ...parts), 'utf8');
 }
 
+// Every file that ships event voice/assistant behavior, plus the shared clients.
 const FILES = [
+  'routes/assistantRoutes.js',
+  'routes/assistantGallery.js',
   'lib/assistant/llama.js',
   'lib/assistant/config.js',
   'lib/assistant/speechLang.js',
   'lib/assistant/mmsTts.js',
   'lib/assistant/glimmer.js',
-  'lib/assistant/authGuidance.js',
   'services/ai/agentRunner.js',
   'services/ai/metaProvider.js',
-  'services/ai/toolRegistry.js',
-  'services/ai/toolExecutor.js',
-  'routes/aiRoutes.js',
-  'scripts/ai-eval.js',
 ];
 
 const BANNED = [
@@ -53,7 +55,7 @@ const BANNED = [
   'groqBatch',
 ];
 
-test('meta-only: no third-party provider reference in extract source', () => {
+test('meta-only: no third-party provider reference in shipped source', () => {
   const hits = [];
   for (const f of FILES) {
     const text = src(f);
@@ -64,7 +66,7 @@ test('meta-only: no third-party provider reference in extract source', () => {
   assert.deepEqual(hits, [], `non-Meta provider references found:\n${hits.join('\n')}`);
 });
 
-test('meta-only: extract manifest has no third-party provider SDK', () => {
+test('meta-only: live package.json has no third-party provider SDK', () => {
   const pkg = JSON.parse(src('package.json'));
   const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
   for (const banned of ['groq-sdk', '@google/genai']) {

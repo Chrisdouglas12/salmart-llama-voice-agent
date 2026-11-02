@@ -1,1824 +1,742 @@
 diff --git a/src/ai/AIContext.js b/src/ai/AIContext.js
-index b6b543d..0004dc9 100644
+index 29505f9..bf3b053 100644
 --- a/src/ai/AIContext.js
 +++ b/src/ai/AIContext.js
-@@ -1,26 +1,24 @@
- /**
-- * Salmart AI Mode — state provider
-+ * AI conversation state and voice pipeline.
-  *
-- * Owns the /api/ai/* conversation lifecycle. Independent of AssistantContext
-- * (which still drives the old form-fill bridge in CreateAd / CreateRequest /
-- * EditProfile / Cart until cycle 2).
-+ * Owns the /api/ai/* conversation lifecycle and the global microphone.
-  *
-  * Persistence:
-- *   - anonymousId in AsyncStorage under `salmart:ai:anonymousId`. Not secret
-- *     (a client-held identity token) so AsyncStorage matches AuthContext
-- *     conventions rather than SecureStore.
-- *   - Conversation history is on the backend. The local `messages` array is a
-- *     render cache; `reset()` clears it and starts a fresh conversation.
-+ * - `anonymousId` is stored in AsyncStorage under `salmart:ai:anonymousId`.
-+ *   It is a client-held identity token, not a secret, so AsyncStorage is
-+ *   consistent with AuthContext.
-+ * - Conversation history lives on the backend. The local `messages` array is
-+ *   a render cache; `reset()` clears it and starts a new conversation.
-  *
-  * Sign-in rebind:
-- *   - On `isAuthenticated: false → true`, POSTs /conversations/rebind with the
-- *     stored anonymousId so the same conversation carries forward. On 404
-- *     (mismatched / lost anon), starts a fresh conversation silently.
-- *   - When the rebind follows a real pre-auth conversation, one resume turn
-- *     ("I just signed in…") runs and is spoken, so the stranded intention
-- *     continues. A manual sign-in with no AI history stays silent.
-- *   - On sign-out, everything is cleared locally so the next identity starts
-- *     empty — no cross-user leakage.
-+ * - When `isAuthenticated` changes from false to true, the provider calls
-+ *   POST /conversations/rebind with the stored anonymousId so the same
-+ *   conversation continues. A 404 (mismatched or lost anonymous id) starts a
-+ *   fresh conversation silently.
-+ * - If the rebind follows a real pre-auth conversation, one resume turn runs
-+ *   and is spoken, so the unfinished request continues. A manual sign-in with
-+ *   no AI history stays silent.
-+ * - Signing out clears everything locally, so the next user starts empty.
-  */
- 
- import React, {
-@@ -48,12 +46,12 @@ import {
- import { speakReply, stopSpeaking } from './speak';
+@@ -41,10 +41,10 @@ import { TAB_ROOTS } from '../state/routes';
+ import { runGoogleAuth } from '../utils/oauth';
+ import {
+   createConversation, rebindConversation, sendTurn, sendTurnStream,
+-  selectProductToCart,
++  previewProductSelection,
+   confirmAction as apiConfirm, cancelAction as apiCancel,
+ } from './api';
+-import { speakReply, queueSpeech, stopSpeaking } from './speak';
++import { speakReply, queueSpeech, stopSpeaking, stripReplyPrefix } from './speak';
  import { takeAuthOutcome } from './authOutcome';
+ import { takeListingOutcome } from './listingOutcome';
  import { peekFormSnapshot } from './formSnapshot';
-+import { peekRegistrationSnapshot, takeRegistrationSnapshot } from './registrationSnapshot';
- 
- const ANON_KEY = 'salmart:ai:anonymousId';
- 
--// Server-side allowlist mirror (services/ai/tools/navigationTools.js). The
--// server only emits `navigate` for these keys; the client re-checks so a
--// malformed/forged response can never push an unknown or AI route.
-+// Mirrors the server allowlist in services/ai/tools/navigationTools.js. The
-+// client checks again so a malformed response cannot open an unknown screen.
- const NAVIGABLE_SCREENS = new Set([
-   'market', 'requests', 'alerts', 'messages', 'deals', 'profile',
-   'search', 'cart', 'referral', 'createAd', 'createRequest', 'editProfile',
-@@ -89,16 +87,15 @@ export function AIProvider({ children }) {
-   const [isReady, setIsReady] = useState(false);
-   const [recording, setRecording] = useState(false);
-   const [transcribing, setTranscribing] = useState(false);
--  // What the global mic overlay shows / spoke last. Null when there is nothing
--  // to show. `confirmation` keeps the turn's Confirm/Cancel available inline.
-+  // Latest content for the global mic card. `confirmation` keeps the turn's
-+  // Confirm/Cancel actions available inline.
-   const [lastVoice, setLastVoice] = useState(null);
-   const [authBusy, setAuthBusy] = useState(false);
--  // Attention nudge for the mic FAB (welcome pulse, "Tap to talk"). Never
--  // records — it only animates the existing button. Cleared on record.
-+  // Attention nudge for the mic button (welcome pulse, "Tap to talk"). It does
-+  // not record; it only animates the button. Cleared when recording starts.
-   const [micNudge, setMicNudge] = useState(null);
--  // Silence auto-stop: the mic level (dB) is polled while recording so the
--  // user never has to tap a second time. Stays conservative — a noisy market
--  // that never goes quiet simply falls back to the manual tap.
-+  // Silence auto-stop polling interval. A noisy place that never falls quiet
-+  // still works because the user can stop manually.
-   const SILENCE_DB = -35;
-   const SILENCE_MS = 1200;
-   const LISTEN_GRACE_MS = 1500;
-@@ -113,13 +110,23 @@ export function AIProvider({ children }) {
-   const authBusyRef = useRef(false);
-   const messagesRef = useRef([]);
-   messagesRef.current = messages;
--  // Set when a sign-in rebind succeeds after a real pre-auth conversation;
--  // consumed once by the resume effect below.
-+  // Set after a successful sign-in rebind that followed a real pre-auth
-+  // conversation. Consumed once by the resume effect below.
-   const resumeRef = useRef(false);
-+  // Registration signs the user in on purpose, so its welcome line replaces
-+  // the generic "continue what we were doing" resume turn.
-+  const skipResumeRef = useRef(false);
-+  // A registration is followed by one model-generated greeting, even when the
-+  // user never spoke to the assistant before signing up.
-+  const welcomeRef = useRef(false);
-+  const [welcomeTick, setWelcomeTick] = useState(0);
-+  // Resolves when the post-sign-in conversation rebind settles, so the greeting
-+  // turn never races the anonymous conversation being attached to the account.
-+  const rebindPromiseRef = useRef(Promise.resolve());
-   const authRef = useRef({ ready: authReady, isAuthenticated });
-   authRef.current = { ready: authReady, isAuthenticated };
--  // Last turn's screen context — so a confirmed seller enquiry does not push
--  // the chat when the user is already standing in that exact thread.
-+  // Screen context from the last turn, used to avoid opening the chat when the
-+  // user is already in that thread.
-   const lastContextRef = useRef(null);
- 
-   const ensureConversation = useCallback(async () => {
-@@ -147,8 +154,8 @@ export function AIProvider({ children }) {
-     return res.conversationId;
-   }, []);
- 
--  // Boot: wait for auth ready so a fresh authenticated launch never creates an
--  // anonymous conversation it would immediately discard.
-+  // Wait for auth to resolve before creating a conversation, so a fresh
-+  // authenticated launch does not create an anonymous conversation first.
-   useEffect(() => {
-     if (!authReady) return undefined;
-     let mounted = true;
-@@ -174,18 +181,25 @@ export function AIProvider({ children }) {
-     if (isAuthenticated) {
-       const anonymousId = anonRef.current;
-       const cid = convRef.current;
--      if (!anonymousId || !cid) return;
--      // Only resume when the user was actually talking before signing in —
--      // a manual sign-in with no AI history must stay silent.
-+      if (!anonymousId || !cid) {
-+        // Nothing to rebind. A registration greeting still runs on the new
-+        // signed-in conversation.
-+        rebindPromiseRef.current = Promise.resolve();
-+        return;
-+      }
-+      // Only resume when the user was already talking before signing in. A
-+      // registration always greets, even with no chat history.
-       const hadConversation = messagesRef.current.some(m => m && m.role === 'user');
--      (async () => {
-+      rebindPromiseRef.current = (async () => {
-         try {
-           await rebindConversation({ conversationId: cid, anonymousId });
-           anonRef.current = null;
-           AsyncStorage.removeItem(ANON_KEY).catch(() => {});
--          if (hadConversation) resumeRef.current = true;
-+          if (hadConversation && !skipResumeRef.current) resumeRef.current = true;
-+          skipResumeRef.current = false;
-         } catch (_e) {
--          // 404 = lost / mismatched — start clean rather than leave it stuck.
-+          // 404 means the anonymous id was lost or belongs to another
-+          // conversation. Start clean instead of leaving the session stuck.
-           convRef.current = null;
-           anonRef.current = null;
-           setConversationId(null);
-@@ -194,6 +208,7 @@ export function AIProvider({ children }) {
-         }
-       })();
-     } else {
-+      rebindPromiseRef.current = Promise.resolve();
-       convRef.current = null;
-       anonRef.current = null;
-       setConversationId(null);
-@@ -206,11 +221,10 @@ export function AIProvider({ children }) {
-     }
-   }, [authReady, isAuthenticated, ensureConversation]);
- 
--  // Execute the single `navigate` block a turn may return. Voice and text both
--  // go through here, so "open my messages" works from the global mic without
--  // ever pushing the AI screen. The screen is opened only after the reply is
--  // already in `messages`, so a form screen that mounts next can read its
--  // fill_* patch synchronously (see useAIPatch).
-+  // Runs the single `navigate` block a turn may return. Voice and text both
-+  // use this path, so "open my messages" also works from the global mic. The
-+  // screen opens after the reply is already in `messages`, so a form screen
-+  // that mounts next can read its fill_* patch (see useAIPatch).
-   const runNavigation = useCallback((structured) => {
-     const blocks = Array.isArray(structured) ? structured : [];
-     let target = null;
-@@ -236,14 +250,22 @@ export function AIProvider({ children }) {
-     lastContextRef.current = context || null;
- 
-     // Carry a real auth outcome code from the screen (401/403/429/offline)
--    // into this turn. Only the closed code travels, never the server text.
--    // Same for the listing snapshot: presence flags only, never values.
-+    // into this turn. Only the fixed code travels, never the server text.
-+    // The listing snapshot follows the same rule: flags only, never values.
-     const authOutcome = takeAuthOutcome();
-     const listing = peekFormSnapshot();
--    const turnContext = (authOutcome || listing)
--      ? { ...(context || {}), ...(authOutcome ? { authOutcome } : {}), ...(listing ? { listing } : {}) }
-+    // Registration flags belong to the register screen. Once the user moves
-+    // away, the old form state must not ride along with an unrelated turn.
-+    const registration = context?.screen === 'register' ? peekRegistrationSnapshot() : null;
-+    const turnContext = (authOutcome || listing || registration)
-+      ? {
-+        ...(context || {}),
-+        ...(authOutcome ? { authOutcome } : {}),
-+        ...(listing ? { listing } : {}),
-+        ...(registration ? { registration } : {}),
-+      }
-       : (context || undefined);
--    if (authOutcome || listing) lastContextRef.current = turnContext;
-+    if (authOutcome || listing || registration) lastContextRef.current = turnContext;
- 
-     setStatus('sending');
-     setError(null);
-@@ -270,14 +292,14 @@ export function AIProvider({ children }) {
-       }]);
-       setStatus('idle');
- 
--      // Move only after the assistant message is queued, so a screen that
--      // mounts because of this call already sees its fill_* patch.
-+      // Move after the assistant message is queued, so a screen that mounts
-+      // because of this call already sees its fill_* patch.
-       const navigatedTo = runNavigation(res.structured);
- 
-       // Seller-chat handoff: the user agreed to message the seller, so carry
--      // them to the chat with the draft pre-filled — unless they are already
--      // standing in that exact thread (context.chatPartnerId matches).
--      // The block carries only ids + display text; re-check the id shape.
-+      // them to the chat with the draft pre-filled, unless they are already in
-+      // that thread (context.chatPartnerId matches). The block carries ids and
-+      // display text only, and the id shape is checked again here.
-       let handoffTo = null;
-       if (Array.isArray(res.structured)) {
-         const h = res.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId);
-@@ -319,11 +341,11 @@ export function AIProvider({ children }) {
-     }
-   }, [status, ensureConversation, runNavigation, nav]);
- 
--  // Resume the pre-auth intention once, right after a rebind that followed a
--  // real conversation. The line is truthful (they did just sign in) and the
--  // server still holds the task goal on the same conversation, so the model
--  // continues instead of asking them to repeat themselves. Spoken aloud: a
--  // non-reading user never has to find the AI screen to hear it.
-+  // Resume the pre-auth request once, right after a rebind that followed a
-+  // real conversation. The line is truthful (they did just sign in), and the
-+  // server still holds the task goal on the same conversation, so the assistant
-+  // continues instead of asking the user to repeat themselves. It is spoken
-+  // aloud so the user does not have to open the AI screen to hear it.
-   useEffect(() => {
-     if (!resumeRef.current || !authReady || !isAuthenticated) return;
-     resumeRef.current = false;
-@@ -339,6 +361,35 @@ export function AIProvider({ children }) {
-     })();
-   }, [authReady, isAuthenticated, send]);
- 
-+  // A newly created account gets one model-written greeting. The turn carries
-+  // an event marker, not form values: the server tells the model the account
-+  // exists and the user is signed in, so the reply cannot drift back into
-+  // registration questions. The fixed line is only a fallback when the model
-+  // is unreachable.
-+  useEffect(() => {
-+    if (!welcomeRef.current || !authReady || !isAuthenticated) return;
-+    welcomeRef.current = false;
-+    (async () => {
-+      const fallback =
-+        'Welcome to Salmart, we are glad to have you here. Would you like to buy or sell something?';
-+      try {
-+        await rebindPromiseRef.current.catch(() => {});
-+        // The screen's completion flags are stale now that the account exists.
-+        takeRegistrationSnapshot();
-+        const result = await send('I just created my account.', {
-+          event: 'registration_complete',
-+          screen: 'market',
-+        });
-+        const line = result.ok && result.reply ? result.reply : fallback;
-+        setLastVoice({ text: line, kind: result.ok ? 'reply' : 'error', at: Date.now() });
-+        await speakReply(line);
-+      } catch (_e) {
-+        setLastVoice({ text: fallback, kind: 'reply', at: Date.now() });
-+        try { await speakReply(fallback); } catch (_e2) { /* speech is optional */ }
-+      }
-+    })();
-+  }, [welcomeTick, authReady, isAuthenticated, send]);
-+
-   const confirm = useCallback(async (actionId) => {
-     try {
-       const res = await apiConfirm(actionId);
-@@ -350,8 +401,8 @@ export function AIProvider({ children }) {
-         cleared.push({ key: newKey(), role: 'assistant', text: 'Done. That action is complete.', at: Date.now() });
-         return cleared;
+@@ -148,8 +148,10 @@ export function AIProvider({ children }) {
+   // the generic "continue what we were doing" resume turn.
+   const skipResumeRef = useRef(false);
+   // A registration is followed by one model-generated greeting, even when the
+-  // user never spoke to the assistant before signing up.
++  // user never spoke to the assistant before signing up. The exact name typed
++  // on the register screen rides along so the greeting cannot invent one.
+   const welcomeRef = useRef(false);
++  const welcomeNameRef = useRef('');
+   const [welcomeTick, setWelcomeTick] = useState(0);
+   // Resolves when the post-sign-in conversation rebind settles, so the greeting
+   // turn never races the anonymous conversation being attached to the account.
+@@ -316,7 +318,7 @@ export function AIProvider({ children }) {
+   // and the streamed path alike, so both behave identically once the turn data
+   // is in.
+   const finishTurn = useCallback((res, context) => {
+-    const reply = res.reply || '';
++    const reply = stripReplyPrefix(res.reply || '');
+     // Remember which real models answered, so the card can name them.
+     if (res?.models && (res.models.brain || res.models.stt)) {
+       setModels(prev => ({
+@@ -391,12 +393,14 @@ export function AIProvider({ children }) {
+         anonymousId: anonId,
+         context: turnContext,
+         onSentence: (sentence) => {
++          const cleanSentence = stripReplyPrefix(sentence);
++          if (!cleanSentence) return;
+           heard += 1;
+-          full = full ? `${full} ${sentence}` : sentence;
++          full = full ? `${full} ${cleanSentence}` : cleanSentence;
+           setMessages(prev => prev.map(m => (
+             m.key === streamKey ? { ...m, text: full } : m
+           )));
+-          queueSpeech(sentence);
++          queueSpeech(cleanSentence);
+         },
        });
--      // A confirmed seller enquiry was sent server-side: carry the user to
--      // that chat — unless they are already in it (last turn context matches).
-+      // A confirmed seller enquiry was sent by the server. Open that chat
-+      // unless the user is already there (the last turn context matches).
-       if (r.sellerId
-         && /^[a-fA-F0-9]{24}$/.test(String(r.sellerId))
-         && String(lastContextRef.current?.chatPartnerId || '') !== String(r.sellerId)) {
-@@ -386,9 +437,10 @@ export function AIProvider({ children }) {
-     return { ok: true };
-   }, []);
- 
--  // Voice variants used by the global mic overlay: do the action and say the
--  // outcome out loud, so the user never has to open the AI screen.
--  // A confirmed seller enquiry already pushed the chat above; say where they are.
-+  // Voice variants used by the global mic card. They perform the action and
-+  // speak the outcome, so the user does not have to open the AI screen.
-+  // A confirmed seller enquiry already opened the chat above, so the line
-+  // says where the user is.
-   const confirmVoice = useCallback(async (actionId) => {
-     const res = await confirm(actionId);
-     const sentToSeller = res?.ok && res?.result?.sellerId;
-@@ -420,21 +472,33 @@ export function AIProvider({ children }) {
-     if (shouldSpeak) await speakReply(line);
-   }, []);
- 
--  /** Speak an arbitrary line (used by "hear this" affordances). */
-+  /** Speak an arbitrary line, used by the "hear this" buttons. */
-   const speak = useCallback(async (text) => {
-     await speakReply(text);
-   }, []);
- 
-   /**
--   * Google handoff.
-+   * Mark the next false→true auth transition as a registration: the generic
-+   * resume turn is skipped and the assistant writes one welcome instead. Pass
-+   * false when registration failed, so a later sign-in still resumes.
-+   */
-+  const welcomeAfterRegistration = useCallback((on = true) => {
-+    const wanted = on !== false;
-+    welcomeRef.current = wanted;
-+    skipResumeRef.current = wanted;
-+    if (wanted) setWelcomeTick(t => t + 1);
-+  }, []);
-+
-+  /**
-+   * Google sign-in handoff.
-    *
--   * Preferred: the native account picker (runGoogleAuth), which returns an
--   * idToken the backend verifies. Fallback: the server-built initiation URL in
--   * a system browser, for Expo Go / a build without the native module / any
--   * native failure. Either way the AI never sees a Google password.
-+   * Preferred path: the native account picker (runGoogleAuth) returns an
-+   * idToken, which the backend verifies. Fallback: open the server-built
-+   * initiation URL in a system browser for Expo Go, a build without the native
-+   * module, or any native failure. The assistant never sees a Google password.
-    *
--   * `url` is the gated URL from the backend's `auth_url` block; `ref` is only
--   * read out of it so a brand-new account still links its referrer.
-+   * `url` is the gated URL from the backend's `auth_url` block. `ref` is read
-+   * from it so a new account still records its referrer.
-    */
-   const startGoogleAuth = useCallback(async ({ url, platform } = {}) => {
-     if (authBusyRef.current) return { ok: false, code: 'busy' };
-@@ -486,8 +550,8 @@ export function AIProvider({ children }) {
-       await speakReply(line);
-       return { ok: false, code: 'incomplete' };
-     } catch (e) {
--      // Expo Go / missing native module / native failure: use the server URL
--      // rather than dead-ending the user. The URL is https and was re-checked
-+      // Expo Go, a missing native module or a native failure: use the server
-+      // URL instead of dead-ending the user. The URL is https and was checked
-       // by the backend before it reached this block.
-       if (url) {
-         try {
-@@ -532,14 +596,7 @@ export function AIProvider({ children }) {
-   useEffect(() => () => { stopSpeaking(); }, []);
- 
-   /**
--   * Global mic: start/stop one voice turn.
--   *
--   * `context` is the shallow screen hint sent with the turn (same contract as
--   * AIModeScreen's text sends). The turn, the tool actions it triggers, and the
--   * spoken reply all happen where the user already is — nothing navigates.
--   */
--  /**
--   * Stop the recording and run one voice turn: upload, transcribe, answer,
-+   * Stop the recording and run one voice turn: upload, transcribe, answer and
-    * speak. Shared by the manual second tap and the silence auto-stop.
-    */
-   const stopVoiceTurn = useCallback(async (context) => {
-@@ -548,54 +605,54 @@ export function AIProvider({ children }) {
-     let heardLang = null;
-     try {
-       await audioRecorder.stop();
--        // Leave the recording audio session so the reply plays on the speaker.
--        await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
--        const uri = audioRecorder.uri;
--        if (!uri) throw new Error('no_recording');
--
--        const form = new FormData();
--        form.append('audio', { uri, name: 'voice.m4a', type: 'audio/m4a' });
--        const res = await apiUpload('/api/assistant/transcribe', form);
--        const transcript = String(res?.text || '').trim();
--        // The speaker's own language: the reply (text and voice) mirrors it.
--        heardLang = (res && typeof res.lang === 'string' && res.lang !== 'eng') ? res.lang : null;
--
--        if (!res?.success || !transcript) {
--          const line = 'I could not catch that. Please try again.';
--          setTranscribing(false);
--          setLastVoice({ text: line, kind: 'error', at: Date.now() });
--          await speakReply(line, heardLang);
--          return;
--        }
--
--        // Show "Thinking…" rather than "Transcribing…" while the turn runs.
-+      // Leave the recording audio session so the reply plays on the speaker.
-+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
-+      const uri = audioRecorder.uri;
-+      if (!uri) throw new Error('no_recording');
-+
-+      const form = new FormData();
-+      form.append('audio', { uri, name: 'voice.m4a', type: 'audio/m4a' });
-+      const res = await apiUpload('/api/assistant/transcribe', form);
-+      const transcript = String(res?.text || '').trim();
-+      // The reply, in text and voice, follows the speaker's language.
-+      heardLang = (res && typeof res.lang === 'string' && res.lang !== 'eng') ? res.lang : null;
-+
-+      if (!res?.success || !transcript) {
-+        const line = 'I could not catch that. Please try again.';
-         setTranscribing(false);
--        const turnContext = { ...(context || {}), ...(heardLang ? { lang: heardLang } : {}) };
--        const result = await send(transcript, turnContext);
--        const line = result.ok
--          ? (result.reply || 'Done.')
--          : (result.message || 'The assistant is temporarily unavailable. Please try again.');
--
--        // A Google handoff must be tappable without leaving the current screen,
--        // so carry the gated block into the card instead of only into AI Mode.
--        // Same for a seller-chat handoff (fallback if the auto-open was missed).
--        const authBlock = result.ok && Array.isArray(result.structured)
--          ? result.structured.find(b => b && b.type === 'auth_url' && b.url)
--          : null;
--        const chatBlock = result.ok && Array.isArray(result.structured)
--          ? result.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId)
--          : null;
--
--        setLastVoice({
--          text: line,
--          kind: result.ok ? 'reply' : 'error',
--          confirmation: result.ok ? (result.confirmation || null) : null,
--          authUrl: authBlock || null,
--          chatHandoff: chatBlock || null,
--          at: Date.now(),
--        });
-+        setLastVoice({ text: line, kind: 'error', at: Date.now() });
-         await speakReply(line, heardLang);
--      } catch (e) {
-+        return;
-+      }
-+
-+      // The card shows "Thinking…" while the turn runs.
-+      setTranscribing(false);
-+      const turnContext = { ...(context || {}), ...(heardLang ? { lang: heardLang } : {}) };
-+      const result = await send(transcript, turnContext);
-+      const line = result.ok
-+        ? (result.reply || 'Done.')
-+        : (result.message || 'The assistant is temporarily unavailable. Please try again.');
-+
-+      // Keep a Google sign-in action tappable without leaving the current
-+      // screen, so the gated block travels into the card as well as AI Mode.
-+      // The same applies to a seller-chat handoff when auto-open was missed.
-+      const authBlock = result.ok && Array.isArray(result.structured)
-+        ? result.structured.find(b => b && b.type === 'auth_url' && b.url)
-+        : null;
-+      const chatBlock = result.ok && Array.isArray(result.structured)
-+        ? result.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId)
-+        : null;
-+
-+      setLastVoice({
-+        text: line,
-+        kind: result.ok ? 'reply' : 'error',
-+        confirmation: result.ok ? (result.confirmation || null) : null,
-+        authUrl: authBlock || null,
-+        chatHandoff: chatBlock || null,
-+        at: Date.now(),
-+      });
-+      await speakReply(line, heardLang);
-+    } catch (e) {
-         const line = e?.status === 401
-           ? 'Your session has expired. Please sign in again.'
-           : e?.isNetwork
-@@ -611,13 +668,13 @@ export function AIProvider({ children }) {
-     [audioRecorder, send],
-   );
- 
--  // Context the recording started with — the silence auto-stop has no fresh
--  // tap to read it from, so it reuses this.
-+  // Context the recording started with. The silence auto-stop reuses it
-+  // because there is no fresh tap to read it from.
-   const startContextRef = useRef(null);
- 
--  // Silence auto-stop: poll the mic level while recording. Fires once per
--  // recording, only after real speech was heard and the grace period passed.
--  // No metering on the device, or endless noise, means manual stop as before.
-+  // Poll the mic level while recording. This stops once per recording, only
-+  // after speech was heard and the grace period has passed. If the device has
-+  // no metering or the room never falls quiet, the user stops manually.
+       if (!res?.success) throw new Error(res?.message || 'turn_failed');
+@@ -532,9 +536,12 @@ export function AIProvider({ children }) {
    useEffect(() => {
-     if (!recording) return undefined;
-     const startedAt = Date.now();
-@@ -658,12 +715,12 @@ export function AIProvider({ children }) {
-   }, [recording, audioRecorder, stopVoiceTurn, SILENCE_DB, SILENCE_MS, LISTEN_GRACE_MS, MAX_LISTEN_MS]);
+     if (!welcomeRef.current || !authReady || !isAuthenticated) return;
+     welcomeRef.current = false;
++    const fullName = welcomeNameRef.current;
++    welcomeNameRef.current = '';
+     (async () => {
+-      const fallback =
+-        'Welcome to Salmart, we are glad to have you here. Would you like to buy or sell something?';
++      const fallback = fullName
++        ? `Congrats ${fullName}, your account has been successfully created and I am signing you in now. Welcome once again, ${fullName}. Would you like to buy or sell something?`
++        : 'Congrats, your account has been successfully created and you are signed in. Welcome to Salmart. Would you like to buy or sell something?';
+       try {
+         await rebindPromiseRef.current.catch(() => {});
+         // The screen's completion flags are stale now that the account exists.
+@@ -542,6 +549,7 @@ export function AIProvider({ children }) {
+         const result = await send('I just created my account.', {
+           event: 'registration_complete',
+           screen: 'market',
++          ...(fullName ? { fullName } : {}),
+         });
+         const line = result.ok && result.reply ? result.reply : fallback;
+         setLastVoice({ text: line, kind: result.ok ? 'reply' : 'error', at: Date.now() });
+@@ -554,10 +562,10 @@ export function AIProvider({ children }) {
+   }, [welcomeTick, authReady, isAuthenticated, send]);
  
    /**
--   * Global mic: start/stop one voice turn.
-+   * Start or stop one voice turn from the global mic.
-    *
--   * `context` is the shallow screen hint sent with the turn (same contract as
--   * AIModeScreen's text sends). The turn, the tool actions it triggers, and the
--   * spoken reply all happen where the user already is — nothing navigates.
--   * Tapping while recording stops manually; staying silent stops automatically.
-+   * `context` is the shallow screen hint sent with the turn, matching the
-+   * contract used by AIModeScreen. The turn, its tool actions and the spoken
-+   * reply all happen on the current screen. Tapping while recording stops
-+   * manually; staying silent stops automatically.
+-   * Touch-to-buy. The buyer tapped a product card; send that exact productId
+-   * to the deterministic server route, queue the confirmation in the chat,
+-   * and speak the price and description. No model call, so the confirmation
+-   * arrives immediately and cannot drift to another product.
++   * Touch-to-buy, stage one. The buyer tapped a product card; send that exact
++   * productId to the deterministic server route. The server reads the title
++   * and description back and asks whether to save it or chat the seller.
++   * Nothing is written to the cart here: the buyer must say "save it" first.
     */
-   const toggleRecording = useCallback(async (context) => {
-     if (transcribing) return;
-@@ -673,14 +730,14 @@ export function AIProvider({ children }) {
-       return;
-     }
+   const selectProduct = useCallback(async (product) => {
+     const productId = product?.productId || product?._id;
+@@ -577,22 +585,22 @@ export function AIProvider({ children }) {
  
--    // START RECORDING
-+    // Start a new recording.
      try {
-       const perm = await requestRecordingPermissionsAsync();
-       if (!perm.granted) {
-         setLastVoice({ text: 'Please allow microphone access to talk to me.', kind: 'error', at: Date.now() });
-         return;
-       }
--      // Never record over a reply that is still playing.
-+      // Do not record over a reply that is still playing.
-       await stopSpeaking();
-       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-       await audioRecorder.prepareToRecordAsync();
-@@ -694,14 +751,14 @@ export function AIProvider({ children }) {
-     }
-   }, [recording, transcribing, send, audioRecorder, stopVoiceTurn]);
+       const cid = conversationId || await ensureConversation().catch(() => null);
+-      const res = await selectProductToCart({
++      const res = await previewProductSelection({
+         productId,
+         itemType: product.itemType === 'showroom' ? 'showroom' : 'post',
+         conversationId: cid || undefined,
+         lang: lastLangRef.current || undefined,
+       });
+-      if (!res?.success) throw new Error(res?.message || 'Could not add it to your cart.');
+-
+-      // The tap reply names its real author too (null when the template spoke).
+-      if (res?.models && (res.models.brain || res.models.stt)) {
+-        setModels(prev => ({
+-          stt: res.models.stt || prev.stt,
+-          brain: res.models.brain || prev.brain,
+-        }));
+-      }
+-      const line = res.reply || 'I added it to your cart.';
++      if (!res?.success) throw new Error(res?.message || 'I could not read that item.');
++
++      // This read-back is fixed wording, not a model reply. Clear any earlier
++      // brain attribution so the card never credits a model that did not
++      // speak this line.
++      setModels(prev => ({
++        stt: res?.models?.stt || prev.stt,
++        brain: res?.models?.brain || null,
++      }));
++      const line = stripReplyPrefix(res.reply || 'I could not read that item.');
+       const blocks = Array.isArray(res.structured) ? res.structured : [];
+       setMessages(prev => [...prev, {
+         key: newKey(),
+@@ -601,11 +609,11 @@ export function AIProvider({ children }) {
+         structured: blocks,
+         at: Date.now(),
+       }]);
+-      const added = blocks.find(b => b && b.type === 'product_added');
++      const selected = blocks.find(b => b && b.type === 'product_selected');
+       setLastVoice({
+         text: line,
+         kind: 'reply',
+-        chatHandoff: added?.chat || null,
++        chatHandoff: selected?.chat || null,
+         at: Date.now(),
+       });
+       await speakReply(line);
+@@ -616,7 +624,7 @@ export function AIProvider({ children }) {
+         ? 'Please sign in first, then touch the item again.'
+         : e?.isNetwork
+           ? 'No internet connection. Please try again.'
+-          : (e?.message || 'I could not add that item. Please touch another one.');
++          : (e?.message || 'I could not read that item. Please touch another one.');
+       setMessages(prev => [...prev, {
+         key: newKey(), role: 'assistant', kind: 'error', text: line, at: Date.now(),
+       }]);
+@@ -702,7 +710,7 @@ export function AIProvider({ children }) {
  
--  // Attention nudge for the mic FAB: pulse it and optionally label it
--  // ("Tap to talk"). Never records — the user always taps deliberately.
-+  // Pulse the mic button and optionally show a label ("Tap to talk"). The user
-+  // still taps to start recording.
-   const nudgeMic = useCallback((label) => {
-     setMicNudge({ key: `nudge-${Date.now()}`, label: String(label || 'Tap to talk').slice(0, 40) });
-   }, []);
- 
--  // Seller-chat handoff: open ChatScreen with the AI draft pre-filled plus the
--  // product card. The user presses send in the chat — nothing auto-sends here.
-+  // Seller-chat handoff: open ChatScreen with the AI draft and product card
-+  // pre-filled. The user presses send in the chat; nothing is auto-sent.
-   const openSellerChat = useCallback((handoff) => {
-     if (!handoff?.sellerId) return;
-     nav.push('chat', {
-@@ -723,12 +780,12 @@ export function AIProvider({ children }) {
-     conversationId, messages, status, error, isReady, recording, transcribing,
-     lastVoice, toggleRecording, dismissVoice, confirmVoice, cancelVoice,
-     send, confirm, cancel, reset, openSellerChat, micNudge, nudgeMic,
--    startGoogleAuth, authBusy, notice, speak,
-+    startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
-   }), [
-     conversationId, messages, status, error, isReady, send, confirm, cancel, reset,
-     recording, transcribing, toggleRecording, lastVoice, dismissVoice, confirmVoice, cancelVoice,
-     openSellerChat, micNudge, nudgeMic,
--    startGoogleAuth, authBusy, notice, speak,
-+    startGoogleAuth, authBusy, notice, speak, welcomeAfterRegistration,
-   ]);
- 
-   return <AIContext.Provider value={value}>{children}</AIContext.Provider>;
+   /** Show a short status in the global card, optionally speaking it. */
+   const notice = useCallback(async (text, { speak: shouldSpeak = false, kind = 'reply' } = {}) => {
+-    const line = String(text || '').trim();
++    const line = stripReplyPrefix(text);
+     if (!line) return;
+     setLastVoice({ text: line, kind, at: Date.now() });
+     if (shouldSpeak) await speakReply(line);
+@@ -716,10 +724,14 @@ export function AIProvider({ children }) {
+   /**
+    * Mark the next false→true auth transition as a registration: the generic
+    * resume turn is skipped and the assistant writes one welcome instead. Pass
+-   * false when registration failed, so a later sign-in still resumes.
++   * the user's full name (from the register screen) so the greeting can use it,
++   * or false when registration failed so a later sign-in still resumes.
+    */
+-  const welcomeAfterRegistration = useCallback((on = true) => {
+-    const wanted = on !== false;
++  const welcomeAfterRegistration = useCallback((value = true) => {
++    const wanted = value !== false;
++    welcomeNameRef.current = wanted && typeof value === 'string'
++      ? value.replace(/\s+/g, ' ').trim().slice(0, 120)
++      : '';
+     welcomeRef.current = wanted;
+     skipResumeRef.current = wanted;
+     if (wanted) setWelcomeTick(t => t + 1);
 diff --git a/src/ai/UseAIPatch.js b/src/ai/UseAIPatch.js
-index 49f621c..302cdba 100644
+index 302cdba..aeb02cd 100644
 --- a/src/ai/UseAIPatch.js
 +++ b/src/ai/UseAIPatch.js
-@@ -1,36 +1,28 @@
- /**
-- * Salmart AI Mode — form-fill consumer hook
-+ * Form-fill patch hook.
-  *
-- * Cycle 1 replacement for `useAssistant().adPatch` / `.requestPatch` /
-- * `.profilePatch`. The 4 form screens each own their own copy of this hook's
-- * state — they call `useAIPatch('createAd')` (or 'createRequest' /
-- * 'editProfile') and receive a one-shot { fields, say } patch they can apply.
-+ * Each form screen calls useAIPatch(target) and receives a one-shot
-+ * { fields, say } patch to apply. Patches come from two sources:
-  *
-- * Two sources feed a patch:
-+ * 1. A fresh turn. While the user is in AI Mode, prepareAdForm,
-+ *    fillRequestForm and fillProfileForm emit a fill_* block in the assistant
-+ *    message. The hook reads it from useAI().messages, so the patch is ready
-+ *    when the user returns to the form.
-+ * 2. A queued patch. If a turn ran while the form was unmounted, the backend
-+ *    stored the patch and the hook drains it on mount or focus through
-+ *    POST /api/ai/forms/drain.
-  *
-- *  1. Fresh turn responses. While the user is inside AI Mode, every turn that
-- *     runs prepareAdForm / fillRequestForm / fillProfileForm emits a
-- *     `fill_ad` / `fill_request` / `fill_profile` block. We read those out of
-- *     `useAI().messages` synchronously, so the moment the user pops back to the
-- *     form the patch is available.
-- *
-- *  2. Backend drain. If a turn ran while the form was unmounted (user was
-- *     inside AI Mode, form lives on a lower screen), we cannot see the message
-- *     from here. The backend persisted the patch to AIPendingFormPatch; this
-- *     hook drains it on mount / focus via POST /api/ai/forms/drain.
-- *
-- * Contract with the form screen:
-+ * Usage:
-  *   const { patch, ack } = useAIPatch('createAd');
-  *   useEffect(() => {
-  *     if (!patch) return;
-- *     applyPatch(patch.fields);  // your existing apply logic
-+ *     applyPatch(patch.fields);
-  *     if (patch.say) toast(patch.say);
-- *     ack();                     // clears the hook state so it fires once
-+ *     ack();
-  *   }, [patch]);
-  *
-- * `ack()` is deliberately separate from `applyPatch` — the screen must be able
-- * to decide when it is safe to consume (e.g. after it finishes loading an
-- * existing draft).
-+ * ack() is separate from applying the patch so the screen can wait until it
-+ * has finished loading an existing draft.
-  */
- 
- import { useCallback, useEffect, useRef, useState } from 'react';
-@@ -42,16 +34,21 @@ import { drainFormPatch } from './api';
- 
- const VALID_TARGETS = new Set(['createAd', 'createRequest', 'editProfile', 'register']);
- 
--// 'fill_ad' → 'createAd', etc. 'open_picker' rides to the create-ad screen
--// too: it carries no fields, just a kind ('photo' | 'digitalFile').
-+// fill_ad maps to createAd, and so on. open_picker also goes to the create-ad
-+// screen; it carries no fields, only a kind ('photo', 'camera' or
-+// 'digitalFile').
- const BLOCK_TO_TARGET = {
-   fill_ad: 'createAd',
-   fill_request: 'createRequest',
-   fill_profile: 'editProfile',
-   fill_register: 'register',
-+  register_focus: 'register',
+@@ -46,8 +46,9 @@ const BLOCK_TO_TARGET = {
    open_picker: 'createAd',
  };
  
-+// Steps the register screen is allowed to open by itself.
-+const REGISTER_FOCUS = new Set(['fullName', 'firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement']);
-+
+-// Steps the register screen is allowed to open by itself.
+-const REGISTER_FOCUS = new Set(['fullName', 'firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement']);
++// Steps the register screen is allowed to open by itself. `confirm` opens the
++// final card whose button is the only caller of POST /register.
++const REGISTER_FOCUS = new Set(['fullName', 'firstName', 'lastName', 'email', 'phoneNumber', 'phone', 'password', 'agreement', 'confirm']);
+ 
  export function useAIPatch(target) {
    if (!VALID_TARGETS.has(target)) {
-     throw new Error(`useAIPatch: unknown target "${target}"`);
-@@ -71,8 +68,8 @@ export function useAIPatch(target) {
+@@ -77,6 +78,27 @@ export function useAIPatch(target) {
+     if (latest.key === lastSeenMsgKeyRef.current) return;
  
-   // ── Source 1: fresh turn results ──────────────────────────────────────────
-   // Scan the newest assistant message once for a fill_* block matching this
--  // target. `lastSeenMsgKeyRef` prevents re-emitting the same message twice
--  // (a re-render would otherwise re-apply the patch).
-+  // target. `lastSeenMsgKeyRef` prevents the same message from being applied
-+  // twice on a re-render.
-   useEffect(() => {
-     if (!messages.length) return;
-     const latest = messages[messages.length - 1];
-@@ -83,6 +80,14 @@ export function useAIPatch(target) {
+     const blocks = Array.isArray(latest.structured) ? latest.structured : [];
++
++    // A server-owned step wins over a same-turn form fill. Both still apply:
++    // the fill writes its values and the focus opens the next secure box, so a
++    // phone number saved on the same turn as "open the password box" is not
++    // lost.
++    const focusBlock = blocks.find(b => b && b.type === 'register_focus'
++      && BLOCK_TO_TARGET[b.type] === target
++      && REGISTER_FOCUS.has(String(b.field || '')));
++    if (focusBlock) {
++      const fill = blocks.find(b => b && b.type === 'fill_register'
++        && b.fields && typeof b.fields === 'object' && Object.keys(b.fields).length);
++      lastSeenMsgKeyRef.current = latest.key;
++      setPatch({
++        fields: fill ? fill.fields : {},
++        focus: String(focusBlock.field),
++        say: fill?.say || null,
++        source: 'turn',
++      });
++      return;
++    }
++
      for (const b of blocks) {
        if (!b || typeof b !== 'object') continue;
        if (BLOCK_TO_TARGET[b.type] !== target) continue;
-+      // The server-owned plan names the next step. No field values travel.
-+      if (b.type === 'register_focus') {
-+        const field = String(b.field || '');
-+        if (!REGISTER_FOCUS.has(field)) continue;
-+        lastSeenMsgKeyRef.current = latest.key;
-+        setPatch({ fields: {}, focus: field, say: null, source: 'turn' });
-+        return;
-+      }
-       // Picker requests carry a kind, not fields.
-       if (b.type === 'open_picker') {
-         if (b.kind !== 'photo' && b.kind !== 'camera' && b.kind !== 'digitalFile') continue;
-@@ -102,9 +107,9 @@ export function useAIPatch(target) {
-   }, [messages, target]);
- 
-   // ── Source 2: backend drain ───────────────────────────────────────────────
--  // Fires once per mount when authenticated. If a patch was queued by a turn
--  // that ran while this form was unmounted, this call picks it up. A null
--  // response means nothing is waiting — no state change.
-+  // Runs once per mount when the user is signed in. A queued patch belongs to
-+  // a turn that ran while this form was unmounted. A null response means
-+  // nothing is waiting, so state stays unchanged.
-   const tryDrain = useCallback(async () => {
-     if (!isAuthenticated) return;
-     if (drainedRef.current) return;
-@@ -116,8 +121,8 @@ export function useAIPatch(target) {
-         setPatch({ fields: res.patch.fields, say: res.patch.say || null, source: 'drain' });
+@@ -96,6 +118,9 @@ export function useAIPatch(target) {
+         return;
        }
-     } catch (_e) {
--      // Network failure: keep `drainedRef` false so the app-foreground listener
--      // can retry on the next resume. Never let this throw into the screen.
-+      // Keep `drainedRef` false on a network failure so the app-foreground
-+      // listener can retry. Errors never reach the screen.
-       drainedRef.current = false;
-     }
-   }, [isAuthenticated, target, patch]);
-@@ -127,7 +132,7 @@ export function useAIPatch(target) {
-     // eslint-disable-next-line react-hooks/exhaustive-deps
-   }, [isAuthenticated, target]);
+       if (!b.fields || typeof b.fields !== 'object') continue;
++      // An empty fill changes nothing. Skipping it lets a later register_focus
++      // in the same turn (for example the phone step after "no email") win.
++      if (!Object.keys(b.fields).length) continue;
  
--  // Retry on app foreground if the first drain failed on a cold start.
-+  // Retry when the app returns to the foreground after a failed cold start.
-   useEffect(() => {
-     const sub = AppState.addEventListener('change', next => {
-       if (next !== 'active') return;
+       lastSeenMsgKeyRef.current = latest.key;
+       setPatch({ fields: b.fields, say: b.say || null, source: 'turn' });
 diff --git a/src/ai/registrationSnapshot.js b/src/ai/registrationSnapshot.js
-new file mode 100644
-index 0000000..312f4a9
---- /dev/null
+index 312f4a9..712d515 100644
+--- a/src/ai/registrationSnapshot.js
 +++ b/src/ai/registrationSnapshot.js
-@@ -0,0 +1,41 @@
-+/**
-+ * Registration snapshot sent with the next AI turn.
-+ *
-+ * RegisterScreen reports which fields are complete and where the user is in the
-+ * flow. Only booleans plus two short step names travel; field values, and above
-+ * all the password, never leave the screen through this module.
-+ *
-+ * The module has no React Native imports so the contract can be unit-tested.
-+ */
-+
-+let snapshot = null;
-+
-+/** Replace the pending snapshot. Only safe flags and step names are kept. */
-+export function reportRegistrationSnapshot(flags) {
-+  if (!flags || typeof flags !== 'object' || Array.isArray(flags)) {
-+    snapshot = null;
-+    return;
-+  }
-+  const clean = {};
-+  for (const [key, value] of Object.entries(flags).slice(0, 24)) {
-+    if (!/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(key)) continue;
-+    if (key === 'password' || key === 'passwordValue' || key === 'confirm') continue;
-+    if (typeof value === 'boolean') clean[key] = value;
-+    else if ((key === 'activeField' || key === 'stage') && typeof value === 'string' && value.length <= 40) {
-+      clean[key] = value;
-+    }
-+  }
-+  snapshot = Object.keys(clean).length ? clean : null;
-+}
-+
-+/** Read without clearing, because the screen reports again on every change. */
-+export function peekRegistrationSnapshot() {
-+  return snapshot;
-+}
-+
-+/** Read and clear. */
-+export function takeRegistrationSnapshot() {
-+  const value = snapshot;
-+  snapshot = null;
-+  return value;
-+}
+@@ -19,7 +19,10 @@ export function reportRegistrationSnapshot(flags) {
+   const clean = {};
+   for (const [key, value] of Object.entries(flags).slice(0, 24)) {
+     if (!/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(key)) continue;
+-    if (key === 'password' || key === 'passwordValue' || key === 'confirm') continue;
++    // `password` is only ever a boolean "a valid code is set". A string, or
++    // any legacy value-shaped key, is dropped: the secret never leaves here.
++    if (key === 'passwordValue' || key === 'confirm') continue;
++    if (key === 'password' && typeof value !== 'boolean') continue;
+     if (typeof value === 'boolean') clean[key] = value;
+     else if ((key === 'activeField' || key === 'stage') && typeof value === 'string' && value.length <= 40) {
+       clean[key] = value;
 diff --git a/src/ai/speak.js b/src/ai/speak.js
-index 365e647..5d60ea7 100644
+index 75f30b8..0567f2a 100644
 --- a/src/ai/speak.js
 +++ b/src/ai/speak.js
-@@ -1,73 +1,13 @@
- /**
-- * Salmart AI — spoken replies (device voice only).
-+ * Spoken replies through the device's standard text-to-speech voice.
-  *
-- * The server voice (/api/assistant/speak → Meta MMS over Hugging Face) is
-- * retired: Hugging Face shut the hosted MMS route, so every call failed with
-- * `tts_not_configured` after a wasted network round-trip. This module speaks
-- * straight through the phone's own TTS — the path that was already answering
-- * every reply.
-- *
-- * Language + accent: the voice follows the speaker's own language (`lang`
-- * from transcription: eng/yor/hau/ibo). Where the phone ships a Nigerian
-- * voice (e.g. en-NG, yo, ha, ig) it is preferred; otherwise the closest
-- * matching voice is used and speech still works. Pidgin arrives as `eng` —
-- * the reply TEXT is already Pidgin (the model mirrors the speaker), so it
-- * reads naturally in an English voice.
-+ * No custom voice, locale or pitch is selected: the phone speaks in the voice
-+ * the owner already chose in the system settings. The reply text is written in
-+ * the user's everyday language, so the default voice reads it naturally.
-  */
+@@ -8,6 +8,37 @@
  
  import * as Speech from 'expo-speech';
  
--// Transcription lang → device language tag.
--const DEVICE_LANG = { eng: 'en', yor: 'yo', hau: 'ha', ibo: 'ig' };
--
--// Preferred voice locales per language, Nigerian voices first.
--const VOICE_PREFS = {
--  eng: ['en-NG', 'en_NG', 'en'],
--  yor: ['yo-NG', 'yo_NG', 'yo', 'yor'],
--  hau: ['ha-NG', 'ha_NG', 'ha', 'hau'],
--  ibo: ['ig-NG', 'ig_NG', 'ig', 'ibo'],
--};
--
--let voicesCache = null;
--let voicesInFlight = null;
--
--function loadVoices() {
--  if (voicesCache) return Promise.resolve(voicesCache);
--  if (!voicesInFlight) {
--    voicesInFlight = (async () => {
--      try {
--        voicesCache = (await Speech.getVoicesAsync()) || [];
--      } catch (_e) {
--        voicesCache = [];
--      }
--      return voicesCache;
--    })();
--  }
--  return voicesInFlight;
--}
--
--// Warm the voice list at boot so the first reply already gets the best
--// voice instead of the device default.
--try {
--  loadVoices().catch(() => {});
--} catch (_e) { /* speech is optional */ }
--
--const norm = (s) => String(s || '').replace(/_/g, '-').toLowerCase();
--
--function pickVoice(voices, lang) {
--  const prefs = VOICE_PREFS[lang] || VOICE_PREFS.eng;
--  const list = Array.isArray(voices) ? voices : [];
--  for (const pref of prefs) {
--    const exact = list.find((v) => norm(v.language) === norm(pref));
--    if (exact) return exact;
--  }
--  for (const pref of prefs) {
--    const close = list.find((v) => norm(v.language).startsWith(`${norm(pref)}-`));
--    if (close) return close;
--  }
--  return null;
--}
--
++/**
++ * Remove an assistant instruction prefix that must never be spoken.
++ *
++ * Models sometimes echo the framing they were given, e.g.
++ *   "Next, say: How many do you have?"
++ *   "Now ask: What price?"
++ *   "Say: Pick the photo"
++ * The buyer must hear only the words meant for them. This strips a leading
++ * meta label and the same label after a sentence boundary.
++ */
++export function stripReplyPrefix(text) {
++  let out = String(text == null ? '' : text).trim();
++  if (!out) return '';
++
++  const LEADING = /^(?:(?:next|now|then)\s*,?\s*(?:say|ask|reply|tell them)|say|ask|reply|assistant)\s*[:,-]\s*/i;
++  // Run twice so "Next, say: Say: ..." also collapses cleanly.
++  for (let i = 0; i < 2; i += 1) {
++    const next = out.replace(LEADING, '').trim();
++    if (next === out) break;
++    out = next;
++  }
++
++  out = out
++    .replace(/([.!?]\s+)(?:next|now|then)\s*,?\s*(?:say|ask|reply|tell them)\s*:\s*/gi, '$1')
++    .replace(/([.!?]\s+)next\s*:\s*/gi, '$1')
++    .replace(/\s+/g, ' ')
++    .trim();
++
++  return out;
++}
++
  /** Stop any speech before recording or a new reply. */
  export async function stopSpeaking() {
    try {
-@@ -76,10 +16,10 @@ export async function stopSpeaking() {
- }
- 
- /**
-- * Speak one assistant reply in the speaker's language, preferring a
-- * Nigerian voice where the phone has one. Resolves once playback starts.
-+ * Speak one assistant reply with the device's default voice. Resolves once
-+ * playback starts.
+@@ -22,7 +53,7 @@ export async function stopSpeaking() {
+  * speakReply for a fresh reply that must interrupt.
   */
--export async function speakReply(text, lang) {
-+export async function speakReply(text) {
-   const line = String(text || '').trim();
+ export function queueSpeech(text) {
+-  const line = String(text || '').trim();
++  const line = stripReplyPrefix(text);
    if (!line) return;
  
-@@ -88,23 +28,7 @@ export async function speakReply(text, lang) {
-     Speech.stop();
-   } catch (_e) { /* speech is optional */ }
- 
--  const key = Object.prototype.hasOwnProperty.call(DEVICE_LANG, lang) ? lang : 'eng';
--  let voice = null;
--  try {
--    voice = pickVoice(await loadVoices(), key);
--  } catch (_e) {
--    voice = null;
--  }
--
--  const options = { rate: 1.0 };
--  if (voice?.identifier) {
--    options.voice = voice.identifier;
--    if (voice.language) options.language = voice.language;
--  } else {
--    options.language = DEVICE_LANG[key];
--  }
--
    try {
--    Speech.speak(line, options);
-+    Speech.speak(line, { rate: 1.0 });
-   } catch (_e) { /* speech is optional */ }
- }
-diff --git a/src/api/endpoints.js b/src/api/endpoints.js
-index 0613df1..6bc958e 100644
---- a/src/api/endpoints.js
-+++ b/src/api/endpoints.js
-@@ -165,18 +165,22 @@ export async function login(email, password, opts) {
- }
- 
- /**
-- * POST /register → { message, userId, email, verificationSent, emailError? }
-- * Note: registration does NOT return a token or setupToken. The account must
-- * verify by email first, so the register screen shows a "check your inbox"
-- * state rather than logging the user straight in.
-+ * POST /register → { message, token, userId, email, user }.
-+ * A successful registration now returns a real session token, so the app can
-+ * sign the user in straight away. Email verification is not required for the
-+ * voice-first hackathon flow.
+@@ -35,7 +66,7 @@ export function queueSpeech(text) {
+  * playback starts.
   */
- export async function register(payload, opts) {
-   const d = await apiPost('/register', payload, { retries: 0, ...opts });
-   return {
--    userId: d.userId,
--    email: d.email,
-+    token: d.token,
-+    userId: d.userId || d.user?.userId,
-+    email: d.email || d.user?.email,
-+    phoneNumber: d.phoneNumber || d.user?.phoneNumber,
-+    firstName: d.user?.firstName,
-+    lastName: d.user?.lastName,
-     message: d.message,
--    verificationSent: d.verificationSent !== false,
-+    verificationSent: d.verificationSent === true,
-   };
- }
+ export async function speakReply(text) {
+-  const line = String(text || '').trim();
++  const line = stripReplyPrefix(text);
+   if (!line) return;
  
-@@ -1418,9 +1422,10 @@ export async function uploadChatImage(file, fields, opts) {
- }
- 
- /**
-- * POST /api/messages/scan-image — pre-send fraud check for a chat photo.
-- * Vision can take 30s+, so callers pass a long timeout and treat ANY error
-- * as fail-open (photo sends). Returns { blocked, categories, message }.
-+ * POST /api/messages/scan-image. Pre-send fraud check for a chat photo.
-+ * Vision can take 30 seconds or more, so callers pass a long timeout and treat
-+ * any error as fail-open (the photo is sent). Returns { blocked, categories,
-+ * message }.
-  */
- export async function scanChatImageUrl(imageUrl, opts) {
-   const d = await apiPost('/api/messages/scan-image', { imageUrl }, { retries: 0, timeout: 90000, ...opts });
+   // A fresh reply always interrupts the previous one.
 diff --git a/src/screens/RegisterScreen.js b/src/screens/RegisterScreen.js
-index 184e003..41c4c2b 100644
+index 41c4c2b..46d5fb7 100644
 --- a/src/screens/RegisterScreen.js
 +++ b/src/screens/RegisterScreen.js
-@@ -1,18 +1,20 @@
- /**
-- * SALMART — Register (native)
-+ * SALMART — Register (native, voice-first)
-  *
-- * Replaces the WebView /register route. Deliberately minimal: no cards,
-- * badges or marketing chrome. Fintech-grade typography, subtle depth,
-- * elevated precision form cues, and accessible interaction states.
-+ * The real account form. Email is optional: a phone number is enough for this
-+ * hackathon flow. The password is entered once here, in a secure modal, and
-+ * goes straight to POST /register — never to the assistant, the conversation,
-+ * logs or text-to-speech.
-  *
-- * POST /register returns NO token — the account has to verify by email before it
-- * can sign in — so this screen ends on a "verify your email" state rather than a
-- * redirect into the app.
-+ * A successful registration returns a session token, so the screen signs the
-+ * user in, opens Market, and speaks the welcome question.
-  */
- import React, { useCallback, useEffect, useRef, useState } from 'react';
- import {
-   ActivityIndicator,
-+  Keyboard,
-   KeyboardAvoidingView,
-+  Modal,
-   Platform,
-   Pressable,
-   ScrollView,
-@@ -25,19 +27,23 @@ import {
- } from 'react-native';
- import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
- import { Ionicons } from '@expo/vector-icons';
--import * as Speech from 'expo-speech';
- import AsyncStorage from '@react-native-async-storage/async-storage';
-+import * as Clipboard from 'expo-clipboard';
-+import * as Crypto from 'expo-crypto';
- import { createThemed, useTheme } from '../theme/theme';
- import { useAuth } from '../state/AuthContext';
- import { useNav } from '../state/Navigation';
- import { resendVerification } from '../api/endpoints';
+@@ -37,6 +37,7 @@ import { resendVerification } from '../api/endpoints';
  import { runGoogleAuth } from '../utils/oauth';
  import { useAIPatch } from '../ai/UseAIPatch';
-+import { useAI } from '../ai/AIContext';
+ import { useAI } from '../ai/AIContext';
++import { queueSpeech } from '../ai/speak';
  import { reportAuthOutcome } from '../ai/authOutcome';
-+import { reportRegistrationSnapshot, takeRegistrationSnapshot } from '../ai/registrationSnapshot';
+ import { reportRegistrationSnapshot, takeRegistrationSnapshot } from '../ai/registrationSnapshot';
  import AuthWelcome from '../ai/AuthWelcome';
- import { Button, T1, Body, success } from '../ui/kit';
+@@ -91,6 +92,16 @@ const PASSWORD_HELP_LINE =
+   + 'You can use the suggested code, copy it and keep it somewhere safe. '
+   + 'Do not share your code with anyone.';
  
- const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-+const PHONE_RE = /^0[789][01]\d{8}$/;
- 
- // Mirrors the web's `salmart_pending_ref` (register.js) so a code captured from
- // a deep link survives hopping between screens (e.g. signin → register).
-@@ -46,14 +52,6 @@ const PENDING_REF_KEY = 'salmart_pending_ref';
- // The web accepts any of these query keys (?ref=, ?referrer=, ?referral=…).
- const REF_KEYS = ['ref', 'referrer', 'referer', 'referral', 'referral_code', 'referralCode'];
- 
--// Spoken password helper. Words stay short, concrete and easy to hear in a
--// noisy market. The generated password never leaves the device: it is written
--// into the two password fields and spoken by the phone's own TTS only.
--const PASSWORD_WORDS = [
--  'market', 'lion', 'mango', 'river', 'sun', 'house', 'green', 'okada',
--  'pepper', 'drum', 'silver', 'market', 'banana', 'palm', 'stone', 'eagle',
--];
--
- /** Pull a referral code out of route params, accepting every web alias. */
- function pickRef(params) {
-   if (!params) return '';
-@@ -64,19 +62,74 @@ function pickRef(params) {
-   return '';
++// Spoken when the secure box opens. It explains the idea, not a code.
++const PASSWORD_WHAT =
++  'A password is a secret code that protects your account. Do not share it with anyone, '
++  + 'not even someone who says they are from Salmart. You can type one now, or copy the code we suggested.';
++
++// Spoken when the agreement card opens, before the user ticks anything.
++const AGREEMENT_WHAT =
++  'Before you can buy or sell on Salmart, you must accept the Privacy Policy and Terms and Conditions. '
++  + 'Read them, then tick the box if you agree.';
++
+ const PASSWORD_WORDS = [
+   'mango', 'river', 'market', 'orange', 'green', 'happy', 'house', 'silver',
+   'palm', 'gold', 'star', 'moon', 'bird', 'fish', 'tree', 'rain',
+@@ -106,7 +117,9 @@ function makePasswordSuggestion() {
+   try {
+     bytes = Crypto.getRandomBytes(8);
+   } catch (_e) {
+-    bytes = Array.from({ length: 8 }, () => Math.floor(Math.random() * 256));
++    // No secure random source means no suggestion. Never fall back to
++    // Math.random() for a credential.
++    return '';
+   }
+   const word = i => PASSWORD_WORDS[bytes[i] % PASSWORD_WORDS.length];
+   let first = word(0);
+@@ -117,6 +130,22 @@ function makePasswordSuggestion() {
+   return `${title(first)}${title(second)}${number}`;
  }
  
-+/** Keep digits only, then normalise +234/234 to the local 0 form. */
-+function normalizePhoneInput(value) {
-+  let digits = String(value || '').replace(/\D/g, '');
-+  if (digits.startsWith('234') && digits.length === 13) digits = `0${digits.slice(3)}`;
-+  return digits.slice(0, 11);
-+}
-+
-+/** The server stores first and last separately; one voice answer names both. */
-+function splitFullName(value) {
-+  const parts = String(value || '').trim().split(/\s+/).filter(Boolean);
-+  if (!parts.length) return { firstName: '', lastName: '' };
-+  return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
-+}
-+
-+function passwordError(value) {
-+  if (!value) return 'Create a password.';
-+  if (value.length < 8) return 'Use at least 8 characters.';
-+  if (!/[A-Za-z]/.test(value) || !/\d/.test(value)) {
-+    return 'Include at least one letter and one number.';
-+  }
-+  return '';
-+}
-+
-+// Spoken help at the password step. It names the steps, never a code.
-+const PASSWORD_HELP_LINE =
-+  'Tap the box and type at least 8 characters, with a letter and a number. '
-+  + 'You can use the suggested code, copy it and keep it somewhere safe. '
-+  + 'Do not share your code with anyone.';
-+
-+const PASSWORD_WORDS = [
-+  'mango', 'river', 'market', 'orange', 'green', 'happy', 'house', 'silver',
-+  'palm', 'gold', 'star', 'moon', 'bird', 'fish', 'tree', 'rain',
-+];
-+
 +/**
-+ * A readable code made from two words and a number, generated on the phone.
-+ * It never leaves the device through the assistant; the user decides whether
-+ * to use it, and it goes only to POST /register if they do.
++ * Ordered read-back of only the details the user actually gave. The password
++ * is never included, not even a masked form. RegisterScreen mirrors the
++ * backend's registrationRecap order because the phone owns typed values.
 + */
-+function makePasswordSuggestion() {
-+  let bytes;
-+  try {
-+    bytes = Crypto.getRandomBytes(8);
-+  } catch (_e) {
-+    bytes = Array.from({ length: 8 }, () => Math.floor(Math.random() * 256));
-+  }
-+  const word = i => PASSWORD_WORDS[bytes[i] % PASSWORD_WORDS.length];
-+  let first = word(0);
-+  let second = word(1);
-+  if (first === second) second = word(2);
-+  const number = 100 + ((bytes[3] * 256 + bytes[4]) % 900);
-+  const title = w => `${w[0].toUpperCase()}${w.slice(1)}`;
-+  return `${title(first)}${title(second)}${number}`;
++function recapLines(form) {
++  const lines = [];
++  const name = String(form.fullName || '').trim();
++  if (name) lines.push(`Full name: ${name}`);
++  const email = String(form.email || '').trim();
++  if (email) lines.push(`Email: ${email}`);
++  const phone = String(form.phoneNumber || '').trim();
++  if (phone) lines.push(`Phone number: ${phone}`);
++  return lines;
 +}
 +
  export default function RegisterScreen({ route }) {
    const { T, isDark } = useTheme();
    const styles = useStyles();
-   const { register, needsVerification, clearNeedsVerification, adoptWebSession } = useAuth();
-   const nav = useNav();
-   const insets = useSafeAreaInsets();
-+  const { notice, speak, welcomeAfterRegistration } = useAI();
+@@ -143,6 +172,7 @@ export default function RegisterScreen({ route }) {
+   const [activeField, setActiveField] = useState(null);
+   const [passwordOpen, setPasswordOpen] = useState(false);
+   const [agreementOpen, setAgreementOpen] = useState(false);
++  const [confirmOpen, setConfirmOpen] = useState(false);
+   const [submitted, setSubmitted] = useState(false);
+   const [suggestion, setSuggestion] = useState('');
+   const [copied, setCopied] = useState(false);
+@@ -218,6 +248,25 @@ export default function RegisterScreen({ route }) {
+     copySuggestion(code);
+   }, [set, copySuggestion]);
  
-   const [form, setForm] = useState({
--    firstName: '',
--    lastName: '',
-+    fullName: '',
-     email: '',
-+    phoneNumber: '',
-     password: '',
--    confirm: '',
-   });
-   const [agreed, setAgreed] = useState(false);
-   const [busy, setBusy] = useState(false);
-@@ -86,15 +139,22 @@ export default function RegisterScreen({ route }) {
-   const [sentTo, setSentTo] = useState(null);
-   const [resendBusy, setResendBusy] = useState(false);
-   const [resendNote, setResendNote] = useState('');
--  // Voice-first helpers: what the assistant filled, and the password we
--  // generated locally (shown + spoken on demand, never sent to the AI).
-   const [aiNote, setAiNote] = useState('');
--  const [spokenPassword, setSpokenPassword] = useState('');
-+  const [activeField, setActiveField] = useState(null);
-+  const [passwordOpen, setPasswordOpen] = useState(false);
-+  const [agreementOpen, setAgreementOpen] = useState(false);
-+  const [submitted, setSubmitted] = useState(false);
-+  const [suggestion, setSuggestion] = useState('');
-+  const [copied, setCopied] = useState(false);
++  // ─── Final read-back ────────────────────────────────────────────────────────
++  // The phone owns the typed values, so it reads them back itself. Only the
++  // fields the user actually provided appear; the password never does. The
++  // line is queued behind the model's spoken reply, so the two voices never
++  // interrupt each other.
++  const recapSpeech = useCallback(() => {
++    const lines = recapLines(form);
++    const body = lines.length
++      ? `Here is what you gave me. ${lines.join('. ')}.`
++      : 'Here is what you gave me.';
++    return `${body} Should I create your account now, or would you like to change something?`;
++  }, [form]);
 +
-   const { patch: aiPatch, ack: ackAiPatch } = useAIPatch('register');
--  const firstRef = useRef(null);
--  const lastRef = useRef(null);
-+  const fullNameRef = useRef(null);
-   const emailRef = useRef(null);
--  const fieldToFocus = aiPatch?.field || aiPatch?.fields?.field || null;
-+  const phoneRef = useRef(null);
-+  const passwordRef = useRef(null);
-+  const passwordValueRef = useRef('');
-+  passwordValueRef.current = form.password;
-+  const submitLockRef = useRef(false);
- 
-   // Referral: the code arrives either in the route params (a deep link like
-   // …/#/register?ref=CODE) or from the persisted pending code. When it comes
-@@ -133,17 +193,49 @@ export default function RegisterScreen({ route }) {
-     setRefFromLink(false);
-   }, []);
- 
--  // ─── Assistant pre-fill (voice-guided sign-up) ──────────────────────────────
--  // The assistant may fill name, email and referral only. Passwords and the
--  // terms checkbox are never part of the patch and are never touched here.
-+  // The password modal opens with the keyboard already focused on its box. A
-+  // fresh readable suggestion appears only when there is no password yet, so
-+  // reopening to check a saved code does not show a different one.
-+  useEffect(() => {
-+    if (!passwordOpen) return undefined;
-+    if (!passwordValueRef.current) setSuggestion(makePasswordSuggestion());
-+    setCopied(false);
-+    const timer = setTimeout(() => passwordRef.current?.focus?.(), 220);
-+    return () => clearTimeout(timer);
-+  }, [passwordOpen]);
++  const openConfirm = useCallback(() => {
++    setConfirmOpen(true);
++    setAiNote('Check your details, then tap Create my account.');
++    queueSpeech(recapSpeech());
++  }, [recapSpeech]);
 +
-+  const copySuggestion = useCallback(async (code) => {
-+    try {
-+      await Clipboard.setStringAsync(code);
-+      setCopied(true);
-+    } catch (_e) {
-+      setCopied(false);
-+    }
-+  }, []);
-+
-+  const useSuggestion = useCallback((code) => {
-+    set('password', code);
-+    copySuggestion(code);
-+  }, [set, copySuggestion]);
-+
-+  // ─── Assistant patch and step focus ─────────────────────────────────────────
-+  // The assistant may fill the name, email and phone. It names the next step,
-+  // and the screen opens the secure password box or the agreement card. It
-+  // never supplies, sees or receives the password value.
-   useEffect(() => {
-     if (!aiPatch) return;
-     const f = aiPatch.fields || {};
-+    const patchedName = typeof f.fullName === 'string' && f.fullName.trim()
-+      ? f.fullName.trim()
-+      : [f.firstName, f.lastName]
-+        .filter(v => typeof v === 'string' && v.trim())
-+        .join(' ')
-+        .trim();
-     setForm(prev => ({
-       ...prev,
--      ...(f.firstName ? { firstName: String(f.firstName) } : {}),
--      ...(f.lastName ? { lastName: String(f.lastName) } : {}),
-+      ...(patchedName ? { fullName: patchedName } : {}),
-       ...(f.email ? { email: String(f.email) } : {}),
-+      ...(f.phoneNumber ? { phoneNumber: normalizePhoneInput(f.phoneNumber) } : {}),
-     }));
-     if (f.referrer) {
-       setReferrer(String(f.referrer));
-@@ -151,109 +243,172 @@ export default function RegisterScreen({ route }) {
-       setRefFromLink(false);
+   // ─── Assistant patch and step focus ─────────────────────────────────────────
+   // The assistant may fill the name, email and phone. It names the next step,
+   // and the screen opens the secure password box or the agreement card. It
+@@ -247,19 +296,38 @@ export default function RegisterScreen({ route }) {
+     const focus = aiPatch.focus || aiPatch.field || f.field || null;
+     if (aiPatch.say) setAiNote(aiPatch.say);
+     else if (focus === 'password') {
+-      setAiNote('Create your secret code in the box. Do not share it with anyone.');
++      setAiNote(PASSWORD_WHAT);
+     } else if (focus === 'agreement') {
+-      setAiNote('Read the agreement and tick the box if you accept.');
++      setAiNote(AGREEMENT_WHAT);
++    } else if (focus === 'confirm') {
++      setAiNote('Check your details, then tap Create my account.');
      }
-     setError('');
--    setAiNote(aiPatch.say || 'I filled in your details. Choose a password, accept the terms, then tap Create account.');
-+
-+    const focus = aiPatch.focus || aiPatch.field || f.field || null;
-+    if (aiPatch.say) setAiNote(aiPatch.say);
-+    else if (focus === 'password') {
-+      setAiNote('Create your secret code in the box. Do not share it with anyone.');
+ 
+-    if (focus === 'password') setPasswordOpen(true);
+-    else if (focus === 'agreement') setAgreementOpen(true);
+-    else if (focus === 'fullName' || focus === 'firstName' || focus === 'lastName') fullNameRef.current?.focus?.();
++    if (focus === 'password') {
++      setPasswordOpen(true);
++      // The model has already spoken its own sentence; queue this explanation
++      // behind it instead of cutting it off.
++      queueSpeech(PASSWORD_WHAT);
 +    } else if (focus === 'agreement') {
-+      setAiNote('Read the agreement and tick the box if you accept.');
-+    }
-+
-+    if (focus === 'password') setPasswordOpen(true);
-+    else if (focus === 'agreement') setAgreementOpen(true);
-+    else if (focus === 'fullName' || focus === 'firstName' || focus === 'lastName') fullNameRef.current?.focus?.();
-+    else if (focus === 'email') emailRef.current?.focus?.();
-+    else if (focus === 'phone' || focus === 'phoneNumber') phoneRef.current?.focus?.();
-+
++      setAgreementOpen(true);
++      queueSpeech(AGREEMENT_WHAT);
++    } else if (focus === 'confirm') {
++      setConfirmOpen(true);
++      if (confirmOpen) {
++        // The card is already on screen, so the user only needs the tap. Do
++        // not read the whole recap a second time.
++        setAiNote('Tap Create my account when you are ready.');
++        queueSpeech('Tap Create my account when you are ready.');
++      } else {
++        setAiNote('Check your details, then tap Create my account.');
++        queueSpeech(recapSpeech());
++      }
++    } else if (focus === 'fullName' || focus === 'firstName' || focus === 'lastName') fullNameRef.current?.focus?.();
+     else if (focus === 'email') emailRef.current?.focus?.();
+     else if (focus === 'phone' || focus === 'phoneNumber') phoneRef.current?.focus?.();
+ 
      ackAiPatch();
--    const target = aiPatch.field || aiPatch.fields?.field || null;
--    if (target === 'firstName') firstRef.current?.focus?.();
--    else if (target === 'lastName') lastRef.current?.focus?.();
--    else if (target === 'email') emailRef.current?.focus?.();
-   }, [aiPatch, ackAiPatch]);
+-  }, [aiPatch, ackAiPatch]);
++  }, [aiPatch, ackAiPatch, recapSpeech, confirmOpen]);
  
--  // Read the remaining manual steps aloud, in the same order as the form.
--  const readSignupSteps = useCallback(() => {
--    try {
--      Speech.stop();
--      Speech.speak(
--        'This is the create account screen. Your name and email may already be filled. '
--        + 'If a box is empty, tap it and type with the keyboard. '
--        + 'To make a password, tap the button that says make a password for me. '
--        + 'Then tick the terms box, and tap Create account. '
--        + 'We will email you a link. Open that email and tap the link to finish.',
--        { rate: 0.95 }
--      );
--    } catch (_e) { /* speech is optional */ }
--  }, []);
-+  // Report only safe flags. The password is reduced to a single boolean and is
-+  // never part of the snapshot the assistant receives.
-+  const hasPassword = form.password.length > 0;
-+  const passwordSet = hasPassword && !passwordError(form.password);
-+  useEffect(() => {
-+    const parts = splitFullName(form.fullName);
-+    reportRegistrationSnapshot({
-+      fullName: !!(parts.firstName && parts.lastName),
-+      firstName: !!parts.firstName,
-+      lastName: !!parts.lastName,
-+      email: !!form.email.trim(),
-+      phone: !!form.phoneNumber.trim(),
-+      emailDeclined: !form.email.trim() && !!form.phoneNumber.trim(),
-+      password: passwordSet,
-+      agreed,
-+      submitting: busy,
-+      submitted,
-+      failed: !!error,
-+      activeField: activeField || '',
-+      stage: agreed ? 'ready' : (passwordSet ? 'agreement' : 'collecting'),
-+    });
-+  }, [
-+    form.fullName, form.email, form.phoneNumber,
-+    passwordSet, agreed, busy, submitted, error, activeField,
-+  ]);
+   // Report only safe flags. The password is reduced to a single boolean and is
+   // never part of the snapshot the assistant receives.
+@@ -295,9 +363,9 @@ export default function RegisterScreen({ route }) {
+   const readSignupSteps = useCallback(() => {
+     speak(
+       'This is the create account screen. Tell me your full name. '
+-      + 'Then I will ask if you have an email. If you do not, a phone number is fine. '
++      + 'I will say it back to you, then ask if you have an email. If you do not, a phone number is fine. '
+       + 'Then a small box opens for your secret code. Do not share that code with anyone. '
+-      + 'Last, read the agreement and tick the box. I will create your account and take you to Market.'
++      + 'Last, read the agreement and tick the box. I will read your details back, and only your tap on Create my account will create the account.'
+     );
+   }, [speak]);
  
--  const speakPassword = useCallback(value => {
--    const pw = String(value || spokenPassword || '');
--    if (!pw) return;
--    try {
--      Speech.stop();
--      // Spell it out: letters and digits read one at a time are far easier to
--      // repeat back than a whole word or a number like 4821.
--      const spoken = pw.split('').map(ch => (ch === '-' ? ',' : ch)).join(' ');
--      Speech.speak(
--        `Your password is ${spoken}. Say it to yourself a few times, or write it down somewhere safe.`,
--        { rate: 0.9 }
--      );
--    } catch (_e) { /* speech is optional */ }
--  }, [spokenPassword]);
--
--  const makePassword = useCallback(() => {
--    const pick = () => PASSWORD_WORDS[Math.floor(Math.random() * PASSWORD_WORDS.length)];
--    const next = `${pick()}-${pick()}-${1000 + Math.floor(Math.random() * 9000)}`;
--    setForm(f => ({ ...f, password: next, confirm: next }));
--    setErrs(e => ({ ...e, password: '', confirm: '' }));
--    setSpokenPassword(next);
--    speakPassword(next);
--  }, [speakPassword]);
--
--  // Never let TTS keep talking after the user leaves this screen.
--  useEffect(() => () => {
--    try { Speech.stop(); } catch (_e) { /* speech is optional */ }
--  }, []);
-+  // Leaving this screen ends its form state; a later turn on another screen
-+  // must not inherit these flags.
-+  useEffect(() => () => { takeRegistrationSnapshot(); }, []);
+@@ -333,8 +401,9 @@ export default function RegisterScreen({ route }) {
  
--  const validate = useCallback(() => {
-+  // Read the remaining steps aloud, in the same order as the form.
-+  const readSignupSteps = useCallback(() => {
-+    speak(
-+      'This is the create account screen. Tell me your full name. '
-+      + 'Then I will ask if you have an email. If you do not, a phone number is fine. '
-+      + 'Then a small box opens for your secret code. Do not share that code with anyone. '
-+      + 'Last, read the agreement and tick the box. I will create your account and take you to Market.'
-+    );
-+  }, [speak]);
-+
-+  const validate = useCallback(({ confirmedAgreement = false } = {}) => {
-     const e = {};
--    if (!form.firstName.trim()) e.firstName = 'Required.';
--    if (!form.lastName.trim()) e.lastName = 'Required.';
--    if (!form.email.trim()) e.email = 'Enter your email address.';
--    else if (!EMAIL_RE.test(form.email.trim())) e.email = 'That does not look like a valid email.';
--    if (!form.password) e.password = 'Choose a password.';
--    else if (form.password.length < 8) e.password = 'Use at least 8 characters.';
--    else if (!/[A-Za-z]/.test(form.password) || !/\d/.test(form.password)) {
--      e.password = 'Include at least one letter and one number.';
-+    if (!form.fullName.trim()) e.fullName = 'Required.';
-+    else if (!splitFullName(form.fullName).lastName) e.fullName = 'Enter your first and last name.';
-+
-+    if (!form.email.trim() && !form.phoneNumber.trim()) {
-+      e.email = 'Enter an email address or a phone number.';
-+    } else if (form.email.trim() && !EMAIL_RE.test(form.email.trim())) {
-+      e.email = 'That does not look like a valid email.';
-+    }
-+    if (form.phoneNumber.trim() && !PHONE_RE.test(form.phoneNumber.trim())) {
-+      e.phoneNumber = 'Enter an 11-digit phone number.';
-     }
--    if (form.confirm !== form.password) e.confirm = 'Passwords do not match.';
--    if (!agreed) e.agreed = 'Please accept the terms to continue.';
-+
-+    const pwError = passwordError(form.password);
-+    if (pwError) e.password = pwError;
-+
-+    if (!agreed && !confirmedAgreement) e.agreed = 'Please accept the terms to continue.';
-     setErrs(e);
-     return Object.keys(e).length === 0;
-   }, [form, agreed]);
- 
--  const submit = useCallback(async () => {
-+  const submit = useCallback(async ({ confirmedAgreement = false } = {}) => {
-     setError('');
--    if (!validate()) return;
-+    if (submitLockRef.current || busy) return;
-+    if (!validate({ confirmedAgreement })) {
-+      setAgreementOpen(false);
-+      return;
-+    }
-+
-+    submitLockRef.current = true;
-+    // Registration signs the user in on purpose. The generic resume turn is
-+    // skipped and the assistant writes the welcome instead.
-+    welcomeAfterRegistration();
+     submitLockRef.current = true;
+     // Registration signs the user in on purpose. The generic resume turn is
+-    // skipped and the assistant writes the welcome instead.
+-    welcomeAfterRegistration();
++    // skipped and the assistant writes the welcome instead, using this exact
++    // name so it never has to guess.
++    welcomeAfterRegistration(form.fullName.trim());
      setBusy(true);
-+
+ 
      const refCode = referrer.trim();
-     try {
-+      const name = splitFullName(form.fullName);
-       const result = await register({
--        firstName: form.firstName.trim(),
--        lastName: form.lastName.trim(),
--        email: form.email.trim(),
-+        firstName: name.firstName,
-+        lastName: name.lastName,
-+        ...(form.email.trim() ? { email: form.email.trim().toLowerCase() } : {}),
-+        ...(form.phoneNumber.trim() ? { phoneNumber: form.phoneNumber.trim() } : {}),
-         password: form.password,
-         ...(refCode ? { referrer: refCode } : {}),
-       });
-       AsyncStorage.removeItem(PENDING_REF_KEY).catch(() => {});
--      setSentTo(result.email || form.email.trim());
-       success();
--      if (result.verificationSent === false) {
--        setResendNote('The account was created, but the email did not send. Tap Resend email below.');
--        reportAuthOutcome('registration_email_failed');
-+      // The form state ends here; the welcome turn sends its own event.
-+      takeRegistrationSnapshot();
-+      setSubmitted(true);
-+
-+      if (!result.authenticated && !result.token) {
-+        // Legacy account that still needs email verification.
-+        welcomeAfterRegistration(false);
-+        setSentTo(result.email || form.email.trim());
-+        return;
-       }
-+
-+      nav.resetTo('market');
-+      // The assistant speaks the model-written welcome after the rebind.
-     } catch (e) {
--      if (e?.status === 409 || /already/i.test(e?.message || '')) {
--        setError('An account already uses that email. Try signing in instead.');
--        reportAuthOutcome('email_exists');
--      } else if (e?.isNetwork) {
-+      submitLockRef.current = false;
-+      // Nothing was signed in, so let a later real sign-in resume normally.
-+      welcomeAfterRegistration(false);
-+      if (e?.isNetwork) {
+@@ -367,16 +436,42 @@ export default function RegisterScreen({ route }) {
+       submitLockRef.current = false;
+       // Nothing was signed in, so let a later real sign-in resume normally.
+       welcomeAfterRegistration(false);
+-      if (e?.isNetwork) {
++      // The server sends a fixed code. Plain words and the exact field, never
++      // a raw technical error.
++      const code = String(e?.code || '').toLowerCase();
++      const field = String(e?.data?.field || '');
++      if (e?.isNetwork || code === 'network_unavailable') {
          setError('No internet connection. Check your network and try again.');
          reportAuthOutcome('network_unavailable');
-+      } else if (/phone number already exists/i.test(e?.message || '')) {
-+        setError('An account already uses that phone number. Try signing in instead.');
-+      } else if (e?.status === 409 || /email already exists|already uses that email/i.test(e?.message || '')) {
-+        setError('An account already uses that email. Try signing in instead.');
-+        reportAuthOutcome('email_exists');
+-      } else if (/phone number already exists/i.test(e?.message || '')) {
++      } else if (code === 'phone_exists' || /phone number already exists/i.test(e?.message || '')) {
+         setError('An account already uses that phone number. Try signing in instead.');
+-      } else if (e?.status === 409 || /email already exists|already uses that email/i.test(e?.message || '')) {
++        reportAuthOutcome('phone_exists');
++        phoneRef.current?.focus?.();
++      } else if (code === 'email_exists' || e?.status === 409 || /email already exists|already uses that email/i.test(e?.message || '')) {
+         setError('An account already uses that email. Try signing in instead.');
+         reportAuthOutcome('email_exists');
++        emailRef.current?.focus?.();
++      } else if (code === 'invalid_phone' || field === 'phoneNumber') {
++        setError('That phone number is not complete. Enter the 11 digits, starting with zero.');
++        reportAuthOutcome('invalid_phone');
++        phoneRef.current?.focus?.();
++      } else if (code === 'invalid_email' || field === 'email') {
++        setError('That email does not look complete. Check it and try again.');
++        reportAuthOutcome('email_invalid');
++        emailRef.current?.focus?.();
++      } else if (code === 'weak_password' || field === 'password') {
++        setError('That secret code is too weak. Use at least 8 characters with a letter and a number.');
++        reportAuthOutcome('weak_password');
++        setPasswordOpen(true);
++      } else if (code === 'missing_identifier') {
++        setError('I need an email address or a phone number to create the account.');
++        reportAuthOutcome('missing_identifier');
++      } else if (code === 'registration_invalid') {
++        setError('One detail is not right yet. Check the form and try again.');
++        reportAuthOutcome('registration_invalid');
        } else {
          setError(e?.message || 'Could not create your account. Please try again.');
++        reportAuthOutcome('registration_failed');
        }
      } finally {
        setBusy(false);
-     }
--  }, [form, agreed, validate, register, referrer]);
-+  }, [
-+    busy, validate, register, form, referrer, nav, welcomeAfterRegistration,
-+  ]);
-+
-+  const onAgreementAccepted = useCallback(() => {
-+    setAgreed(true);
-+    setErrs(e => ({ ...e, agreed: '' }));
-+    setAgreementOpen(false);
-+
-+    const complete = !!(
-+      splitFullName(form.fullName).lastName
-+      && (form.email.trim() || form.phoneNumber.trim())
-+      && passwordSet
-+    );
-+    if (!complete) return;
-+
-+    // Only now, with everything present, does the assistant announce creation.
-+    notice('I am creating your account now.', { speak: true });
-+    submit({ confirmedAgreement: true });
-+  }, [form, passwordSet, notice, submit]);
-+
-+  const toggleAgreement = useCallback(() => {
-+    if (agreed) {
-+      setAgreed(false);
+@@ -385,6 +480,9 @@ export default function RegisterScreen({ route }) {
+     busy, validate, register, form, referrer, nav, welcomeAfterRegistration,
+   ]);
+ 
++  // ─── Final read-back ────────────────────────────────────────────────────────
++  // recapSpeech and openConfirm are defined above the assistant-patch effect,
++  // because the server can ask the phone to open the final card in a turn.
+   const onAgreementAccepted = useCallback(() => {
+     setAgreed(true);
+     setErrs(e => ({ ...e, agreed: '' }));
+@@ -395,20 +493,54 @@ export default function RegisterScreen({ route }) {
+       && (form.email.trim() || form.phoneNumber.trim())
+       && passwordSet
+     );
+-    if (!complete) return;
++    if (!complete) {
++      setAiNote('I still need your full name, an email or phone number, and your secret code before we can create the account.');
 +      return;
 +    }
-+    onAgreementAccepted();
-+  }, [agreed, onAgreementAccepted]);
+ 
+-    // Only now, with everything present, does the assistant announce creation.
+-    notice('I am creating your account now.', { speak: true });
+-    submit({ confirmedAgreement: true });
+-  }, [form, passwordSet, notice, submit]);
++    // The account is NOT created here. The read-back and the final card come
++    // first; only the card's button submits.
++    openConfirm();
++  }, [form, passwordSet, openConfirm]);
+ 
+-  const toggleAgreement = useCallback(() => {
+-    if (agreed) {
+-      setAgreed(false);
++  const requestConfirm = useCallback(() => {
++    if (validate()) {
++      openConfirm();
++      return;
++    }
++    // Never leave the user with only a red line: open or focus the exact box
++    // that still needs attention.
++    const parts = splitFullName(form.fullName);
++    if (!form.fullName.trim() || !parts.lastName) {
++      setAiNote('I need your full name, first and last.');
++      fullNameRef.current?.focus?.();
++      return;
++    }
++    if (!form.email.trim() && !form.phoneNumber.trim()) {
++      setAiNote('I need an email address or a phone number.');
++      emailRef.current?.focus?.();
++      return;
++    }
++    if (form.email.trim() && !EMAIL_RE.test(form.email.trim())) {
++      setAiNote('That email does not look complete. Check it and try again.');
++      emailRef.current?.focus?.();
++      return;
++    }
++    if (form.phoneNumber.trim() && !PHONE_RE.test(form.phoneNumber.trim())) {
++      setAiNote('That phone number is not complete. Enter the 11 digits, starting with zero.');
++      phoneRef.current?.focus?.();
++      return;
++    }
++    if (passwordError(form.password)) {
++      setPasswordOpen(true);
++      queueSpeech(PASSWORD_WHAT);
+       return;
+     }
+-    onAgreementAccepted();
+-  }, [agreed, onAgreementAccepted]);
++    if (!agreed) {
++      setAgreementOpen(true);
++      queueSpeech(AGREEMENT_WHAT);
++    }
++  }, [validate, form, agreed, openConfirm]);
  
    const googleSignUp = useCallback(async () => {
      if (googleBusy) return;
-@@ -268,7 +423,7 @@ export default function RegisterScreen({ route }) {
-       }
- 
-       const { status, params } = await runGoogleAuth(authOptions);
--      
-+
-       if (status === 'cancelled') return;
-       if (status === 'setup') {
-         nav.push('completeProfile', {
-@@ -284,7 +439,8 @@ export default function RegisterScreen({ route }) {
-         setError('Google sign-up did not complete. Please try again.');
-         return;
-       }
--      
-+
-+      welcomeAfterRegistration();
-       await adoptWebSession({
-         authToken: params.token,
-         userId: params.userId,
-@@ -296,8 +452,9 @@ export default function RegisterScreen({ route }) {
-       success();
-       nav.resetTo('market');
-     } catch (e) {
-+      welcomeAfterRegistration(false);
-       const message = e?.message || e?.toString() || '';
--      
-+
-       // FIX: Expose raw errors here so if it's still 404ing, you see exactly why.
-       if (message.includes('DEVELOPER_ERROR') || message.includes('10')) {
-         setError('Google Error: SHA-1 fingerprint mismatch (DEVELOPER_ERROR). Check Firebase console.');
-@@ -314,7 +471,7 @@ export default function RegisterScreen({ route }) {
-     } finally {
-       setGoogleBusy(false);
-     }
--  }, [googleBusy, adoptWebSession, nav, referrer]);
-+  }, [googleBusy, adoptWebSession, nav, referrer, welcomeAfterRegistration]);
- 
-   const resend = useCallback(async () => {
-     setResendNote('');
-@@ -333,7 +490,7 @@ export default function RegisterScreen({ route }) {
-     }
-   }, [sentTo, form.email]);
- 
--  // ─── Check your inbox ───────────────────────────────────────────────────────
-+  // ─── Legacy "check your inbox" (only for old unverified accounts) ───────────
-   if (sentTo || needsVerification) {
-     const address = sentTo || form.email.trim();
-     return (
-@@ -362,7 +519,7 @@ export default function RegisterScreen({ route }) {
-           <Body style={styles.doneBody}>
-             We sent a secure verification link to{'\n'}
-             <Body style={styles.doneEmail}>{address}</Body>
--            {'\n'}Open the link to activate your banking & trade profile.
-+            {'\n'}Open the link to activate your account.
-           </Body>
- 
-           {!!resendNote && (
-@@ -466,48 +623,34 @@ export default function RegisterScreen({ route }) {
-           )}
- 
-           <View style={styles.formBox}>
--            <View style={styles.rowSplit}>
--              <View style={styles.half}>
--                <Text style={styles.fieldLabel}>First name</Text>
--                <View style={[styles.fieldInput, errs.firstName && styles.fieldInputError]}>
--                  <Ionicons name="person-outline" size={18} color={T.muted} style={styles.fieldIcon} />
--                  <TextInput
--                    value={form.firstName}
--                    onChangeText={t => set('firstName', t)}
--                    placeholder="Ola"
--                    placeholderTextColor={T.muted}
--                    autoCapitalize="words"
--                    style={styles.input}
--                  />
--                </View>
--                {!!errs.firstName && <Text style={styles.fieldError}>{errs.firstName}</Text>}
--              </View>
--
--              <View style={styles.half}>
--                <Text style={styles.fieldLabel}>Last name</Text>
--                <View style={[styles.fieldInput, errs.lastName && styles.fieldInputError]}>
--                  <Ionicons name="person-outline" size={18} color={T.muted} style={styles.fieldIcon} />
--                  <TextInput
--                    value={form.lastName}
--                    onChangeText={t => set('lastName', t)}
--                    placeholder="Damilare"
--                    placeholderTextColor={T.muted}
--                    autoCapitalize="words"
--                    style={styles.input}
--                  />
--                </View>
--                {!!errs.lastName && <Text style={styles.fieldError}>{errs.lastName}</Text>}
-+            <View>
-+              <Text style={styles.fieldLabel}>Full name</Text>
-+              <View style={[styles.fieldInput, errs.fullName && styles.fieldInputError]}>
-+                <Ionicons name="person-outline" size={18} color={T.muted} style={styles.fieldIcon} />
-+                <TextInput
-+                  ref={fullNameRef}
-+                  value={form.fullName}
-+                  onChangeText={t => set('fullName', t)}
-+                  onFocus={() => setActiveField('fullName')}
-+                  placeholder="Ola Damilare"
-+                  placeholderTextColor={T.muted}
-+                  autoCapitalize="words"
-+                  style={styles.input}
-+                />
-               </View>
-+              {!!errs.fullName && <Text style={styles.fieldError}>{errs.fullName}</Text>}
-             </View>
- 
+@@ -682,7 +814,7 @@ export default function RegisterScreen({ route }) {
              <View>
--              <Text style={styles.fieldLabel}>Email</Text>
-+              <Text style={styles.fieldLabel}>Email (optional)</Text>
-               <View style={[styles.fieldInput, errs.email && styles.fieldInputError]}>
-                 <Ionicons name="mail-outline" size={18} color={T.muted} style={styles.fieldIcon} />
-                 <TextInput
-+                  ref={emailRef}
-                   value={form.email}
-                   onChangeText={t => set('email', t)}
--                  placeholder="oladami@example.com"
-+                  onFocus={() => setActiveField('email')}
-+                  placeholder="oladami@gmail.com"
-                   placeholderTextColor={T.muted}
-                   autoCapitalize="none"
-                   keyboardType="email-address"
-@@ -518,67 +661,46 @@ export default function RegisterScreen({ route }) {
-             </View>
- 
-             <View>
--              <Text style={styles.fieldLabel}>Password</Text>
--              <View style={[styles.fieldInput, errs.password && styles.fieldInputError]}>
--                <Ionicons name="lock-closed-outline" size={18} color={T.muted} style={styles.fieldIcon} />
-+              <Text style={styles.fieldLabel}>Phone number (use this if you have no email)</Text>
-+              <View style={[styles.fieldInput, errs.phoneNumber && styles.fieldInputError]}>
-+                <Ionicons name="call-outline" size={18} color={T.muted} style={styles.fieldIcon} />
-                 <TextInput
--                  value={form.password}
--                  onChangeText={t => set('password', t)}
--                  placeholder="At least 8 characters"
-+                  ref={phoneRef}
-+                  value={form.phoneNumber}
-+                  onChangeText={t => set('phoneNumber', normalizePhoneInput(t))}
-+                  onFocus={() => setActiveField('phoneNumber')}
-+                  placeholder="08012345678"
-                   placeholderTextColor={T.muted}
--                  secureTextEntry
-+                  keyboardType="phone-pad"
-+                  maxLength={11}
-                   style={styles.input}
-                 />
-               </View>
--              {!!errs.password && <Text style={styles.fieldError}>{errs.password}</Text>}
--            </View>
--
--            <View>
--              <Text style={styles.fieldLabel}>Confirm password</Text>
--              <View style={[styles.fieldInput, errs.confirm && styles.fieldInputError]}>
--                <Ionicons name="shield-outline" size={18} color={T.muted} style={styles.fieldIcon} />
--                <TextInput
--                  value={form.confirm}
--                  onChangeText={t => set('confirm', t)}
--                  placeholder="Re-enter password"
--                  placeholderTextColor={T.muted}
--                  secureTextEntry
--                  style={styles.input}
--                />
--              </View>
--              {!!errs.confirm && <Text style={styles.fieldError}>{errs.confirm}</Text>}
-+              {!!errs.phoneNumber && <Text style={styles.fieldError}>{errs.phoneNumber}</Text>}
-             </View>
- 
-             <View>
-+              <Text style={styles.fieldLabel}>Password</Text>
+               <Text style={styles.fieldLabel}>Password</Text>
                <Pressable
--                onPress={makePassword}
-+                onPress={() => setPasswordOpen(true)}
+-                onPress={() => setPasswordOpen(true)}
++                onPress={() => { setPasswordOpen(true); queueSpeech(PASSWORD_WHAT); }}
                  accessibilityRole="button"
--                accessibilityLabel="Make a password for me and read it aloud"
--                style={({ pressed }) => [styles.passwordHelp, pressed && { opacity: 0.8 }]}
-+                accessibilityLabel={passwordSet ? 'Change your password' : 'Create your password'}
-+                style={({ pressed }) => [
-+                  styles.fieldInput,
-+                  errs.password && styles.fieldInputError,
-+                  pressed && { opacity: 0.8 },
-+                ]}
-               >
--                <Ionicons name="key-outline" size={17} color={T.emerald} />
--                <Text style={styles.passwordHelpText}>Make a password for me</Text>
--                <Ionicons name="volume-high-outline" size={16} color={T.emerald} />
-+                <Ionicons name="lock-closed-outline" size={18} color={T.muted} style={styles.fieldIcon} />
-+                <Text style={[styles.input, { paddingVertical: 14, color: passwordSet ? T.ink : T.muted }]}>
-+                  {passwordSet ? 'Password saved on this phone' : 'Tap to create your secret code'}
-+                </Text>
-+                <Ionicons name="chevron-forward" size={16} color={T.muted} />
-               </Pressable>
--              {!!spokenPassword && (
--                <View style={styles.spokenPwBox}>
--                  <Text style={styles.spokenPwLabel}>Your password</Text>
--                  <Text selectable style={styles.spokenPwValue}>{spokenPassword}</Text>
--                  <Pressable
--                    onPress={() => speakPassword(spokenPassword)}
--                    hitSlop={8}
--                    accessibilityRole="button"
--                    accessibilityLabel="Read the password aloud again"
--                    style={({ pressed }) => [styles.spokenPwAgain, pressed && { opacity: 0.7 }]}
--                  >
--                    <Ionicons name="volume-high" size={14} color={T.emerald} />
--                    <Text style={styles.spokenPwAgainText}>Hear it again</Text>
--                  </Pressable>
--                  <Text style={styles.spokenPwHint}>
--                    Play it only when you are alone. It stays on this phone.
--                  </Text>
--                </View>
--              )}
-+              {!!errs.password && <Text style={styles.fieldError}>{errs.password}</Text>}
-+              <Text style={styles.fieldError}>
-+                Do not share this code with anyone, not even someone who says they are from Salmart.
-+              </Text>
-             </View>
- 
-             <View style={styles.refSection}>
-@@ -628,10 +750,7 @@ export default function RegisterScreen({ route }) {
+                 accessibilityLabel={passwordSet ? 'Change your password' : 'Create your password'}
+                 style={({ pressed }) => [
+@@ -750,7 +882,7 @@ export default function RegisterScreen({ route }) {
            </View>
  
            <Pressable
--            onPress={() => {
--              setAgreed(a => !a);
--              setErrs(e => ({ ...e, agreed: '' }));
--            }}
-+            onPress={() => setAgreementOpen(true)}
+-            onPress={() => setAgreementOpen(true)}
++            onPress={() => { setAgreementOpen(true); queueSpeech(AGREEMENT_WHAT); }}
              hitSlop={10}
              accessibilityRole="checkbox"
              accessibilityState={{ checked: agreed }}
-@@ -648,7 +767,7 @@ export default function RegisterScreen({ route }) {
+@@ -767,7 +899,7 @@ export default function RegisterScreen({ route }) {
            {!!errs.agreed && <Text style={styles.errorTextInline}>{errs.agreed}</Text>}
  
            <Pressable
--            onPress={busy ? undefined : submit}
-+            onPress={busy ? undefined : () => submit()}
+-            onPress={busy ? undefined : () => submit()}
++            onPress={busy ? undefined : requestConfirm}
              disabled={busy}
              accessibilityRole="button"
              style={({ pressed }) => [styles.primaryBtn, busy && { opacity: 0.72 }, pressed && !busy && { opacity: 0.96 }]}
-@@ -693,6 +812,187 @@ export default function RegisterScreen({ route }) {
-           </View>
-         </ScrollView>
-       </KeyboardAvoidingView>
-+
-+      {/* Secure password box. The value stays in this component and goes only
-+          to POST /register. */}
-+      <Modal
-+        visible={passwordOpen}
-+        transparent
-+        animationType="fade"
-+        onRequestClose={() => setPasswordOpen(false)}
-+      >
-+        <KeyboardAvoidingView
-+          style={styles.modalBackdrop}
-+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-+        >
-+          <Pressable style={styles.modalBackdrop} onPress={Keyboard.dismiss}>
-+            <Pressable style={styles.modalCard} onPress={() => {}}>
-+              <ScrollView
-+                showsVerticalScrollIndicator={false}
-+                keyboardShouldPersistTaps="handled"
-+                contentContainerStyle={styles.modalScroll}
-+              >
-+                <View style={styles.modalTopRow}>
-+                  <View style={[styles.modalIconWrap, { marginBottom: 0 }]}>
-+                    <Ionicons name="lock-closed" size={22} color={T.emerald} />
-+                  </View>
-+                  <Pressable
-+                    onPress={() => speak(PASSWORD_HELP_LINE)}
-+                    accessibilityRole="button"
-+                    accessibilityLabel="Hear how to create your code"
-+                    style={({ pressed }) => [styles.modalHelpBtn, pressed && { opacity: 0.85 }]}
-+                  >
-+                    <Ionicons name="volume-high-outline" size={16} color={T.emerald} />
-+                    <Text style={styles.modalHelpText}>Hear how</Text>
-+                  </Pressable>
-+                </View>
-+                <Text style={styles.modalTitle}>Create your secret code</Text>
-+                <Text style={styles.modalBody}>
-+                  Type a code with at least 8 characters, including a letter and a number. Do not
-+                  share it with anyone.
-+                </Text>
-+                <TextInput
-+                  ref={passwordRef}
-+                  value={form.password}
-+                  onChangeText={t => {
-+                    set('password', t);
-+                    setErrs(e => ({ ...e, password: '' }));
-+                  }}
-+                  onFocus={() => setActiveField('password')}
-+                  placeholder="At least 8 characters"
-+                  placeholderTextColor={T.muted}
-+                  secureTextEntry
-+                  autoFocus
-+                  autoCapitalize="none"
-+                  autoCorrect={false}
-+                  style={styles.modalInput}
-+                />
-+                {!!errs.password && <Text style={styles.fieldError}>{errs.password}</Text>}
-+                <Text style={styles.modalHint}>At least 8 characters, one letter and one number.</Text>
-+
-+                {!!suggestion && (
-+                  <View style={styles.suggestBox}>
-+                    <Text style={styles.suggestLabel}>Suggested code</Text>
-+                    <Text selectable style={styles.suggestCode}>{suggestion}</Text>
-+                    <Text style={styles.suggestHelp}>
-+                      Copy it and save it somewhere safe. You will need it to sign in.
-+                    </Text>
-+                    <View style={styles.suggestRow}>
-+                      <Pressable
-+                        onPress={() => useSuggestion(suggestion)}
-+                        accessibilityRole="button"
-+                        accessibilityLabel="Use and copy this suggested code"
-+                      >
-+                        <Text style={styles.suggestPrimary}>
-+                          {copied ? 'Used and copied' : 'Use this code'}
-+                        </Text>
-+                      </Pressable>
-+                      <Pressable
-+                        onPress={() => copySuggestion(suggestion)}
-+                        accessibilityRole="button"
-+                        accessibilityLabel="Copy this suggested code"
-+                      >
-+                        <Text style={styles.suggestAction}>{copied ? 'Copied' : 'Copy'}</Text>
-+                      </Pressable>
-+                    </View>
-+                  </View>
-+                )}
-+
-+                <Pressable
-+                  onPress={() => {
-+                    setSuggestion(makePasswordSuggestion());
-+                    setCopied(false);
-+                  }}
-+                  accessibilityRole="button"
-+                  style={{ alignSelf: 'center' }}
-+                >
-+                  <Text style={styles.suggestLink}>
-+                    {suggestion ? 'Suggest another code' : 'Suggest a code'}
-+                  </Text>
-+                </Pressable>
-+
-+                <Pressable
-+                  onPress={() => {
-+                    const pwError = passwordError(form.password);
-+                    if (pwError) {
-+                      setErrs(e => ({ ...e, password: pwError }));
+@@ -848,7 +980,8 @@ export default function RegisterScreen({ route }) {
+                 </View>
+                 <Text style={styles.modalTitle}>Create your secret code</Text>
+                 <Text style={styles.modalBody}>
+-                  Type a code with at least 8 characters, including a letter and a number. Do not
++                  A password is a secret code that protects your account. Type one with at least
++                  8 characters, including a letter and a number, or use the suggested code. Do not
+                   share it with anyone.
+                 </Text>
+                 <TextInput
+@@ -925,14 +1058,21 @@ export default function RegisterScreen({ route }) {
+                       splitFullName(form.fullName).lastName
+                       && (form.email.trim() || form.phoneNumber.trim())
+                     );
+-                    if (!restComplete) return;
++                    if (!restComplete) {
++                      const line = 'I still need your full name and an email address or phone number. '
++                        + 'Please fill those, then tap Save code again.';
++                      setAiNote(line);
++                      queueSpeech(line);
 +                      return;
 +                    }
-+                    setPasswordOpen(false);
-+                    Keyboard.dismiss();
+                     if (!agreed) {
+                       // The agreement is the last step, so it opens by itself.
+                       setAgreementOpen(true);
++                      queueSpeech(AGREEMENT_WHAT);
+                       return;
+                     }
+-                    notice('I am creating your account now.', { speak: true });
+-                    submit({ confirmedAgreement: true });
++                    // Everything is in: read it back and let the user confirm.
++                    openConfirm();
+                   }}
+                   accessibilityRole="button"
+                   style={({ pressed }) => [styles.modalPrimary, pressed && { opacity: 0.9 }]}
+@@ -969,8 +1109,9 @@ export default function RegisterScreen({ route }) {
+             </View>
+             <Text style={styles.modalTitle}>Before we create your account</Text>
+             <Text style={styles.modalBody}>
+-              Salmart is a marketplace where people buy and sell. By ticking the box, you accept
+-              Salmart's Terms and Privacy Policy.
++              Salmart is a marketplace where people buy and sell. Before you can buy or sell here,
++              you must accept Salmart&apos;s Privacy Policy and Terms and Conditions. Tick the box
++              only if you agree.
+             </Text>
+             <Pressable
+               onPress={onAgreementAccepted}
+@@ -981,7 +1122,9 @@ export default function RegisterScreen({ route }) {
+               <View style={[styles.checkboxWrap, agreed && styles.checkboxWrapChecked]}>
+                 <Ionicons name={agreed ? 'checkmark' : 'ellipse-outline'} size={12} color={agreed ? '#fff' : T.muted} />
+               </View>
+-              <Text style={styles.modalAgreeText}>I accept and want to use Salmart.</Text>
++              <Text style={styles.modalAgreeText}>
++                I accept the Privacy Policy and Terms and Conditions.
++              </Text>
+             </Pressable>
+             <Pressable
+               onPress={() => setAgreementOpen(false)}
+@@ -993,6 +1136,66 @@ export default function RegisterScreen({ route }) {
+           </Pressable>
+         </Pressable>
+       </Modal>
 +
-+                    const restComplete = !!(
-+                      splitFullName(form.fullName).lastName
-+                      && (form.email.trim() || form.phoneNumber.trim())
-+                    );
-+                    if (!restComplete) return;
-+                    if (!agreed) {
-+                      // The agreement is the last step, so it opens by itself.
-+                      setAgreementOpen(true);
-+                      return;
-+                    }
-+                    notice('I am creating your account now.', { speak: true });
-+                    submit({ confirmedAgreement: true });
-+                  }}
-+                  accessibilityRole="button"
-+                  style={({ pressed }) => [styles.modalPrimary, pressed && { opacity: 0.9 }]}
-+                >
-+                  <Text style={styles.modalPrimaryText}>Save my code</Text>
-+                </Pressable>
-+                <Pressable
-+                  onPress={() => {
-+                    setPasswordOpen(false);
-+                    Keyboard.dismiss();
-+                  }}
-+                  accessibilityRole="button"
-+                  style={{ paddingVertical: 12 }}
-+                >
-+                  <Text style={styles.modalCancel}>Not now</Text>
-+                </Pressable>
-+              </ScrollView>
-+            </Pressable>
-+          </Pressable>
-+        </KeyboardAvoidingView>
-+      </Modal>
-+
-+      {/* Agreement card. Ticking it is the user's own action. */}
++      {/* Final confirmation. The only path to POST /register is the button in
++          this card. A spoken "yes" from the user (or the model) only opens it. */}
 +      <Modal
-+        visible={agreementOpen}
++        visible={confirmOpen}
 +        transparent
 +        animationType="fade"
-+        onRequestClose={() => setAgreementOpen(false)}
++        onRequestClose={() => setConfirmOpen(false)}
 +      >
-+        <Pressable style={styles.modalBackdrop} onPress={() => setAgreementOpen(false)}>
++        <Pressable style={styles.modalBackdrop} onPress={() => setConfirmOpen(false)}>
 +          <Pressable style={styles.modalCard} onPress={() => {}}>
 +            <View style={styles.modalIconWrap}>
-+              <Ionicons name="document-text" size={22} color={T.emerald} />
++              <Ionicons name="person-add" size={22} color={T.emerald} />
 +            </View>
-+            <Text style={styles.modalTitle}>Before we create your account</Text>
++            <Text style={styles.modalTitle}>Create your account?</Text>
 +            <Text style={styles.modalBody}>
-+              Salmart is a marketplace where people buy and sell. By ticking the box, you accept
-+              Salmart's Terms and Privacy Policy.
++              Check what you gave me. Your secret code stays hidden on this phone.
 +            </Text>
++
++            {recapLines(form).map(line => {
++              const at = line.indexOf(':');
++              return (
++                <View key={line} style={styles.confirmRow}>
++                  <Text style={styles.confirmLabel}>{line.slice(0, at)}</Text>
++                  <Text style={styles.confirmValue}>{line.slice(at + 1).trim()}</Text>
++                </View>
++              );
++            })}
++            <View style={styles.confirmRow}>
++              <Text style={styles.confirmLabel}>Password</Text>
++              <Text style={styles.confirmValue}>Saved on this phone</Text>
++            </View>
++
 +            <Pressable
-+              onPress={onAgreementAccepted}
-+              accessibilityRole="checkbox"
-+              accessibilityState={{ checked: agreed }}
-+              style={({ pressed }) => [styles.modalAgreeRow, pressed && { opacity: 0.85 }]}
++              onPress={() => {
++                setConfirmOpen(false);
++                notice('I am creating your account now.', { speak: true });
++                submit({ confirmedAgreement: true });
++              }}
++              accessibilityRole="button"
++              accessibilityLabel="Create my account now"
++              style={({ pressed }) => [styles.modalPrimary, pressed && { opacity: 0.9 }]}
 +            >
-+              <View style={[styles.checkboxWrap, agreed && styles.checkboxWrapChecked]}>
-+                <Ionicons name={agreed ? 'checkmark' : 'ellipse-outline'} size={12} color={agreed ? '#fff' : T.muted} />
-+              </View>
-+              <Text style={styles.modalAgreeText}>I accept and want to use Salmart.</Text>
++              <Text style={styles.modalPrimaryText}>Create my account</Text>
 +            </Pressable>
 +            <Pressable
-+              onPress={() => setAgreementOpen(false)}
++              onPress={() => {
++                setConfirmOpen(false);
++                setAiNote('Which detail would you like to change?');
++                notice('Which detail would you like to change?', { speak: true });
++                fullNameRef.current?.focus?.();
++              }}
 +              accessibilityRole="button"
 +              style={{ paddingVertical: 12 }}
 +            >
-+              <Text style={styles.modalCancel}>Not yet</Text>
++              <Text style={styles.modalCancel}>Change something</Text>
 +            </Pressable>
 +          </Pressable>
 +        </Pressable>
@@ -1826,144 +744,35 @@ index 184e003..41c4c2b 100644
      </SafeAreaView>
    );
  }
-@@ -702,6 +1002,104 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
-   flex: { flex: 1 },
-   scroll: { flexGrow: 1, paddingHorizontal: 22, paddingTop: 12 },
+@@ -1100,6 +1303,31 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+   },
+   modalAgreeText: { color: T.ink, fontSize: 14, flex: 1, lineHeight: 19 },
  
-+  // Secure password and agreement modals.
-+  modalBackdrop: {
-+    flex: 1,
-+    backgroundColor: 'rgba(0,0,0,0.55)',
-+    alignItems: 'center',
-+    justifyContent: 'center',
-+    padding: 22,
-+  },
-+  modalCard: {
-+    width: '88%',
-+    maxWidth: 360,
-+    maxHeight: '86%',
-+    alignSelf: 'center',
-+    backgroundColor: T.card,
-+    borderRadius: 20,
-+    borderWidth: 1,
-+    borderColor: T.border,
-+    padding: 18,
-+  },
-+  modalScroll: { paddingBottom: 2 },
-+  modalTopRow: {
++  confirmRow: {
 +    flexDirection: 'row',
-+    alignItems: 'center',
++    alignItems: 'flex-start',
 +    justifyContent: 'space-between',
-+    marginBottom: 12,
++    gap: 12,
++    paddingVertical: 9,
++    borderBottomWidth: StyleSheet.hairlineWidth,
++    borderBottomColor: T.border,
 +  },
-+  modalHelpBtn: {
-+    flexDirection: 'row',
-+    alignItems: 'center',
-+    gap: 6,
-+    paddingVertical: 6,
-+    paddingHorizontal: 10,
-+    borderRadius: 999,
-+    backgroundColor: T.bgSoft,
-+  },
-+  modalHelpText: { color: T.emerald, fontSize: 12, fontWeight: '800' },
-+  modalIconWrap: {
-+    width: 44,
-+    height: 44,
-+    borderRadius: 14,
-+    backgroundColor: T.bgSoft,
-+    alignItems: 'center',
-+    justifyContent: 'center',
-+    marginBottom: 12,
-+  },
-+  modalTitle: { color: T.ink, fontSize: 19, fontWeight: '800', marginBottom: 6 },
-+  modalBody: { color: T.inkMuted, fontSize: 14, lineHeight: 20, marginBottom: 14 },
-+  modalInput: {
-+    borderWidth: 1,
-+    borderColor: T.border,
-+    borderRadius: 12,
-+    backgroundColor: T.bgSoft,
-+    color: T.ink,
-+    paddingHorizontal: 14,
-+    paddingVertical: 13,
-+    fontSize: 16,
-+  },
-+  modalHint: { color: T.muted, fontSize: 12, marginTop: 6 },
-+  suggestBox: {
-+    marginTop: 14,
-+    padding: 12,
-+    borderRadius: 14,
-+    backgroundColor: T.bgSoft,
-+    borderWidth: 1,
-+    borderColor: T.border,
-+  },
-+  suggestLabel: {
-+    color: T.muted,
-+    fontSize: 11,
-+    fontWeight: '800',
++  confirmLabel: {
++    color: T.inkMuted,
++    fontSize: 12,
++    fontWeight: '700',
 +    textTransform: 'uppercase',
-+    letterSpacing: 0.4,
++    letterSpacing: 0.3,
++    paddingTop: 1,
 +  },
-+  suggestCode: { color: T.ink, fontSize: 18, fontWeight: '800', marginTop: 4, letterSpacing: 0.5 },
-+  suggestHelp: { color: T.inkMuted, fontSize: 12, lineHeight: 17, marginTop: 6 },
-+  suggestRow: { flexDirection: 'row', alignItems: 'center', gap: 18, marginTop: 10 },
-+  suggestPrimary: { color: T.emerald, fontSize: 13, fontWeight: '800' },
-+  suggestAction: { color: T.inkMuted, fontSize: 13, fontWeight: '700' },
-+  suggestLink: { color: T.emerald, fontSize: 12, fontWeight: '700', textAlign: 'center', paddingVertical: 10 },
-+  modalPrimary: {
-+    marginTop: 16,
-+    minHeight: 48,
-+    borderRadius: 14,
-+    backgroundColor: T.emerald,
-+    alignItems: 'center',
-+    justifyContent: 'center',
++  confirmValue: {
++    flex: 1,
++    color: T.ink,
++    fontSize: 14,
++    fontWeight: '700',
++    textAlign: 'right',
 +  },
-+  modalPrimaryText: { color: '#fff', fontSize: 15, fontWeight: '800' },
-+  modalCancel: { color: T.inkMuted, fontSize: 14, fontWeight: '700', textAlign: 'center' },
-+  modalAgreeRow: {
-+    flexDirection: 'row',
-+    alignItems: 'center',
-+    gap: 10,
-+    paddingVertical: 6,
-+    marginBottom: 6,
-+  },
-+  modalAgreeText: { color: T.ink, fontSize: 14, flex: 1, lineHeight: 19 },
 +
    brandRow: {
      flexDirection: 'row',
      alignItems: 'center',
-@@ -762,8 +1160,6 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
-   },
- 
-   formBox: { gap: 16, marginBottom: 10 },
--  rowSplit: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
--  half: { flex: 1 },
-   fieldLabel: {
-     marginBottom: 8,
-     fontSize: 13,
-diff --git a/src/state/AuthContext.js b/src/state/AuthContext.js
-index e9a43b5..d1ed794 100644
---- a/src/state/AuthContext.js
-+++ b/src/state/AuthContext.js
-@@ -224,9 +224,21 @@ export function AuthProvider({ children }) {
-   const register = useCallback(async payload => {
-     setAuthError(null);
-     const result = await api.register(payload);
-+    // Registration returns a real session now, so the user goes straight in.
-+    if (result.token) {
-+      const session = sessionFromToken(result.token, {
-+        userId: result.userId,
-+        email: result.email,
-+        firstName: result.firstName,
-+        lastName: result.lastName,
-+      });
-+      await applySession(session);
-+      return { ...result, session, authenticated: true };
-+    }
-+    // Legacy path for an account that still needs email verification.
-     setNeedsVerification(true);
-     return result;
--  }, []);
-+  }, [applySession, sessionFromToken]);
- 
-   const verifyEmailToken = useCallback(async verifyToken => api.verifyEmail(verifyToken), []);
-   const resendVerification = useCallback(async address => api.resendVerification(address), []);

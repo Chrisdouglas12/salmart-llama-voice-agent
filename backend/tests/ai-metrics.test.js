@@ -1,10 +1,12 @@
 'use strict';
 
-/*
- Keyless tests for AI metrics sanitisation and aggregation.
- Run: node --test tests/ai-metrics.test.js
- No Mongo connection is opened: the schema is declared at import time and the
- functions under test are pure.
+/**
+ * Keyless tests for AI metrics sanitisation and aggregation.
+ *
+ * Run: node --test tests/ai-metrics.test.js
+ *
+ * No Mongo connection is opened: the schema is declared at import time and the
+ * functions under test are pure.
  */
 
 const test = require('node:test');

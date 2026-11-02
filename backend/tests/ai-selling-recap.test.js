@@ -46,7 +46,8 @@ test('selling: complete form yields an ordered recap, not another question', () 
   assert.deepEqual(lines.map((l) => l.replace(/^\d+\. ([A-Za-z]+):.*$/, '$1')), [
     'Item', 'Description', 'Price', 'Quantity', 'Discount', 'Condition', 'Category', 'Location',
   ]);
-  assert.match(block, /Should I post it\?/);
+  assert.match(block, /tap Publish\/Post/i);
+  assert.match(block, /read-back/i);
   assert.ok(!/next question/i.test(block), 'no next-question trailer when complete');
 });
 

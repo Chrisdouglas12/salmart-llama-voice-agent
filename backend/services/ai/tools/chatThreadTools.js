@@ -32,9 +32,9 @@ async function getSellerThread(ctx, { partnerId, limit }) {
   const rows = await Message.getConversation(ctx.userId, partnerId, { limit: n });
   // getConversation returns newest-first; flip to chronological for the model.
   const ordered = (Array.isArray(rows) ? rows : []).slice().reverse();
-  // Split by author. Only sellerMessages are the seller's own words — the
-  // model must never read the buyer's messages back as if the seller said
-  // them (that was a real, confusing bug). myMessages is context only.
+  // Split by author. Only sellerMessages are the seller's own words, so the
+  // model never reports the buyer's messages as the seller's reply.
+  // myMessages is context only.
   const shape = (m) => ({
     text: snippet(m.text),
     hasImage: m.messageType === 'image' || !!m.attachment?.url,
@@ -68,10 +68,10 @@ async function getSellerThread(ctx, { partnerId, limit }) {
 module.exports = { getSellerThread, findSellerThreads, summarizeSellerReplies };
 
 /**
- * Global resolver for "that person we chatted about the bag, what did they
- * say?". Lists the caller's recent DM partners (newest first) with the last
- * message snippet, direction, unread count guess, and any linked AI-enquiry
- * product. The model matches by product/task memory, then calls
+ * Resolver for "that person we chatted about the bag, what did they say?".
+ * Lists the caller's recent DM partners, newest first, with the last message
+ * snippet, direction, message count and any linked product from an assistant
+ * enquiry. The model matches by product or task memory, then calls
  * getSellerThread for the full summary. Read-only, own threads only.
  */
 async function findSellerThreads(ctx, { limit } = {}) {
@@ -216,9 +216,8 @@ async function summarizeSellerReplies(ctx, { about, limit } = {}) {
     };
   });
 
-  // An item was asked for but nothing matched: say so plainly instead of
-  // dumping unrelated chats (which is how the assistant used to read back
-  // the buyer's own words from a different thread).
+  // An item was asked for but nothing matched. Return an empty result so the
+  // assistant says so plainly instead of summarising unrelated chats.
   if (wantsItem && sellers.length === 0) {
     return {
       found: true,

@@ -16,10 +16,16 @@ Show the register screen. Say: *"For my grandmother, this screen is a locked doo
 
 1. **"I want to buy a bag."** → one short question: what kind of bag?
 2. **"A black leather bag."** → search with those words; the picture picker opens by itself. Say: *"Touch the one you want — you don't need to read or say its name."*
-3. Touch a card → the item is added to the cart and the assistant speaks a confirmation it wrote from that listing's title, price, description and seller. Point out the small line on the card: the reply came from the model, and the server only speaks it after checking the price. If a seller is reachable the assistant asks whether to chat them.
+3. Touch a card → the assistant reads that item's title and description aloud and asks: *"Should I save it for you so you can buy it later, or do you want me to chat the seller for you?"* Nothing is saved yet — the tap only previews. Say **"Save it"** → the validated cart tool runs once and the "In your cart" card appears; the assistant tells you to ask it to open the cart when ready, then offers to chat the seller about availability.
 4. **"Yes, chat him."** → chat opens with the draft and product photo; press send. Then open the cart: tick items (₦0 default with 2+ items) → green Pay button → Paystack opens **with the mic above it** → **"What do I do here?"** → exact steps + escrow reassurance.
-5. Point out: a sold-out item keeps the picker open so the buyer can touch another one; the tap itself is a direct server call, not a model guess.
+5. Point out: a sold-out item keeps the picker open so the buyer can touch another one; the tap itself is a direct server call, not a model guess; saying "save it" twice never adds the item twice.
 
 ## 2:30–3:00 — The guarantees
 
-To camera: *"Typed passwords never reach Meta. Success is claimed only from real app state. Meta models only, end to end."* End card: 102/102 targeted tests, live Meta model, repo link.
+To camera: *"Typed passwords never reach Meta. Success is claimed only from real app state. Meta models only, end to end."* End card: 127/127 keyless tests, live Meta model, repo link.
+
+## Selling (same shoot, second take)
+
+1. Mic: **"I want to sell my phone."** → CreateAd opens and the gallery opens by itself; closing it opens the camera.
+2. Pick a photo → the assistant reads it, fills what it can, and speaks each fill — never re-asking what the photo already filled. One question at a time after that, including quantity and the bulk-discount offer.
+3. When the form is finished → *"You can tap Publish/Post now — want me to read the filled details first?"* → **"Yes."** → reads from Description to the end, then asks for corrections or the tap. The seller always taps Post; there is no publish tool.

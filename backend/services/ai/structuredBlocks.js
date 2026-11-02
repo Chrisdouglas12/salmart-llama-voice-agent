@@ -82,6 +82,27 @@ function buildStructured(toolResults) {
           push({ type: 'onboarding_options', methods: r.data.methods });
         }
         break;
+      case 'cart.addToCart':
+        // The buyer said save on a touched item. The tool result is the truth
+        // that the row was written, so the app can show the cart card and the
+        // Open cart action.
+        if (r.data.added && r.data.productId) {
+          push({
+            type: 'product_added',
+            product: {
+              productId: r.data.productId,
+              title: r.data.title,
+              price: r.data.price,
+              description: r.data.description,
+              photo: r.data.photo,
+              sellerId: r.data.sellerId || null,
+              sellerName: r.data.sellerName || null,
+              itemType: r.data.itemType,
+            },
+            cartCount: r.data.cartCount,
+          });
+        }
+        break;
       case 'prepareSellerEnquiry':
         if (r.data.prepared) {
           push({ type: 'message_preview', prepared: r.data.prepared });
@@ -147,7 +168,11 @@ function buildStructured(toolResults) {
         if (r.data.fields) drafts.profile.push({ fields: r.data.fields, say: r.data.note || null });
         break;
       case 'prepareRegistration':
-        if (r.data.fields) drafts.register.push({ fields: r.data.fields, say: r.data.note || null });
+        // A no-email turn returns no fields. Emitting an empty fill would make
+        // the phone consume the block and drop a same-turn register_focus.
+        if (r.data.fields && Object.keys(r.data.fields).length) {
+          drafts.register.push({ fields: r.data.fields, say: r.data.say || r.data.note || null });
+        }
         break;
 
       // The server-owned plan names the next registration step. The screen

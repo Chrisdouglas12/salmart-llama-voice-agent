@@ -221,5 +221,5 @@ test('registration: handler rejects an empty patch and states manual steps', asy
   });
   assert.equal(res.fields.email, 'ada@example.com');
   assert.equal('password' in res.fields, false);
-  assert.deepEqual(res.manualSteps, ['password', 'agreement', 'create_account']);
+  assert.deepEqual(res.manualSteps, ['password', 'agreement', 'confirm', 'create_account']);
 });

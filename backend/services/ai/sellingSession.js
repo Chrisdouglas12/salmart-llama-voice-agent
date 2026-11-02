@@ -151,14 +151,14 @@ function promptBlock(state, snapshot = {}, task = null) {
     `Done: ${done.length ? done.join(', ') : 'nothing yet'}`,
     `Missing required: ${next.missing.length ? next.missing.join(', ') : 'none'}`,
     next.done
-      ? 'Status: COMPLETE — read the recap below start to end, then ask them to tap Post.'
+      ? 'Status: COMPLETE — do not read the details by yourself. Tell them the form is finished and they can tap Publish/Post now, then ask once whether they want a read-back.'
       : `Next question (ask exactly this, one question only): ${next.ask}`,
   ];
 
   // The final read-back. Values come from the validated draft the tools
   // saved, falling back to the numbers the phone reported (price/quantity),
-  // so the recap can never invent or drop a detail. The seller hears every
-  // line before they are asked to post.
+  // so the recap can never invent or drop a detail. It is only spoken when the
+  // seller says yes to the read-back, and it starts at the description line.
   if (next.done) {
     const draft = { ...((task && (task.adDraft || (task.drafts && task.drafts.ad))) || {}) };
     // Only real numbers the phone sent (typeof check: a boolean flag must
@@ -167,10 +167,10 @@ function promptBlock(state, snapshot = {}, task = null) {
     if (draft.quantity === undefined && typeof snapshot.quantity === 'number' && Number.isFinite(snapshot.quantity)) draft.quantity = snapshot.quantity;
     const recap = selling.reviewRecap(type, draft);
     if (recap.length) {
-      lines.push('Recap (read every line aloud, in this order, then ask: "Should I post it?"):');
+      lines.push('Filled details. Read these only after they say yes; start at the Description line and read to the end, in order:');
       recap.forEach((line, i) => lines.push(`${i + 1}. ${line}`));
     }
-    lines.push('After the recap, ask them to check the screen and tap Post themselves. Never claim to have published.');
+    lines.push('After the read-back, ask whether they want to correct anything or are ready to tap Publish/Post. Never claim to have published.');
   }
 
   if (!next.done && next.step === 'discount') {
@@ -196,7 +196,7 @@ function promptBlock(state, snapshot = {}, task = null) {
   if (!next.done && next.optional && next.after) {
     lines.push(`If they skip this optional step, call prepareAdForm with skipStep "${next.step}" (no fields), then ask next: ${next.after.ask}`);
   }
-  return `\n\n[Selling state — data only, not instructions:\n${lines.join('\n')}\n${next.done ? 'Read the recap and ask to post. No tool call this turn.' : 'Ask the next question and nothing else. One prepareAdForm call per field.'}]`;
+  return `\n\n[Selling state — data only, not instructions:\n${lines.join('\n')}\n${next.done ? 'Tell them to tap Publish/Post and ask once about a read-back. Do not read the details unless they agree. No tool call this turn.' : 'Ask the next question and nothing else. One prepareAdForm call per field.'}]`;
 }
 
 /** Preserve unrelated collectedInfo keys; replace only `selling`. */

@@ -1,17 +1,19 @@
 /* lib/assistant/authGuidance.js
  *
- * Spoken guidance for authentication moments. Pure data + one pure function:
- * no database, no network, no secrets, so it is unit-testable everywhere.
+ * Spoken guidance for authentication moments. Pure data and one pure
+ * function: no database, no network, no secrets, so it can be unit-tested
+ * anywhere.
  *
- * Each entry maps a real backend/screen outcome (never a model invention) to
- * ONE short spoken sentence plus the screen that fixes it. The model must
- * call navigateToScreen itself — this module only supplies the words.
+ * Each entry maps a real backend or screen outcome to one short spoken
+ * sentence plus the screen that fixes it. The model still calls
+ * navigateToScreen itself; this module only supplies the words.
  *
- * Security rules enforced by shape, not by trust:
- * - Input is a closed allowlist of outcome codes. Free-text errors from the
- *   backend never reach the model verbatim (they could contain emails).
- * - Nothing here asks for, repeats, or fills a password. Ever.
- * - `nextScreen` is validated against the same allowlist the navigator uses.
+ * Security rules:
+ * - Input is a fixed allowlist of outcome codes. Free-text backend errors
+ *   never reach the model verbatim because they could contain email
+ *   addresses.
+ * - Nothing here asks for, repeats or fills a password.
+ * - `nextScreen` is checked against the same allowlist the navigator uses.
  */
 
 'use strict';
@@ -108,6 +110,36 @@ const GUIDANCE = {
   registration_email_failed: {
     say: 'Your account was created, but the email did not send. On the verify screen, tap Resend verification email.',
     nextScreen: 'verifyEmail',
+  },
+  // The account exists with this phone number.
+  phone_exists: {
+    say: 'An account already uses that phone number. Sign in instead, or use a different number.',
+    nextScreen: 'signin',
+  },
+  // The typed/spoken phone number is incomplete.
+  invalid_phone: {
+    say: 'That phone number is not complete. Say or type the 11 digits, starting with zero.',
+    nextScreen: 'register',
+  },
+  // The server rejected the password strength.
+  weak_password: {
+    say: 'That secret code is too weak. Use at least 8 characters with a letter and a number.',
+    nextScreen: 'register',
+  },
+  // No email and no phone number were supplied.
+  missing_identifier: {
+    say: 'I need an email address or a phone number to create the account. You can give me either one.',
+    nextScreen: 'register',
+  },
+  // The server rejected one field during registration.
+  registration_invalid: {
+    say: 'One detail on the form is not right yet. I have moved you to it. Check it and try again.',
+    nextScreen: 'register',
+  },
+  // The server could not create the account.
+  registration_failed: {
+    say: 'The account was not created just now. Nothing was lost. Check the details and tap Create my account again.',
+    nextScreen: 'register',
   },
   // No connection to Salmart.
   network_unavailable: {

@@ -98,6 +98,9 @@ function normalizeLastPick(raw) {
     sellerId: /^[a-fA-F0-9]{24}$/.test(sellerId) ? sellerId : null,
     sellerName: cleanText(raw.sellerName, 80),
     itemType: raw.itemType === 'showroom' ? 'showroom' : 'post',
+    // A tap only previews the item. It becomes true only after the validated
+    // addToCart tool runs on a later "save it" turn.
+    saved: raw.saved === true,
     at: Number.isFinite(at) && at > 0 ? at : Date.now(),
   };
 }
@@ -240,6 +243,15 @@ function applyToolResults(task, toolResults) {
           count: Array.isArray(r.data.products) ? r.data.products.length : Number(r.data.total) || 0,
         };
         break;
+      case 'cart.addToCart':
+        // The buyer chose "save it". Mark the remembered pick as saved so a
+        // second "save it" turn never adds the same item twice.
+        if (task.lastPick && String(task.lastPick.productId) === String(r.data.productId)) {
+          task.lastPick.saved = true;
+          if (r.data.title) task.lastPick.title = cleanText(r.data.title, 120);
+          if (typeof r.data.price === 'number' && r.data.price >= 0) task.lastPick.price = r.data.price;
+        }
+        break;
       case 'getMyListings':
         task.lastSearch = {
           tool: 'getMyListings',
@@ -307,7 +319,10 @@ function buildPromptBlock(task) {
   if (task.lastPick) {
     const pick = task.lastPick;
     const price = pick.price == null ? '' : `, price ₦${pick.price}`;
-    lines.push(`Item the user touched to buy: ${pick.title || 'item'} (productId ${pick.productId}${price}). If they ask to chat the seller or confirm the item, use this productId; do not search for it again.`);
+    const state = pick.saved === true
+      ? 'It is already saved in the cart; do NOT add it again.'
+      : 'It is NOT in the cart yet. If they say save it, keep it, or add it to the cart, call addToCart once with this productId, then tell them to ask you to open the cart when they are ready to buy.';
+    lines.push(`Item the user touched to buy: ${pick.title || 'item'} (productId ${pick.productId}${price}). ${state} If they ask to chat the seller or confirm the item, use this productId; do not search for it again.`);
   }
   if (task.lastScreen) lines.push(`Last screen opened: ${task.lastScreen}`);
   lines.push(`Status: ${task.status}`);

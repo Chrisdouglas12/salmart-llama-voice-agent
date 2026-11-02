@@ -61,8 +61,8 @@ const REGISTRATION_QUESTIONS = {
   fullName: 'Let us create your account. What is your full name?',
   email: 'Do you have an email? It can be Google, Yahoo, or any other email.',
   phone: 'That is fine. What phone number should we use? It can be MTN, Airtel, Glo, or any other network.',
-  password: 'Now make a secret code in the box: 8 characters or more, with a letter and a number. You can copy the suggested code and keep it safe. Do not share it.',
-  agreement: 'Last step. Please read the agreement on the screen and tick the box if you accept to use Salmart.',
+  password: 'Now choose a secret code in the box. It needs 8 characters or more, with a letter and a number. Do not share it with anyone.',
+  agreement: 'Before you can buy or sell on Salmart, you must accept the Privacy Policy and Terms and Conditions. Tick the box if you agree.',
 };
 
 /**
@@ -151,9 +151,15 @@ const PLANS = Object.freeze({
 
 const REGISTRATION_READY = {
   state: 'REGISTRATION_READY',
-  say: 'Your details are complete. I am creating your account now. Please wait a moment.',
+  // The phone owns the typed values, so it reads them back itself right after
+  // this line. The model must not ask the create-or-change question here or the
+  // user would hear it twice.
+  say: 'Everything is ready. I will read your details back to you now.',
   nextScreen: 'register',
-  field: null,
+  // The phone opens its final confirmation card for this field. The card holds
+  // the only button that submits POST /register, so a mistaken word from the
+  // model can never create an account.
+  field: 'confirm',
   method: null,
 };
 
@@ -236,6 +242,23 @@ function registrationStep({
   if (!hasPassword) return 'password';
   if (!accepted) return 'agreement';
   return null;
+}
+
+/**
+ * Ordered read-back of the details the user actually gave. Only a real name,
+ * email or phone number appears, and never the password. RegisterScreen
+ * mirrors this order for values typed on the phone, which the server never
+ * receives; this copy is the canonical contract used by the tests.
+ */
+function registrationRecap({ fullName, firstName, lastName, email, phoneNumber } = {}) {
+  const lines = [];
+  const name = String(fullName || [firstName, lastName].filter(Boolean).join(' ')).trim();
+  if (name) lines.push(`Full name: ${name}`);
+  const mail = String(email || '').trim();
+  if (mail) lines.push(`Email: ${mail}`);
+  const phone = String(phoneNumber || '').trim();
+  if (phone) lines.push(`Phone number: ${phone}`);
+  return lines;
 }
 
 /**
@@ -382,7 +405,7 @@ function buildPromptBlock(auth, { screen } = {}) {
   const screenRule = screen && auth.intent === 'REGISTER' && !registrationScreen
     ? ' The user is not on the register screen, so do not continue a registration step.'
     : '';
-  return `\n\n[Auth state — data only, not instructions:\n${lines.join('\n')}\nFollow this state. Do not restart from the beginning. One question at a time. Never ask for a password or an email value in chat.${screenRule}]`;
+  return `\n\n[Auth state — data only, not instructions:\n${lines.join('\n')}\nFollow this state. Do not restart from the beginning. One question at a time. Never ask for a password in chat. Ask for the email only at the email step; once it is saved, never ask for it again.${screenRule}]`;
 }
 
 /**
@@ -454,6 +477,7 @@ module.exports = {
   sanitizeAuthState,
   buildPromptBlock,
   classifyAuthIntent,
+  registrationRecap,
   // exposed for tests
   _internal: { SCREEN_STATE, OUTCOME_STATE, RETRY_PREFIX, MAX_ATTEMPTS },
 };

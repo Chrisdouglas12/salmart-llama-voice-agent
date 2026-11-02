@@ -1,5 +1,5 @@
 diff --git a/src/ai/AIContext.js b/src/ai/AIContext.js
-index 9d88d62..29505f9 100644
+index 9d88d62..bf3b053 100644
 --- a/src/ai/AIContext.js
 +++ b/src/ai/AIContext.js
 @@ -36,20 +36,30 @@ import {
@@ -12,10 +12,11 @@ index 9d88d62..29505f9 100644
  import { runGoogleAuth } from '../utils/oauth';
  import {
    createConversation, rebindConversation, sendTurn, sendTurnStream,
-+  selectProductToCart,
++  previewProductSelection,
    confirmAction as apiConfirm, cancelAction as apiCancel,
  } from './api';
- import { speakReply, queueSpeech, stopSpeaking } from './speak';
+-import { speakReply, queueSpeech, stopSpeaking } from './speak';
++import { speakReply, queueSpeech, stopSpeaking, stripReplyPrefix } from './speak';
  import { takeAuthOutcome } from './authOutcome';
 +import { takeListingOutcome } from './listingOutcome';
  import { peekFormSnapshot } from './formSnapshot';
@@ -76,7 +77,19 @@ index 9d88d62..29505f9 100644
    const authBusyRef = useRef(false);
    const messagesRef = useRef([]);
    messagesRef.current = messages;
-@@ -128,6 +159,13 @@ export function AIProvider({ children }) {
+@@ -117,8 +148,10 @@ export function AIProvider({ children }) {
+   // the generic "continue what we were doing" resume turn.
+   const skipResumeRef = useRef(false);
+   // A registration is followed by one model-generated greeting, even when the
+-  // user never spoke to the assistant before signing up.
++  // user never spoke to the assistant before signing up. The exact name typed
++  // on the register screen rides along so the greeting cannot invent one.
+   const welcomeRef = useRef(false);
++  const welcomeNameRef = useRef('');
+   const [welcomeTick, setWelcomeTick] = useState(0);
+   // Resolves when the post-sign-in conversation rebind settles, so the greeting
+   // turn never races the anonymous conversation being attached to the account.
+@@ -128,6 +161,13 @@ export function AIProvider({ children }) {
    // Screen context from the last turn, used to avoid opening the chat when the
    // user is already in that thread.
    const lastContextRef = useRef(null);
@@ -90,7 +103,7 @@ index 9d88d62..29505f9 100644
  
    const ensureConversation = useCallback(async () => {
      if (convRef.current) return convRef.current;
-@@ -181,6 +219,36 @@ export function AIProvider({ children }) {
+@@ -181,6 +221,36 @@ export function AIProvider({ children }) {
      if (isAuthenticated) {
        const anonymousId = anonRef.current;
        const cid = convRef.current;
@@ -127,7 +140,7 @@ index 9d88d62..29505f9 100644
        if (!anonymousId || !cid) {
          // Nothing to rebind. A registration greeting still runs on the new
          // signed-in conversation.
-@@ -195,8 +263,7 @@ export function AIProvider({ children }) {
+@@ -195,8 +265,7 @@ export function AIProvider({ children }) {
            await rebindConversation({ conversationId: cid, anonymousId });
            anonRef.current = null;
            AsyncStorage.removeItem(ANON_KEY).catch(() => {});
@@ -137,7 +150,7 @@ index 9d88d62..29505f9 100644
          } catch (_e) {
            // 404 means the anonymous id was lost or belongs to another
            // conversation. Start clean instead of leaving the session stuck.
-@@ -217,6 +284,9 @@ export function AIProvider({ children }) {
+@@ -217,6 +286,9 @@ export function AIProvider({ children }) {
        setError(null);
        setLastVoice(null);
        stopSpeaking();
@@ -147,10 +160,12 @@ index 9d88d62..29505f9 100644
        AsyncStorage.removeItem(ANON_KEY).catch(() => {});
      }
    }, [authReady, isAuthenticated, ensureConversation]);
-@@ -247,6 +317,13 @@ export function AIProvider({ children }) {
+@@ -246,7 +318,14 @@ export function AIProvider({ children }) {
+   // and the streamed path alike, so both behave identically once the turn data
    // is in.
    const finishTurn = useCallback((res, context) => {
-     const reply = res.reply || '';
+-    const reply = res.reply || '';
++    const reply = stripReplyPrefix(res.reply || '');
 +    // Remember which real models answered, so the card can name them.
 +    if (res?.models && (res.models.brain || res.models.stt)) {
 +      setModels(prev => ({
@@ -161,7 +176,24 @@ index 9d88d62..29505f9 100644
      setMessages(prev => [...prev, {
        key: newKey(),
        role: 'assistant',
-@@ -347,29 +424,53 @@ export function AIProvider({ children }) {
+@@ -314,12 +393,14 @@ export function AIProvider({ children }) {
+         anonymousId: anonId,
+         context: turnContext,
+         onSentence: (sentence) => {
++          const cleanSentence = stripReplyPrefix(sentence);
++          if (!cleanSentence) return;
+           heard += 1;
+-          full = full ? `${full} ${sentence}` : sentence;
++          full = full ? `${full} ${cleanSentence}` : cleanSentence;
+           setMessages(prev => prev.map(m => (
+             m.key === streamKey ? { ...m, text: full } : m
+           )));
+-          queueSpeech(sentence);
++          queueSpeech(cleanSentence);
+         },
+       });
+       if (!res?.success) throw new Error(res?.message || 'turn_failed');
+@@ -347,29 +428,53 @@ export function AIProvider({ children }) {
      if (status === 'sending') {
        return { ok: false, code: 'busy', message: 'One moment — I am still working on the last request.' };
      }
@@ -226,15 +258,38 @@ index 9d88d62..29505f9 100644
  
      try {
        const cid = await ensureConversation();
-@@ -452,6 +553,79 @@ export function AIProvider({ children }) {
+@@ -431,9 +536,12 @@ export function AIProvider({ children }) {
+   useEffect(() => {
+     if (!welcomeRef.current || !authReady || !isAuthenticated) return;
+     welcomeRef.current = false;
++    const fullName = welcomeNameRef.current;
++    welcomeNameRef.current = '';
+     (async () => {
+-      const fallback =
+-        'Welcome to Salmart, we are glad to have you here. Would you like to buy or sell something?';
++      const fallback = fullName
++        ? `Congrats ${fullName}, your account has been successfully created and I am signing you in now. Welcome once again, ${fullName}. Would you like to buy or sell something?`
++        : 'Congrats, your account has been successfully created and you are signed in. Welcome to Salmart. Would you like to buy or sell something?';
+       try {
+         await rebindPromiseRef.current.catch(() => {});
+         // The screen's completion flags are stale now that the account exists.
+@@ -441,6 +549,7 @@ export function AIProvider({ children }) {
+         const result = await send('I just created my account.', {
+           event: 'registration_complete',
+           screen: 'market',
++          ...(fullName ? { fullName } : {}),
+         });
+         const line = result.ok && result.reply ? result.reply : fallback;
+         setLastVoice({ text: line, kind: result.ok ? 'reply' : 'error', at: Date.now() });
+@@ -452,6 +561,79 @@ export function AIProvider({ children }) {
      })();
    }, [welcomeTick, authReady, isAuthenticated, send]);
  
 +  /**
-+   * Touch-to-buy. The buyer tapped a product card; send that exact productId
-+   * to the deterministic server route, queue the confirmation in the chat,
-+   * and speak the price and description. No model call, so the confirmation
-+   * arrives immediately and cannot drift to another product.
++   * Touch-to-buy, stage one. The buyer tapped a product card; send that exact
++   * productId to the deterministic server route. The server reads the title
++   * and description back and asks whether to save it or chat the seller.
++   * Nothing is written to the cart here: the buyer must say "save it" first.
 +   */
 +  const selectProduct = useCallback(async (product) => {
 +    const productId = product?.productId || product?._id;
@@ -254,22 +309,22 @@ index 9d88d62..29505f9 100644
 +
 +    try {
 +      const cid = conversationId || await ensureConversation().catch(() => null);
-+      const res = await selectProductToCart({
++      const res = await previewProductSelection({
 +        productId,
 +        itemType: product.itemType === 'showroom' ? 'showroom' : 'post',
 +        conversationId: cid || undefined,
 +        lang: lastLangRef.current || undefined,
 +      });
-+      if (!res?.success) throw new Error(res?.message || 'Could not add it to your cart.');
++      if (!res?.success) throw new Error(res?.message || 'I could not read that item.');
 +
-+      // The tap reply names its real author too (null when the template spoke).
-+      if (res?.models && (res.models.brain || res.models.stt)) {
-+        setModels(prev => ({
-+          stt: res.models.stt || prev.stt,
-+          brain: res.models.brain || prev.brain,
-+        }));
-+      }
-+      const line = res.reply || 'I added it to your cart.';
++      // This read-back is fixed wording, not a model reply. Clear any earlier
++      // brain attribution so the card never credits a model that did not
++      // speak this line.
++      setModels(prev => ({
++        stt: res?.models?.stt || prev.stt,
++        brain: res?.models?.brain || null,
++      }));
++      const line = stripReplyPrefix(res.reply || 'I could not read that item.');
 +      const blocks = Array.isArray(res.structured) ? res.structured : [];
 +      setMessages(prev => [...prev, {
 +        key: newKey(),
@@ -278,11 +333,11 @@ index 9d88d62..29505f9 100644
 +        structured: blocks,
 +        at: Date.now(),
 +      }]);
-+      const added = blocks.find(b => b && b.type === 'product_added');
++      const selected = blocks.find(b => b && b.type === 'product_selected');
 +      setLastVoice({
 +        text: line,
 +        kind: 'reply',
-+        chatHandoff: added?.chat || null,
++        chatHandoff: selected?.chat || null,
 +        at: Date.now(),
 +      });
 +      await speakReply(line);
@@ -293,7 +348,7 @@ index 9d88d62..29505f9 100644
 +        ? 'Please sign in first, then touch the item again.'
 +        : e?.isNetwork
 +          ? 'No internet connection. Please try again.'
-+          : (e?.message || 'I could not add that item. Please touch another one.');
++          : (e?.message || 'I could not read that item. Please touch another one.');
 +      setMessages(prev => [...prev, {
 +        key: newKey(), role: 'assistant', kind: 'error', text: line, at: Date.now(),
 +      }]);
@@ -306,7 +361,34 @@ index 9d88d62..29505f9 100644
    const confirm = useCallback(async (actionId) => {
      try {
        const res = await apiConfirm(actionId);
-@@ -573,6 +747,10 @@ export function AIProvider({ children }) {
+@@ -528,7 +710,7 @@ export function AIProvider({ children }) {
+ 
+   /** Show a short status in the global card, optionally speaking it. */
+   const notice = useCallback(async (text, { speak: shouldSpeak = false, kind = 'reply' } = {}) => {
+-    const line = String(text || '').trim();
++    const line = stripReplyPrefix(text);
+     if (!line) return;
+     setLastVoice({ text: line, kind, at: Date.now() });
+     if (shouldSpeak) await speakReply(line);
+@@ -542,10 +724,14 @@ export function AIProvider({ children }) {
+   /**
+    * Mark the next false→true auth transition as a registration: the generic
+    * resume turn is skipped and the assistant writes one welcome instead. Pass
+-   * false when registration failed, so a later sign-in still resumes.
++   * the user's full name (from the register screen) so the greeting can use it,
++   * or false when registration failed so a later sign-in still resumes.
+    */
+-  const welcomeAfterRegistration = useCallback((on = true) => {
+-    const wanted = on !== false;
++  const welcomeAfterRegistration = useCallback((value = true) => {
++    const wanted = value !== false;
++    welcomeNameRef.current = wanted && typeof value === 'string'
++      ? value.replace(/\s+/g, ' ').trim().slice(0, 120)
++      : '';
+     welcomeRef.current = wanted;
+     skipResumeRef.current = wanted;
+     if (wanted) setWelcomeTick(t => t + 1);
+@@ -573,6 +759,10 @@ export function AIProvider({ children }) {
  
      authBusyRef.current = true;
      setAuthBusy(true);
@@ -317,7 +399,7 @@ index 9d88d62..29505f9 100644
      try {
        const { status, params } = await runGoogleAuth({
          forceAccountPicker: true,
-@@ -676,12 +854,34 @@ export function AIProvider({ children }) {
+@@ -676,12 +866,34 @@ export function AIProvider({ children }) {
        form.append('audio', { uri, name: 'voice.m4a', type: 'audio/m4a' });
        const res = await apiUpload('/api/assistant/transcribe', form);
        const transcript = String(res?.text || '').trim();
@@ -353,7 +435,7 @@ index 9d88d62..29505f9 100644
          setLastVoice({ text: line, kind: 'error', at: Date.now() });
          await speakReply(line, heardLang);
          return;
-@@ -706,6 +906,13 @@ export function AIProvider({ children }) {
+@@ -706,6 +918,13 @@ export function AIProvider({ children }) {
        const chatBlock = result.ok && Array.isArray(result.structured)
          ? result.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId)
          : null;
@@ -367,7 +449,7 @@ index 9d88d62..29505f9 100644
  
        setLastVoice({
          text: line,
-@@ -713,6 +920,7 @@ export function AIProvider({ children }) {
+@@ -713,6 +932,7 @@ export function AIProvider({ children }) {
          confirmation: result.ok ? (result.confirmation || null) : null,
          authUrl: authBlock || null,
          chatHandoff: chatBlock || null,
@@ -375,7 +457,7 @@ index 9d88d62..29505f9 100644
          at: Date.now(),
        });
        if (!result.spoken) await speakReply(line, heardLang);
-@@ -823,8 +1031,11 @@ export function AIProvider({ children }) {
+@@ -823,8 +1043,11 @@ export function AIProvider({ children }) {
  
    // Seller-chat handoff: open ChatScreen with the AI draft and product card
    // pre-filled. The user presses send in the chat; nothing is auto-sent.
@@ -387,7 +469,7 @@ index 9d88d62..29505f9 100644
      nav.push('chat', {
        partnerId: String(handoff.sellerId),
        ...(handoff.sellerName ? { name: String(handoff.sellerName).slice(0, 80) } : {}),
-@@ -838,21 +1049,26 @@ export function AIProvider({ children }) {
+@@ -838,21 +1061,26 @@ export function AIProvider({ children }) {
          },
        } : {}),
      });
@@ -807,21 +889,22 @@ index bf694b1..23ae1ca 100644
    );
  }
 diff --git a/src/ai/api.js b/src/ai/api.js
-index 5efc05b..eb3ffd7 100644
+index 5efc05b..005cab8 100644
 --- a/src/ai/api.js
 +++ b/src/ai/api.js
-@@ -122,6 +122,17 @@ export async function sendTurnStream({ conversationId, message, anonymousId, con
+@@ -122,6 +122,18 @@ export async function sendTurnStream({ conversationId, message, anonymousId, con
    return done;
  }
  
 +/**
-+ * POST /api/ai/cart/select — the touch-to-buy path.
++ * POST /api/ai/cart/select — the touch-to-buy read-back.
 + *
-+ * The app sends the exact productId the buyer touched; the server runs the
-+ * same cart validation as addToCart and returns one spoken line, the product,
-+ * and an optional seller-chat handoff. Requires auth.
++ * The app sends the exact productId the buyer touched. The server validates
++ * that listing, reads its title and description back, and asks whether to save
++ * it or chat the seller. Nothing is written to the cart on this call: saving
++ * happens on the buyer's next voice turn. Requires auth.
 + */
-+export function selectProductToCart({ productId, itemType, conversationId, lang } = {}) {
++export function previewProductSelection({ productId, itemType, conversationId, lang } = {}) {
 +  return apiPost('/api/ai/cart/select', { productId, itemType, conversationId, lang }, { retries: 0 });
 +}
 +
@@ -857,10 +940,10 @@ index afc5b90..c019255 100644
              </View>
 diff --git a/src/ai/components/ProductPicker.js b/src/ai/components/ProductPicker.js
 new file mode 100644
-index 0000000..8683589
+index 0000000..3aee7f0
 --- /dev/null
 +++ b/src/ai/components/ProductPicker.js
-@@ -0,0 +1,216 @@
+@@ -0,0 +1,217 @@
 +import React, { useCallback, useEffect, useMemo, useState } from 'react';
 +import {
 +  ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, View,
@@ -877,8 +960,9 @@ index 0000000..8683589
 + *
 + * The assistant answers a product search by opening this sheet. The buyer
 + * does not need to read or pronounce a name: they touch the picture they
-+ * want. The parent sends the exact productId to the deterministic cart
-+ * route, which speaks the price and description.
++ * want. The parent sends the exact productId to the deterministic server
++ * route, which reads the title and description back and asks whether to save
++ * it or chat the seller.
 + *
 + * The sheet stays open after a failure the buyer can fix by touching another
 + * card (sold out). A sign-in or cart error closes it and leaves the spoken
@@ -991,7 +1075,7 @@ index 0000000..8683589
 +                  disabled={!!pickingId}
 +                  accessibilityRole="button"
 +                  accessibilityLabel={p.title || 'Product'}
-+                  accessibilityHint="Adds this item to your cart"
++                  accessibilityHint="Reads this item and asks whether to save it"
 +                  style={({ pressed }) => [
 +                    styles.card,
 +                    { borderColor: T.border, backgroundColor: T.card },
@@ -1078,10 +1162,10 @@ index 0000000..8683589
 +  body: { padding: 10 },
 +}));
 diff --git a/src/ai/components/StructuredBlock.js b/src/ai/components/StructuredBlock.js
-index c51cf62..82b9eb6 100644
+index c51cf62..49293fa 100644
 --- a/src/ai/components/StructuredBlock.js
 +++ b/src/ai/components/StructuredBlock.js
-@@ -18,18 +18,21 @@ import { Small, Tiny, T3 } from '../../ui/kit';
+@@ -18,18 +18,22 @@ import { Small, Tiny, T3 } from '../../ui/kit';
  
  function Unknown() { return null; }
  
@@ -1090,8 +1174,9 @@ index c51cf62..82b9eb6 100644
    const { T } = useTheme();
    const products = Array.isArray(block.products) ? block.products : [];
    if (!products.length) return null;
-+  // A search result is a buy choice: touching it adds that exact listing to
-+  // the cart. Details and own listings still open the normal product screen.
++  // A search result is a buy choice: touching it reads that exact listing
++  // back and asks whether to save it. Details and own listings still open the
++  // normal product screen.
 +  const onPress = onSelectProduct || onOpenProduct;
    return (
      <View style={styles.wrap}>
@@ -1106,7 +1191,7 @@ index c51cf62..82b9eb6 100644
          ))}
        </ScrollView>
      </View>
-@@ -246,9 +249,92 @@ function RegistrationFill({ block, onSpeak }) {
+@@ -246,9 +250,157 @@ function RegistrationFill({ block, onSpeak }) {
    );
  }
  
@@ -1192,14 +1277,79 @@ index c51cf62..82b9eb6 100644
 +  );
 +}
 +
++/**
++ * A touched item that has NOT been saved yet. The server only read it back and
++ * asked save-or-chat; the cart row does not exist until the buyer says so.
++ */
++function ProductSelected({ block, onOpenChat }) {
++  const { T } = useTheme();
++  const p = block.product || {};
++  const chat = block.chat || null;
++  const photo = p.photo || null;
++
++  return (
++    <View style={styles.wrap}>
++      <View style={[styles.addedCard, { borderColor: T.border, backgroundColor: T.card }]}>
++        <View style={styles.row}>
++          <View style={[styles.addedThumb, { backgroundColor: T.bgSoft }]}>
++            {photo ? (
++              <Image source={{ uri: photo }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
++            ) : (
++              <Ionicons name="cube-outline" size={22} color={T.muted} />
++            )}
++          </View>
++          <View style={{ flex: 1, minWidth: 0 }}>
++            <Tiny style={{ color: T.emerald, fontWeight: '800', letterSpacing: 0.4 }}>
++              SELECTED ITEM
++            </Tiny>
++            <T3 numberOfLines={2} style={{ color: T.ink, marginTop: 2 }}>{p.title || 'Item'}</T3>
++            <Small style={{ color: T.emerald, fontWeight: '800', marginTop: 2 }}>
++              ₦{Number(p.price || 0).toLocaleString('en-NG')}
++            </Small>
++          </View>
++        </View>
++
++        {!!p.description && (
++          <Small numberOfLines={5} style={{ color: T.inkMuted, lineHeight: 18, marginTop: 8 }}>
++            {p.description}
++          </Small>
++        )}
++
++        <Tiny style={{ color: T.inkMuted, marginTop: 8, lineHeight: 16 }}>
++          Say "save it" to keep it for later, or "chat the seller" to ask if it is still available.
++        </Tiny>
++
++        {!!chat?.sellerId && (
++          <View style={styles.addedActions}>
++            <Pressable
++              onPress={() => onOpenChat?.(chat)}
++              accessibilityRole="button"
++              accessibilityLabel="Chat the seller"
++              style={({ pressed }) => [
++                styles.addedBtn,
++                { borderColor: T.emerald },
++                pressed && { opacity: 0.8 },
++              ]}
++            >
++              <Ionicons name="chatbubble-outline" size={15} color={T.emerald} />
++              <Small style={{ color: T.emerald, fontWeight: '800' }}>Chat the seller</Small>
++            </Pressable>
++          </View>
++        )}
++      </View>
++    </View>
++  );
++}
++
  const RENDERERS = Object.freeze({
    product_results:    ProductResults,
    product_details:    ProductDetails,
++  product_selected:   ProductSelected,
 +  product_added:      ProductAdded,
    listing_list:       ListingList,
    order_information:  OrderInformation,
    order_details:      OrderInformation,
-@@ -262,7 +348,8 @@ const RENDERERS = Object.freeze({
+@@ -262,7 +414,8 @@ const RENDERERS = Object.freeze({
  });
  
  export default function StructuredBlock({
@@ -1209,7 +1359,7 @@ index c51cf62..82b9eb6 100644
  }) {
    if (!block || typeof block !== 'object') return null;
    const R = RENDERERS[block.type];
-@@ -271,10 +358,12 @@ export default function StructuredBlock({
+@@ -271,10 +424,12 @@ export default function StructuredBlock({
      <R
        block={block}
        onOpenProduct={onOpenProduct}
@@ -1222,7 +1372,7 @@ index c51cf62..82b9eb6 100644
      />
    );
  }
-@@ -287,4 +376,22 @@ const styles = StyleSheet.create({
+@@ -287,4 +442,22 @@ const styles = StyleSheet.create({
      paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12,
      borderWidth: StyleSheet.hairlineWidth, marginBottom: 8,
    },
@@ -1350,3 +1500,63 @@ index 0000000..5b7a3c1
 +  if (voice) return `Muse ${voice[1].toLowerCase()}`;
 +  return raw;
 +}
+diff --git a/src/ai/speak.js b/src/ai/speak.js
+index 75f30b8..0567f2a 100644
+--- a/src/ai/speak.js
++++ b/src/ai/speak.js
+@@ -8,6 +8,37 @@
+ 
+ import * as Speech from 'expo-speech';
+ 
++/**
++ * Remove an assistant instruction prefix that must never be spoken.
++ *
++ * Models sometimes echo the framing they were given, e.g.
++ *   "Next, say: How many do you have?"
++ *   "Now ask: What price?"
++ *   "Say: Pick the photo"
++ * The buyer must hear only the words meant for them. This strips a leading
++ * meta label and the same label after a sentence boundary.
++ */
++export function stripReplyPrefix(text) {
++  let out = String(text == null ? '' : text).trim();
++  if (!out) return '';
++
++  const LEADING = /^(?:(?:next|now|then)\s*,?\s*(?:say|ask|reply|tell them)|say|ask|reply|assistant)\s*[:,-]\s*/i;
++  // Run twice so "Next, say: Say: ..." also collapses cleanly.
++  for (let i = 0; i < 2; i += 1) {
++    const next = out.replace(LEADING, '').trim();
++    if (next === out) break;
++    out = next;
++  }
++
++  out = out
++    .replace(/([.!?]\s+)(?:next|now|then)\s*,?\s*(?:say|ask|reply|tell them)\s*:\s*/gi, '$1')
++    .replace(/([.!?]\s+)next\s*:\s*/gi, '$1')
++    .replace(/\s+/g, ' ')
++    .trim();
++
++  return out;
++}
++
+ /** Stop any speech before recording or a new reply. */
+ export async function stopSpeaking() {
+   try {
+@@ -22,7 +53,7 @@ export async function stopSpeaking() {
+  * speakReply for a fresh reply that must interrupt.
+  */
+ export function queueSpeech(text) {
+-  const line = String(text || '').trim();
++  const line = stripReplyPrefix(text);
+   if (!line) return;
+ 
+   try {
+@@ -35,7 +66,7 @@ export function queueSpeech(text) {
+  * playback starts.
+  */
+ export async function speakReply(text) {
+-  const line = String(text || '').trim();
++  const line = stripReplyPrefix(text);
+   if (!line) return;
+ 
+   // A fresh reply always interrupts the previous one.

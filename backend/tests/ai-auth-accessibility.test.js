@@ -77,7 +77,10 @@ test('registration walks one field at a time, then goes ready', () => {
     passwordSet: true, agreed: true,
   });
   assert.equal(ready.state, 'REGISTRATION_READY');
-  assert.equal(ready.field, null);
+  // The final step is the phone's confirmation card; its button is the only
+  // caller of POST /register.
+  assert.equal(ready.field, 'confirm');
+  assert.equal(ready.nextScreen, 'register');
 });
 
 test('forgotten email never pushes a new account or a reset link', () => {

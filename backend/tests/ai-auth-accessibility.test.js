@@ -83,6 +83,38 @@ test('registration walks one field at a time, then goes ready', () => {
   assert.equal(ready.nextScreen, 'register');
 });
 
+test('a repeated registration step asks for the missing value again', () => {
+  const prior = {
+    intent: 'REGISTER', state: 'COLLECTING_REGISTRATION_DETAILS',
+    method: null, field: 'phone', emailProvided: false, phoneProvided: false,
+    emailDeclined: true, passwordSet: false, agreed: false,
+    attempts: 1, updatedAt: Date.now(),
+  };
+  const again = intents.planAuthHelp({
+    intent: 'REGISTER', prior,
+    registerDraft: { fullName: 'Ada Obi' },
+    emailDeclined: true,
+  });
+  assert.equal(again.field, 'phone');
+  assert.equal(again.retry, true);
+  assert.match(again.say, /did not get the phone number/i);
+  assert.match(again.say, /say it again/i);
+
+  // The same step on its first attempt still asks the normal question.
+  const first = intents.planAuthHelp({
+    intent: 'REGISTER',
+    prior: { ...prior, field: 'email' },
+    registerDraft: { fullName: 'Ada Obi' },
+    emailDeclined: true,
+  });
+  assert.equal(first.field, 'phone');
+  assert.equal(first.retry, false);
+  assert.match(first.say, /What phone number should we use/i);
+
+  // The step survives persistence so the next turn can tell it is a repeat.
+  assert.equal(intents.sanitizeAuthState(prior).field, 'phone');
+});
+
 test('forgotten email never pushes a new account or a reset link', () => {
   const p = plan('RECOVER_ACCOUNT_IDENTIFIER');
   assert.equal(p.state, 'ACCOUNT_IDENTIFIER_RECOVERY');

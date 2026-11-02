@@ -1,5 +1,5 @@
 diff --git a/src/ai/AIContext.js b/src/ai/AIContext.js
-index 9d88d62..bf3b053 100644
+index 9d88d62..ae6bfc8 100644
 --- a/src/ai/AIContext.js
 +++ b/src/ai/AIContext.js
 @@ -36,20 +36,30 @@ import {
@@ -435,7 +435,7 @@ index 9d88d62..bf3b053 100644
          setLastVoice({ text: line, kind: 'error', at: Date.now() });
          await speakReply(line, heardLang);
          return;
-@@ -706,6 +918,13 @@ export function AIProvider({ children }) {
+@@ -706,13 +918,22 @@ export function AIProvider({ children }) {
        const chatBlock = result.ok && Array.isArray(result.structured)
          ? result.structured.find(b => b && b.type === 'chat_handoff' && b.sellerId)
          : null;
@@ -449,7 +449,8 @@ index 9d88d62..bf3b053 100644
  
        setLastVoice({
          text: line,
-@@ -713,6 +932,7 @@ export function AIProvider({ children }) {
++        transcript,
+         kind: result.ok ? 'reply' : 'error',
          confirmation: result.ok ? (result.confirmation || null) : null,
          authUrl: authBlock || null,
          chatHandoff: chatBlock || null,
@@ -457,7 +458,7 @@ index 9d88d62..bf3b053 100644
          at: Date.now(),
        });
        if (!result.spoken) await speakReply(line, heardLang);
-@@ -823,8 +1043,11 @@ export function AIProvider({ children }) {
+@@ -823,8 +1044,11 @@ export function AIProvider({ children }) {
  
    // Seller-chat handoff: open ChatScreen with the AI draft and product card
    // pre-filled. The user presses send in the chat; nothing is auto-sent.
@@ -469,7 +470,7 @@ index 9d88d62..bf3b053 100644
      nav.push('chat', {
        partnerId: String(handoff.sellerId),
        ...(handoff.sellerName ? { name: String(handoff.sellerName).slice(0, 80) } : {}),
-@@ -838,21 +1061,26 @@ export function AIProvider({ children }) {
+@@ -838,21 +1062,26 @@ export function AIProvider({ children }) {
          },
        } : {}),
      });

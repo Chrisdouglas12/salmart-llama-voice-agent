@@ -1,5 +1,5 @@
 diff --git a/src/ai/AIContext.js b/src/ai/AIContext.js
-index 29505f9..bf3b053 100644
+index 29505f9..ae6bfc8 100644
 --- a/src/ai/AIContext.js
 +++ b/src/ai/AIContext.js
 @@ -41,10 +41,10 @@ import { TAB_ROOTS } from '../state/routes';
@@ -175,6 +175,14 @@ index 29505f9..bf3b053 100644
      welcomeRef.current = wanted;
      skipResumeRef.current = wanted;
      if (wanted) setWelcomeTick(t => t + 1);
+@@ -916,6 +928,7 @@ export function AIProvider({ children }) {
+ 
+       setLastVoice({
+         text: line,
++        transcript,
+         kind: result.ok ? 'reply' : 'error',
+         confirmation: result.ok ? (result.confirmation || null) : null,
+         authUrl: authBlock || null,
 diff --git a/src/ai/UseAIPatch.js b/src/ai/UseAIPatch.js
 index 302cdba..aeb02cd 100644
 --- a/src/ai/UseAIPatch.js
@@ -306,7 +314,7 @@ index 75f30b8..0567f2a 100644
  
    // A fresh reply always interrupts the previous one.
 diff --git a/src/screens/RegisterScreen.js b/src/screens/RegisterScreen.js
-index 41c4c2b..46d5fb7 100644
+index 41c4c2b..1722288 100644
 --- a/src/screens/RegisterScreen.js
 +++ b/src/screens/RegisterScreen.js
 @@ -37,6 +37,7 @@ import { resendVerification } from '../api/endpoints';
@@ -317,7 +325,25 @@ index 41c4c2b..46d5fb7 100644
  import { reportAuthOutcome } from '../ai/authOutcome';
  import { reportRegistrationSnapshot, takeRegistrationSnapshot } from '../ai/registrationSnapshot';
  import AuthWelcome from '../ai/AuthWelcome';
-@@ -91,6 +92,16 @@ const PASSWORD_HELP_LINE =
+@@ -45,6 +46,17 @@ import { Button, T1, Body, success } from '../ui/kit';
+ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+ const PHONE_RE = /^0[789][01]\d{8}$/;
+ 
++// Explicit spoken confirmation only. A vague "okay" is not enough to spend the
++// user's action: they must name the account action, or say yes/confirm while
++// the final card is on screen. A refusal always wins.
++const VOICE_CONFIRM_RE = /\b(create|make|open|register)\b[\s\w]{0,20}\baccount\b|\b(create it|go ahead|do it|submit|i agree|confirm)\b/;
++const VOICE_YES_RE = /\byes\b/;
++const VOICE_CANCEL_RE = /\b(no|not yet|cancel|wait|stop)\b|\bdon'?t\b|\bdo not\b/;
++const VOICE_REFUSE_RE = /\b(do not|don'?t|never)\b[\s\w]{0,15}\b(create|make|register|open|submit)\b/;
++// Any wish to correct a detail wins over a confirmation, even in the same
++// sentence: "yes, but change my email" must never create the account.
++const VOICE_CHANGE_RE = /\b(change|correct|edit|different|instead|wrong)\b/;
++
+ // Mirrors the web's `salmart_pending_ref` (register.js) so a code captured from
+ // a deep link survives hopping between screens (e.g. signin → register).
+ const PENDING_REF_KEY = 'salmart_pending_ref';
+@@ -91,6 +103,16 @@ const PASSWORD_HELP_LINE =
    + 'You can use the suggested code, copy it and keep it somewhere safe. '
    + 'Do not share your code with anyone.';
  
@@ -334,7 +360,7 @@ index 41c4c2b..46d5fb7 100644
  const PASSWORD_WORDS = [
    'mango', 'river', 'market', 'orange', 'green', 'happy', 'house', 'silver',
    'palm', 'gold', 'star', 'moon', 'bird', 'fish', 'tree', 'rain',
-@@ -106,7 +117,9 @@ function makePasswordSuggestion() {
+@@ -106,7 +128,9 @@ function makePasswordSuggestion() {
    try {
      bytes = Crypto.getRandomBytes(8);
    } catch (_e) {
@@ -345,7 +371,7 @@ index 41c4c2b..46d5fb7 100644
    }
    const word = i => PASSWORD_WORDS[bytes[i] % PASSWORD_WORDS.length];
    let first = word(0);
-@@ -117,6 +130,22 @@ function makePasswordSuggestion() {
+@@ -117,13 +141,29 @@ function makePasswordSuggestion() {
    return `${title(first)}${title(second)}${number}`;
  }
  
@@ -368,7 +394,15 @@ index 41c4c2b..46d5fb7 100644
  export default function RegisterScreen({ route }) {
    const { T, isDark } = useTheme();
    const styles = useStyles();
-@@ -143,6 +172,7 @@ export default function RegisterScreen({ route }) {
+   const { register, needsVerification, clearNeedsVerification, adoptWebSession } = useAuth();
+   const nav = useNav();
+   const insets = useSafeAreaInsets();
+-  const { notice, speak, welcomeAfterRegistration } = useAI();
++  const { notice, speak, welcomeAfterRegistration, recording, transcribing, lastVoice, toggleRecording } = useAI();
+ 
+   const [form, setForm] = useState({
+     fullName: '',
+@@ -143,6 +183,7 @@ export default function RegisterScreen({ route }) {
    const [activeField, setActiveField] = useState(null);
    const [passwordOpen, setPasswordOpen] = useState(false);
    const [agreementOpen, setAgreementOpen] = useState(false);
@@ -376,7 +410,19 @@ index 41c4c2b..46d5fb7 100644
    const [submitted, setSubmitted] = useState(false);
    const [suggestion, setSuggestion] = useState('');
    const [copied, setCopied] = useState(false);
-@@ -218,6 +248,25 @@ export default function RegisterScreen({ route }) {
+@@ -155,6 +196,11 @@ export default function RegisterScreen({ route }) {
+   const passwordValueRef = useRef('');
+   passwordValueRef.current = form.password;
+   const submitLockRef = useRef(false);
++  const lastConfirmVoiceRef = useRef(0);
++  // Set when the card is shown and when its own microphone starts a turn, so a
++  // "yes" spoken before the card cannot silently create the account.
++  const confirmOpenedAtRef = useRef(0);
++  const voiceStartedInConfirmRef = useRef(false);
+ 
+   // Referral: the code arrives either in the route params (a deep link like
+   // …/#/register?ref=CODE) or from the persisted pending code. When it comes
+@@ -218,6 +264,27 @@ export default function RegisterScreen({ route }) {
      copySuggestion(code);
    }, [set, copySuggestion]);
  
@@ -390,19 +436,21 @@ index 41c4c2b..46d5fb7 100644
 +    const body = lines.length
 +      ? `Here is what you gave me. ${lines.join('. ')}.`
 +      : 'Here is what you gave me.';
-+    return `${body} Should I create your account now, or would you like to change something?`;
++    return `${body} Tap the green Create my account button to create it, or tell me what to change.`;
 +  }, [form]);
 +
 +  const openConfirm = useCallback(() => {
 +    setConfirmOpen(true);
-+    setAiNote('Check your details, then tap Create my account.');
++    confirmOpenedAtRef.current = Date.now();
++    voiceStartedInConfirmRef.current = false;
++    setAiNote('Tap the green Create my account button, or tap Speak to confirm and say create my account.');
 +    queueSpeech(recapSpeech());
 +  }, [recapSpeech]);
 +
    // ─── Assistant patch and step focus ─────────────────────────────────────────
    // The assistant may fill the name, email and phone. It names the next step,
    // and the screen opens the secure password box or the agreement card. It
-@@ -247,19 +296,38 @@ export default function RegisterScreen({ route }) {
+@@ -247,19 +314,40 @@ export default function RegisterScreen({ route }) {
      const focus = aiPatch.focus || aiPatch.field || f.field || null;
      if (aiPatch.say) setAiNote(aiPatch.say);
      else if (focus === 'password') {
@@ -412,7 +460,7 @@ index 41c4c2b..46d5fb7 100644
 -      setAiNote('Read the agreement and tick the box if you accept.');
 +      setAiNote(AGREEMENT_WHAT);
 +    } else if (focus === 'confirm') {
-+      setAiNote('Check your details, then tap Create my account.');
++      setAiNote('Tap the green Create my account button, or tap Speak to confirm and say create my account.');
      }
  
 -    if (focus === 'password') setPasswordOpen(true);
@@ -428,11 +476,13 @@ index 41c4c2b..46d5fb7 100644
 +      queueSpeech(AGREEMENT_WHAT);
 +    } else if (focus === 'confirm') {
 +      setConfirmOpen(true);
++      confirmOpenedAtRef.current = Date.now();
++      voiceStartedInConfirmRef.current = false;
 +      if (confirmOpen) {
 +        // The card is already on screen, so the user only needs the tap. Do
 +        // not read the whole recap a second time.
-+        setAiNote('Tap Create my account when you are ready.');
-+        queueSpeech('Tap Create my account when you are ready.');
++        setAiNote('Tap the green Create my account button, or tap Speak to confirm and say create my account.');
++        queueSpeech('Tap the green Create my account button, or tap Speak to confirm and say create my account.');
 +      } else {
 +        setAiNote('Check your details, then tap Create my account.');
 +        queueSpeech(recapSpeech());
@@ -447,7 +497,7 @@ index 41c4c2b..46d5fb7 100644
  
    // Report only safe flags. The password is reduced to a single boolean and is
    // never part of the snapshot the assistant receives.
-@@ -295,9 +363,9 @@ export default function RegisterScreen({ route }) {
+@@ -295,9 +383,9 @@ export default function RegisterScreen({ route }) {
    const readSignupSteps = useCallback(() => {
      speak(
        'This is the create account screen. Tell me your full name. '
@@ -459,7 +509,7 @@ index 41c4c2b..46d5fb7 100644
      );
    }, [speak]);
  
-@@ -333,8 +401,9 @@ export default function RegisterScreen({ route }) {
+@@ -333,8 +421,9 @@ export default function RegisterScreen({ route }) {
  
      submitLockRef.current = true;
      // Registration signs the user in on purpose. The generic resume turn is
@@ -471,7 +521,7 @@ index 41c4c2b..46d5fb7 100644
      setBusy(true);
  
      const refCode = referrer.trim();
-@@ -367,16 +436,42 @@ export default function RegisterScreen({ route }) {
+@@ -367,16 +456,42 @@ export default function RegisterScreen({ route }) {
        submitLockRef.current = false;
        // Nothing was signed in, so let a later real sign-in resume normally.
        welcomeAfterRegistration(false);
@@ -517,17 +567,62 @@ index 41c4c2b..46d5fb7 100644
        }
      } finally {
        setBusy(false);
-@@ -385,6 +480,9 @@ export default function RegisterScreen({ route }) {
+@@ -385,6 +500,54 @@ export default function RegisterScreen({ route }) {
      busy, validate, register, form, referrer, nav, welcomeAfterRegistration,
    ]);
  
++  // ─── Spoken confirmation ────────────────────────────────────────────────────
++  // The final card has its own microphone. This effect reads the transcript of
++  // that voice turn (the same global voice pipeline, not a second recorder).
++  // Only an explicit account action or a clear yes submits; a refusal closes
++  // the card and never calls POST /register.
++  useEffect(() => {
++    if (!confirmOpen || !lastVoice || !lastVoice.at) return;
++    if (lastVoice.at === lastConfirmVoiceRef.current) return;
++    // Only a turn started by the card's own microphone can create the account.
++    // Anything spoken before the card opened just opens or keeps the card.
++    if (!voiceStartedInConfirmRef.current) return;
++    if (lastVoice.at < confirmOpenedAtRef.current) return;
++    lastConfirmVoiceRef.current = lastVoice.at;
++    const heard = String(lastVoice.transcript || '').toLowerCase().trim();
++    if (!heard) return;
++
++    // "No problem" is agreement, not a refusal.
++    const forRefusal = heard
++      .replace(/\bno problem\b/g, '')
++      .replace(/\bnot a problem\b/g, '');
++    const explicit = VOICE_CONFIRM_RE.test(heard);
++    const yes = VOICE_YES_RE.test(heard);
++    const negative = VOICE_CANCEL_RE.test(forRefusal);
++    const refusal = VOICE_REFUSE_RE.test(heard);
++    const wantsChange = VOICE_CHANGE_RE.test(heard);
++    const blocked = refusal || wantsChange || negative;
++
++    if (blocked) {
++      voiceStartedInConfirmRef.current = false;
++      setConfirmOpen(false);
++      const line = wantsChange || !refusal
++        ? 'Nothing was created. Which detail would you like to change?'
++        : 'Nothing was created. Tap Create my account only when you are ready.';
++      setAiNote(line);
++      queueSpeech(line);
++      return;
++    }
++    if (explicit || yes) {
++      voiceStartedInConfirmRef.current = false;
++      setConfirmOpen(false);
++      notice('I am creating your account now.', { speak: true });
++      submit({ confirmedAgreement: true });
++    }
++  }, [confirmOpen, lastVoice, notice, submit]);
++
 +  // ─── Final read-back ────────────────────────────────────────────────────────
 +  // recapSpeech and openConfirm are defined above the assistant-patch effect,
 +  // because the server can ask the phone to open the final card in a turn.
    const onAgreementAccepted = useCallback(() => {
      setAgreed(true);
      setErrs(e => ({ ...e, agreed: '' }));
-@@ -395,20 +493,54 @@ export default function RegisterScreen({ route }) {
+@@ -395,20 +558,54 @@ export default function RegisterScreen({ route }) {
        && (form.email.trim() || form.phoneNumber.trim())
        && passwordSet
      );
@@ -565,8 +660,10 @@ index 41c4c2b..46d5fb7 100644
 +    if (!form.email.trim() && !form.phoneNumber.trim()) {
 +      setAiNote('I need an email address or a phone number.');
 +      emailRef.current?.focus?.();
-+      return;
-+    }
+       return;
+     }
+-    onAgreementAccepted();
+-  }, [agreed, onAgreementAccepted]);
 +    if (form.email.trim() && !EMAIL_RE.test(form.email.trim())) {
 +      setAiNote('That email does not look complete. Check it and try again.');
 +      emailRef.current?.focus?.();
@@ -580,10 +677,8 @@ index 41c4c2b..46d5fb7 100644
 +    if (passwordError(form.password)) {
 +      setPasswordOpen(true);
 +      queueSpeech(PASSWORD_WHAT);
-       return;
-     }
--    onAgreementAccepted();
--  }, [agreed, onAgreementAccepted]);
++      return;
++    }
 +    if (!agreed) {
 +      setAgreementOpen(true);
 +      queueSpeech(AGREEMENT_WHAT);
@@ -592,7 +687,7 @@ index 41c4c2b..46d5fb7 100644
  
    const googleSignUp = useCallback(async () => {
      if (googleBusy) return;
-@@ -682,7 +814,7 @@ export default function RegisterScreen({ route }) {
+@@ -682,7 +879,7 @@ export default function RegisterScreen({ route }) {
              <View>
                <Text style={styles.fieldLabel}>Password</Text>
                <Pressable
@@ -601,7 +696,7 @@ index 41c4c2b..46d5fb7 100644
                  accessibilityRole="button"
                  accessibilityLabel={passwordSet ? 'Change your password' : 'Create your password'}
                  style={({ pressed }) => [
-@@ -750,7 +882,7 @@ export default function RegisterScreen({ route }) {
+@@ -750,7 +947,7 @@ export default function RegisterScreen({ route }) {
            </View>
  
            <Pressable
@@ -610,7 +705,7 @@ index 41c4c2b..46d5fb7 100644
              hitSlop={10}
              accessibilityRole="checkbox"
              accessibilityState={{ checked: agreed }}
-@@ -767,7 +899,7 @@ export default function RegisterScreen({ route }) {
+@@ -767,7 +964,7 @@ export default function RegisterScreen({ route }) {
            {!!errs.agreed && <Text style={styles.errorTextInline}>{errs.agreed}</Text>}
  
            <Pressable
@@ -619,7 +714,7 @@ index 41c4c2b..46d5fb7 100644
              disabled={busy}
              accessibilityRole="button"
              style={({ pressed }) => [styles.primaryBtn, busy && { opacity: 0.72 }, pressed && !busy && { opacity: 0.96 }]}
-@@ -848,7 +980,8 @@ export default function RegisterScreen({ route }) {
+@@ -848,7 +1045,8 @@ export default function RegisterScreen({ route }) {
                  </View>
                  <Text style={styles.modalTitle}>Create your secret code</Text>
                  <Text style={styles.modalBody}>
@@ -629,7 +724,7 @@ index 41c4c2b..46d5fb7 100644
                    share it with anyone.
                  </Text>
                  <TextInput
-@@ -925,14 +1058,21 @@ export default function RegisterScreen({ route }) {
+@@ -925,14 +1123,21 @@ export default function RegisterScreen({ route }) {
                        splitFullName(form.fullName).lastName
                        && (form.email.trim() || form.phoneNumber.trim())
                      );
@@ -654,7 +749,7 @@ index 41c4c2b..46d5fb7 100644
                    }}
                    accessibilityRole="button"
                    style={({ pressed }) => [styles.modalPrimary, pressed && { opacity: 0.9 }]}
-@@ -969,8 +1109,9 @@ export default function RegisterScreen({ route }) {
+@@ -969,8 +1174,9 @@ export default function RegisterScreen({ route }) {
              </View>
              <Text style={styles.modalTitle}>Before we create your account</Text>
              <Text style={styles.modalBody}>
@@ -666,7 +761,7 @@ index 41c4c2b..46d5fb7 100644
              </Text>
              <Pressable
                onPress={onAgreementAccepted}
-@@ -981,7 +1122,9 @@ export default function RegisterScreen({ route }) {
+@@ -981,7 +1187,9 @@ export default function RegisterScreen({ route }) {
                <View style={[styles.checkboxWrap, agreed && styles.checkboxWrapChecked]}>
                  <Ionicons name={agreed ? 'checkmark' : 'ellipse-outline'} size={12} color={agreed ? '#fff' : T.muted} />
                </View>
@@ -677,7 +772,7 @@ index 41c4c2b..46d5fb7 100644
              </Pressable>
              <Pressable
                onPress={() => setAgreementOpen(false)}
-@@ -993,6 +1136,66 @@ export default function RegisterScreen({ route }) {
+@@ -993,6 +1201,101 @@ export default function RegisterScreen({ route }) {
            </Pressable>
          </Pressable>
        </Modal>
@@ -698,6 +793,8 @@ index 41c4c2b..46d5fb7 100644
 +            <Text style={styles.modalTitle}>Create your account?</Text>
 +            <Text style={styles.modalBody}>
 +              Check what you gave me. Your secret code stays hidden on this phone.
++              Tap the green Create my account button below, or tap Speak to confirm
++              and say create my account.
 +            </Text>
 +
 +            {recapLines(form).map(line => {
@@ -713,6 +810,39 @@ index 41c4c2b..46d5fb7 100644
 +              <Text style={styles.confirmLabel}>Password</Text>
 +              <Text style={styles.confirmValue}>Saved on this phone</Text>
 +            </View>
++
++            {/* The global microphone sits under a native Modal, so the final
++                card brings the same recorder forward here. It is not a second
++                voice system: it calls the one toggleRecording pipeline. */}
++            <Pressable
++              onPress={() => {
++                if (busy) return;
++                voiceStartedInConfirmRef.current = true;
++                confirmOpenedAtRef.current = confirmOpenedAtRef.current || Date.now();
++                toggleRecording({ platform: Platform.OS, screen: 'register' });
++              }}
++              disabled={busy || transcribing}
++              accessibilityRole="button"
++              accessibilityLabel={recording ? 'Stop speaking' : 'Speak to confirm your account'}
++              style={({ pressed }) => [
++                styles.confirmMic,
++                recording && { backgroundColor: T.danger, borderColor: T.danger },
++                (pressed || busy || transcribing) && { opacity: 0.85 },
++              ]}
++            >
++              <Ionicons
++                name={recording ? 'stop' : transcribing ? 'ellipsis-horizontal' : 'mic'}
++                size={18}
++                color={recording ? '#fff' : T.emerald}
++              />
++              <Text style={[styles.confirmMicText, recording && { color: '#fff' }]}>
++                {recording
++                  ? 'Stop — use my answer'
++                  : transcribing
++                    ? 'Understanding you…'
++                    : 'Speak to confirm'}
++              </Text>
++            </Pressable>
 +
 +            <Pressable
 +              onPress={() => {
@@ -744,7 +874,26 @@ index 41c4c2b..46d5fb7 100644
      </SafeAreaView>
    );
  }
-@@ -1100,6 +1303,31 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+@@ -1090,6 +1393,18 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
+     justifyContent: 'center',
+   },
+   modalPrimaryText: { color: '#fff', fontSize: 15, fontWeight: '800' },
++  confirmMic: {
++    marginTop: 16,
++    minHeight: 46,
++    borderRadius: 14,
++    borderWidth: 1.5,
++    borderColor: T.emerald,
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'center',
++    gap: 8,
++  },
++  confirmMicText: { color: T.emerald, fontSize: 14, fontWeight: '800' },
+   modalCancel: { color: T.inkMuted, fontSize: 14, fontWeight: '700', textAlign: 'center' },
+   modalAgreeRow: {
+     flexDirection: 'row',
+@@ -1100,6 +1415,31 @@ const useStyles = createThemed(({ T }) => StyleSheet.create({
    },
    modalAgreeText: { color: T.ink, fontSize: 14, flex: 1, lineHeight: 19 },
  
@@ -776,3 +925,80 @@ index 41c4c2b..46d5fb7 100644
    brandRow: {
      flexDirection: 'row',
      alignItems: 'center',
+diff --git a/src/screens/SignInScreen.js b/src/screens/SignInScreen.js
+index 7eb46ba..278daa1 100644
+--- a/src/screens/SignInScreen.js
++++ b/src/screens/SignInScreen.js
+@@ -22,6 +22,8 @@ import { success } from '../ui/kit';
+ import { useKeyboardOverlap } from '../ui/useKeyboardHeight';
+ 
+ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
++// Same Nigerian formats the server accepts, with optional +234 and spacing.
++const PHONE_RE = /^(?:\+?234|0)[789][01]\d{8}$/;
+ const SCREEN_H = Dimensions.get('window').height;
+ 
+ const FEATURES = [
+@@ -158,8 +160,13 @@ function PasswordSheet({ visible, onClose, initialEmail }) {
+ 
+   const validate = useCallback(() => {
+     const errs = {};
+-    if (!email.trim()) errs.email = 'Enter your email address.';
+-    else if (!EMAIL_RE.test(email.trim())) errs.email = 'That does not look like a valid email.';
++    const value = email.trim().replace(/[\s-]/g, '');
++    if (!value) errs.email = 'Enter your email address or phone number.';
++    else if (value.includes('@')) {
++      if (!EMAIL_RE.test(value)) errs.email = 'That does not look like a valid email.';
++    } else if (!PHONE_RE.test(value)) {
++      errs.email = 'Enter a valid email, or an 11-digit phone number starting with zero.';
++    }
+     if (!password) errs.password = 'Enter your password.';
+     setFieldErrors(errs);
+     return Object.keys(errs).length === 0;
+@@ -181,11 +188,13 @@ function PasswordSheet({ visible, onClose, initialEmail }) {
+       const status = e?.status;
+       const msg = String(e?.message || '');
+       setLastEmail(email.trim());
+-      if (status === 401) {
++      if (status === 401 || (status === 400 && /invalid password/i.test(msg))) {
+         setError('That password did not match. Try again, or reset it and I will guide you.');
++        setFieldErrors(e => ({ ...e, password: 'Check the password and try again.' }));
+         reportAuthOutcome('invalid_password');
+-      } else if (status === 404) {
+-        setError('I could not find an account with that email. Check the address, or create an account.');
++      } else if (status === 404 || (status === 400 && /user not found/i.test(msg))) {
++        setError('I could not find an account with that email or phone number. Check it, or create an account.');
++        setFieldErrors(e => ({ ...e, email: 'No account uses that email or phone number.' }));
+         reportAuthOutcome('no_account');
+       } else if (status === 403) {
+         setError('Your email is not verified yet. Open the Salmart email and tap the link, then come back.');
+@@ -242,7 +251,7 @@ function PasswordSheet({ visible, onClose, initialEmail }) {
+             <View style={styles.sheetHeader}>
+               <View style={styles.sheetHeaderText}>
+                 <Text style={styles.sheetTitle}>Sign in with password</Text>
+-                <Text style={styles.sheetSubtitle}>Use the email and password you registered with.</Text>
++                <Text style={styles.sheetSubtitle}>Use the email or phone number and password you registered with.</Text>
+               </View>
+               <Pressable
+                 onPress={onClose}
+@@ -287,17 +296,17 @@ function PasswordSheet({ visible, onClose, initialEmail }) {
+ 
+             <View style={styles.formBox}>
+               <Field
+-                label="Email address"
+-                icon="mail-outline"
++                label="Email or phone number"
++                icon="person-outline"
+                 value={email}
+                 onChangeText={t => {
+                   setEmail(t);
+                   setError('');
+                   setFieldErrors(e => ({ ...e, email: '' }));
+                 }}
+-                placeholder="name@example.com"
++                placeholder="name@example.com or 0803 123 4567"
+                 keyboardType="email-address"
+-                autoComplete="email"
++                autoComplete="username"
+                 returnKeyType="next"
+                 onSubmitEditing={() => passwordRef.current?.focus()}
+                 error={fieldErrors.email}

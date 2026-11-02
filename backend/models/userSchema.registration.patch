@@ -1,8 +1,8 @@
 diff --git a/models/userSchema.js b/models/userSchema.js
-index 375e4b9e1..2656db5c6 100644
+index 375e4b9e1..0dc1d9515 100644
 --- a/models/userSchema.js
 +++ b/models/userSchema.js
-@@ -19,7 +19,9 @@ const userSchema = new mongoose.Schema({
+@@ -19,12 +19,14 @@ const userSchema = new mongoose.Schema({
    },
    email: { 
      type: String, 
@@ -12,4 +12,27 @@ index 375e4b9e1..2656db5c6 100644
 +    required: false,
      trim: true, 
      lowercase: true,
-     // Make email unique but allow multiple nulls for anonymous users
+-    // Make email unique but allow multiple nulls for anonymous users
+-    unique: true,
+-    sparse: true  // Allows multiple null/undefined values
++    // Uniqueness is enforced by the partial index at the bottom of this file.
++    // A plain `unique: true` (even with `sparse`) rejects the second phone-only
++    // account because MongoDB indexes a missing email as null.
+   },
+ 
+   username: {
+@@ -865,7 +867,13 @@ userSchema.statics.cleanupAnonymousUsers = async function(daysInactive = 30) {
+ // ─────────────────────────────────────────────────────────────────────────────
+ // INDEXES
+ // ─────────────────────────────────────────────────────────────────────────────
+-userSchema.index({ email: 1 },              { unique: true, sparse: true }); // Updated to sparse
++// Partial (not sparse): only real email strings are indexed, so any number of
++// phone-only accounts can exist with no email at all. Sparse still indexes
++// `email: null`, which is why phone-only sign-up hit E11000 on email_1.
++userSchema.index(
++  { email: 1 },
++  { unique: true, partialFilterExpression: { email: { $type: 'string' } } }
++);
+ userSchema.index({ username: 1 },           { sparse: true });
+ userSchema.index({ googleId: 1 },           { sparse: true });
+ userSchema.index({ anonymousId: 1 },        { sparse: true }); // New index

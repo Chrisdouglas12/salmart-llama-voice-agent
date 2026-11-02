@@ -1,5 +1,5 @@
 diff --git a/routes/userRoutesIndex.js b/routes/userRoutesIndex.js
-index de905af27..d946dd82b 100644
+index de905af27..277afa2a1 100644
 --- a/routes/userRoutesIndex.js
 +++ b/routes/userRoutesIndex.js
 @@ -30,6 +30,17 @@ const resend = new Resend(process.env.RESEND_API_KEY);
@@ -20,7 +20,20 @@ index de905af27..d946dd82b 100644
  // ================================
  // AUTHENTICATION ROUTES (Registration, Login, etc.)
  // ================================
-@@ -43,29 +54,53 @@ router.post('/register', async (req, res) => {
+@@ -38,34 +49,84 @@ const isProduction = process.env.NODE_ENV === 'production';
+  * POST Register
+  * Access: Public
+  * Description: Register a new user
++ *
++ * Every rejection carries a fixed `code` and the `field` that fixes it, so the
++ * app can say the right sentence and focus the right box. Raw driver or stack
++ * text never leaves this route.
+  */
+ router.post('/register', async (req, res) => {
++  const fail = (status, code, field, message) => res.status(status).json({
++    success: false, code, field, message,
++  });
++
    try {
      const { firstName, lastName, email, password, referrer, phoneNumber } = req.body;
  
@@ -29,22 +42,37 @@ index de905af27..d946dd82b 100644
 +    const rawEmail = String(email || '').trim().toLowerCase();
 +    const rawPhone = String(phoneNumber || '').trim();
 +
-+    if (!password || String(password).length < 8) {
-+      return res.status(400).json({ message: 'Choose a password with at least 8 characters.' });
++    if (!password || String(password).length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
++      return fail(
++        400,
++        'weak_password',
++        'password',
++        'Choose a password with at least 8 characters, including a letter and a number.',
++      );
 +    }
 +    if (!rawEmail && !rawPhone) {
-+      return res.status(400).json({ message: 'Give us an email address or a phone number.' });
-+    }
-+
-+    const normalizedEmail = rawEmail && EMAIL_RE.test(rawEmail) ? rawEmail : '';
-+    if (rawEmail && !normalizedEmail) {
-+      return res.status(400).json({ message: 'That email address does not look right.' });
++      return fail(
++        400,
++        'missing_identifier',
++        'email',
++        'Give us an email address or a phone number.',
++      );
      }
  
 -    const normalizedEmail = email.trim().toLowerCase();
++    const normalizedEmail = rawEmail && EMAIL_RE.test(rawEmail) ? rawEmail : '';
++    if (rawEmail && !normalizedEmail) {
++      return fail(400, 'invalid_email', 'email', 'That email address does not look right.');
++    }
++
 +    const normalizedPhone = rawPhone ? normalizePhone(rawPhone) : '';
 +    if (rawPhone && !normalizedPhone) {
-+      return res.status(400).json({ message: 'That phone number does not look right.' });
++      return fail(
++        400,
++        'invalid_phone',
++        'phoneNumber',
++        'That phone number does not look right. Use the 11 digits, starting with zero.',
++      );
 +    }
  
 -    const existingUser = await User.findOne({ email: normalizedEmail });
@@ -57,11 +85,14 @@ index de905af27..d946dd82b 100644
      if (existingUser) {
 -      return res.status(400).json({ message: 'User already exists.' });
 +      const phoneTaken = !!normalizedPhone && existingUser.phoneNumber === normalizedPhone;
-+      return res.status(400).json({
-+        message: phoneTaken
++      return fail(
++        409,
++        phoneTaken ? 'phone_exists' : 'email_exists',
++        phoneTaken ? 'phoneNumber' : 'email',
++        phoneTaken
 +          ? 'An account with this phone number already exists.'
 +          : 'An account with this email already exists.',
-+      });
++      );
      }
  
      const hashedPassword = await bcrypt.hash(password, 10);
@@ -84,7 +115,7 @@ index de905af27..d946dd82b 100644
      });
  
      await newUser.save();
-@@ -85,127 +120,34 @@ router.post('/register', async (req, res) => {
+@@ -85,130 +146,66 @@ router.post('/register', async (req, res) => {
      );
      // ───────────────────────────────────────────────────────────────────────────
  
@@ -94,7 +125,12 @@ index de905af27..d946dd82b 100644
 -    // that strips custom schemes.
 -    const appVerifyUrl = `salmart://verify-email?token=${verificationToken}`;
 -    const webVerifyUrl = `${process.env.FRONTEND_URL || 'https://salmartonline.com.ng'}/#/verify-email?token=${verificationToken}`;
--
++    const token = jwt.sign(
++      { userId: newUser._id, authProvider: 'local' },
++      process.env.JWT_SECRET,
++      { expiresIn: '30d' }
++    );
+ 
 -    const emailHtml = `
 -      <!DOCTYPE html>
 -      <html lang="en">
@@ -186,12 +222,7 @@ index de905af27..d946dd82b 100644
 -      });
 -
 -      if (error) throw new Error(error.message);
-+    const token = jwt.sign(
-+      { userId: newUser._id, authProvider: 'local' },
-+      process.env.JWT_SECRET,
-+      { expiresIn: '30d' }
-+    );
- 
+-
 -      res.status(201).json({
 -        message: 'Registration successful! A verification email has been sent to your inbox.',
 -        userId: newUser._id,
@@ -227,14 +258,49 @@ index de905af27..d946dd82b 100644
      console.error('❌ Registration error:', error.message);
      if (error.code === 11000) {
 -      res.status(400).json({ message: 'An account with this email already exists.' });
-+      res.status(400).json({ message: 'An account with these details already exists.' });
-     } else if (error.name === 'ValidationError') {
+-    } else if (error.name === 'ValidationError') {
 -      res.status(400).json({ message: 'Invalid data provided. Please check your information.' });
-+      res.status(400).json({ message: 'Please check the information and try again.' });
-     } else {
-       res.status(500).json({ message: 'Registration failed. Please try again later.' });
+-    } else {
+-      res.status(500).json({ message: 'Registration failed. Please try again later.' });
++      const phoneDup = !!(error.keyPattern && error.keyPattern.phoneNumber);
++      const emailDup = !!(error.keyPattern && error.keyPattern.email)
++        && !!error.keyValue && typeof error.keyValue.email === 'string' && !!error.keyValue.email;
++      // A null/absent email duplicate means a legacy index is still in place.
++      // Never tell the user their email is taken when they gave no email.
++      if (!phoneDup && !emailDup) {
++        return fail(
++          500,
++          'registration_failed',
++          null,
++          'Registration failed. Please try again later.',
++        );
++      }
++      const field = phoneDup ? 'phoneNumber' : 'email';
++      return fail(
++        409,
++        phoneDup ? 'phone_exists' : 'email_exists',
++        field,
++        'An account with these details already exists.',
++      );
++    }
++    if (error.name === 'ValidationError') {
++      return fail(
++        400,
++        'registration_invalid',
++        null,
++        'Please check the information and try again.',
++      );
      }
-@@ -243,10 +185,18 @@ router.get('/verify-email', async (req, res) => {
++    return fail(
++      500,
++      'registration_failed',
++      null,
++      'Registration failed. Please try again later.',
++    );
+   }
+ });
+ 
+@@ -243,10 +240,18 @@ router.get('/verify-email', async (req, res) => {
   */
  router.post('/login', async (req, res) => {
    try {

@@ -665,6 +665,29 @@ mongoose.connect(process.env.MONGO_URI, {
 
 mongoose.connection.once('open', async () => {
   await searchRoutes.setupSearchIndexes();
+
+  // Repair the legacy `email_1` index. Older deployments created it as a
+  // plain unique/sparse index, which stores a missing email as null and
+  // rejects the second phone-only account with E11000. A partial unique index
+  // on real email strings is the only shape that allows many accounts with no
+  // email. Drop the old index once, then let the schema create the new one.
+  try {
+    const indexes = await User.collection.indexes();
+    const legacyEmail = indexes.find(
+      (idx) => idx.name === 'email_1' && !idx.partialFilterExpression,
+    );
+    if (legacyEmail) {
+      await User.collection.dropIndex('email_1');
+      logger.warn('Dropped legacy non-partial email_1 index; rebuilding as partial unique');
+    }
+    await User.createIndexes();
+    logger.info('User indexes ready (partial unique email allows phone-only accounts)');
+  } catch (err) {
+    // A duplicate real email already in the collection can block the rebuild.
+    // Registration still pre-checks for conflicts, and a failed index build
+    // must never stop the server from starting.
+    logger.error(`User index repair failed (non-fatal): ${err.message}`);
+  }
 });
 
 // ─────────────────────────────────────────────

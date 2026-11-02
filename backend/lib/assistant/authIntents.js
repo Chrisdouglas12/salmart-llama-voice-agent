@@ -65,6 +65,22 @@ const REGISTRATION_QUESTIONS = {
   agreement: 'Before you can buy or sell on Salmart, you must accept the Privacy Policy and Terms and Conditions. Tick the box if you agree.',
 };
 
+// When the previous answer did not contain the value, say plainly what was
+// missed and ask for that one thing again. This is not a lecture and it never
+// invents digits or an address.
+const REGISTRATION_RETRY_QUESTIONS = {
+  fullName: 'I did not get your name. Please can you say your full name again?',
+  email: 'I did not get the email. Please can you say it again? If you do not have one, say "no email".',
+  phone: 'I did not get the phone number. Please can you say it again?',
+  password: 'I did not get a secret code yet. Please type one in the box, or tap the suggested code.',
+  agreement: 'The box is not ticked yet. Tick it only if you agree to the Privacy Policy and Terms and Conditions.',
+};
+
+const REGISTRATION_FIELDS = Object.freeze([
+  'fullName', 'email', 'phone', 'password', 'agreement', 'confirm',
+]);
+const REGISTRATION_FIELD_SET = new Set(REGISTRATION_FIELDS);
+
 /**
  * One plan per intent. `field` lets the register screen focus the box the
  * assistant just asked about without the model touching the password fields.
@@ -298,22 +314,36 @@ function planAuthHelp({
     });
     if (!step) plan = REGISTRATION_READY;
     else {
+      // A repeat of the same step means the previous answer did not carry the
+      // value (misheard, empty audio, or off-topic). Ask for that one value
+      // again in plain words instead of moving on or pretending it was heard.
+      const repeated = !!(
+        prior
+        && prior.intent === key
+        && prior.field === step
+        && Number(prior.attempts) >= 1
+      );
       plan = {
         ...PLANS.REGISTER,
-        say: REGISTRATION_QUESTIONS[step],
+        say: repeated
+          ? (REGISTRATION_RETRY_QUESTIONS[step] || REGISTRATION_QUESTIONS[step])
+          : REGISTRATION_QUESTIONS[step],
         field: step,
         state: 'COLLECTING_REGISTRATION_DETAILS',
+        retry: repeated,
       };
     }
   }
 
   const sameTask = !!(prior && prior.intent === key);
-  const retry = sameTask && Number(prior.attempts) >= 1 && key !== 'REGISTER';
+  const retry = key === 'REGISTER'
+    ? plan.retry === true
+    : (sameTask && Number(prior.attempts) >= 1 && key !== 'REGISTER');
 
   return {
     intent: key,
     state: plan.state,
-    say: spoken(retry ? `${RETRY_PREFIX}${plan.say}` : plan.say),
+    say: spoken(retry && key !== 'REGISTER' ? `${RETRY_PREFIX}${plan.say}` : plan.say),
     nextScreen: plan.nextScreen || null,
     field: plan.field || null,
     method: plan.method || null,
@@ -376,6 +406,7 @@ function sanitizeAuthState(raw) {
     intent,
     state,
     method: cleanMethod(raw.method),
+    field: REGISTRATION_FIELD_SET.has(raw.field) ? raw.field : null,
     emailProvided: raw.emailProvided === true,
     phoneProvided: raw.phoneProvided === true,
     emailDeclined: raw.emailDeclined === true,
@@ -401,6 +432,15 @@ function buildPromptBlock(auth, { screen } = {}) {
     `Turns on this step: ${auth.attempts}`,
   ];
   if (screen) lines.push(`Current screen: ${String(screen).slice(0, 120)}`);
+  if (auth.intent === 'REGISTER' && auth.field) {
+    lines.push(`Next registration step: ${auth.field}`);
+  }
+  if (auth.intent === 'REGISTER' && auth.field && auth.field !== 'confirm' && auth.attempts > 0) {
+    lines.push(
+      'If the last answer did not contain this value, say exactly the matching retry '
+      + 'sentence and ask again. Never move on without the value.',
+    );
+  }
   const registrationScreen = screen === 'register' || screen === 'ai';
   const screenRule = screen && auth.intent === 'REGISTER' && !registrationScreen
     ? ' The user is not on the register screen, so do not continue a registration step.'

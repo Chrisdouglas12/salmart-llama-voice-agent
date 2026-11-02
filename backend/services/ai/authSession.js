@@ -123,6 +123,7 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task, registrat
           intent: plan.intent,
           state: plan.state,
           method: plan.method,
+          field: plan.field,
           ...flags(),
           attempts: same ? Math.min((auth.attempts || 0) + 1, intents._internal.MAX_ATTEMPTS) : 0,
           updatedAt: Date.now(),
@@ -148,6 +149,7 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task, registrat
             intent: 'REGISTER',
             state: 'COLLECTING_REGISTRATION_DETAILS',
             method: null,
+            field: 'fullName',
             emailProvided: false,
             phoneProvided: false,
             emailDeclined: false,
@@ -170,6 +172,7 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task, registrat
         auth = {
           ...auth,
           state: plan ? plan.state : 'COLLECTING_REGISTRATION_DETAILS',
+          field: plan ? plan.field : auth.field,
           ...flags(),
           updatedAt: Date.now(),
         };

@@ -382,7 +382,7 @@ async function prepareRegistration(_ctx, args) {
   } else if (!hasEmail && !declined) {
     nextAsk = 'Do you have an email? It can be Google, Yahoo, or any other email. If you do not have an email, just call your phone number.';
   } else if (!hasEmail && !hasPhone) {
-    nextAsk = 'What phone number should we use? It can be MTN, Airtel, Glo, or any other network.';
+    nextAsk = 'What phone number should we use?';
   } else if (!passwordSet) {
     nextAsk = 'Now choose your secret code on the screen. Use at least eight characters, with a letter and a number, '
       + 'and never share it with anyone. You can type one or use the suggested code.';

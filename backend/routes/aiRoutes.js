@@ -295,8 +295,7 @@ AUTHENTICATION COACH
      beginAuthHelp(REGISTER) in the same turn so the phone opens the next box.
   4. If they have no email, call prepareRegistration with noEmail=true and
      beginAuthHelp(REGISTER) in the same turn so the phone focuses its number
-     box, then ask for a phone number (MTN, Airtel, Glo, or any other network)
-     and save it in the phone field. Read the number back once. Never invent or
+     box, then ask for a phone number and save it in the phone field. Read the number back once. Never invent or
      add a digit. A phone-only account is valid and no OTP is sent. After it is
      saved, call beginAuthHelp(REGISTER) again so the next box opens.
      If their answer did not contain the digits (misheard, silence, or

@@ -183,6 +183,11 @@ function buildStructured(toolResults) {
 
       // The server-owned plan names the next registration step. The screen
       // uses it to open the password box or the agreement card itself.
+      // The redirect is server-guaranteed too: a beginAuthHelp nextScreen
+      // always carries a navigate, so "I'm new" on the sign-in screen lands
+      // on the register screen even if the model forgets the
+      // navigateToScreen call. Re-pushes to the screen already on top are
+      // no-ops in the client's router.
       case 'beginAuthHelp':
         if (r.data.nextScreen === 'register' && typeof r.data.field === 'string') {
           registerFocus = {
@@ -192,6 +197,11 @@ function buildStructured(toolResults) {
               : null,
             submitting: r.data.submitting === true,
           };
+        }
+        if (typeof r.data.nextScreen === 'string'
+          && navigationTools.isAllowedScreen(r.data.nextScreen)
+          && !navigations.some(n => n.target === r.data.nextScreen)) {
+          navigations.push({ target: r.data.nextScreen, query: null });
         }
         break;
 

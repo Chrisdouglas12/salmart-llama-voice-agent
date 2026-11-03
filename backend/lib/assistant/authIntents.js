@@ -62,7 +62,7 @@ const CLARIFY_SAY =
 const REGISTRATION_QUESTIONS = {
   fullName: 'Let us create your account. What is your full name?',
   email: 'Do you have an email? It can be Google, Yahoo, or any other email. If you do not have an email, just call your phone number.',
-  phone: 'That is fine. What phone number should we use? It can be MTN, Airtel, Glo, or any other network.',
+  phone: 'What phone number should we use?',
   password:
     'It is time to protect your account. I have opened the secret code box. '
     + 'A secret code protects your account, so never share it with anyone, not even someone who says they are '

@@ -1,62 +1,36 @@
-Salmart Intelligence
+# Salmart Intelligence
+### AI that understands people, not just commands.
 
-AI that understands people, not just commands.
+_Meta-powered, voice-first assistant built during Meta AI Developer Hackathon 2026._
 
-Salmart Intelligence is a Meta-powered, voice-first AI assistant built during the Meta AI Developer Hackathon 2026. It transforms how people interact with digital commerce, making it possible for elderly users and people with limited digital literacy to use a marketplace through natural conversation, touch and voice.
+Salmart marketplace existed before. _Salmart Intelligence is the new AI layer built this week._
 
-Salmart marketplace existed before the hackathon. Salmart Intelligence is the new AI layer built during the event.
+*The Problem*
+Most apps assume you can read, type, and navigate menus. But millions can't.
 
-The Problem
+I've seen it myself — even educated people asking "Please, how do I do this? How do I do that?" And even we developers struggle when an app is new to us.
 
-Most digital platforms assume users can read, type, navigate menus and understand application interfaces.
+What if you could just speak to the app and it understands you, and does exactly what you want or guides you through it?
 
-But millions of people are excluded by these assumptions.
+That's why I built Salmart Intelligence — an agentic AI inside Salmart that helps educated and uneducated people use the app without learning the interface.
 
-We believe access to technology shouldn't depend on knowing how to use technology.
+*What we built — voice + touch from any screen:*
 
-What We Built
+- *Register by voice:* Guided conversation, email optional, Nigerian phone accepted
+- *Shop by touch:* Say "I want to buy", AI says "touch the one you want" — touch shows photo, real price, seller. Tap never buys, you say "save it"
+- *Buy & pay with guidance:* Add to cart, chat seller, tick-to-pay via Paystack — AI guides, you tap the final button
+- *First-run onboarding:* Welcome spoken from server, asks for mic with voice, not a system popup
 
-Salmart Intelligence helps users:
+*Powered by Meta*
+Meta Llama for intent + context, Meta ASR for voice (PUSH_TO_TALK), vision for Shelfie scan. AI reasoning connected to 21 real app tools — it doesn't just chat, it does.
 
-- Register and sign in: Create accounts through guided conversation without navigating complicated forms.
-- Recover accounts: Understand account problems and receive appropriate recovery guidance.
-- Shop by touch: Touch a product picture and hear its name, actual price and details without reading descriptions.
-- Buy through conversation: Add products to the cart, contact sellers and navigate checkout with voice guidance.
-- Pay with guidance: Follow clear payment instructions through the existing Paystack checkout.
+*Why it matters*
+If Meta's models can power apps that adapt to people, not the other way round — elderly users, illiterate users, anyone — Meta's ecosystem wins beyond chat.
 
-Salmart Intelligence understands user intentions, remembers the current application context and executes approved actions through Salmart's existing systems.
+> Don't make people learn technology. Make technology understand people.
 
-Powered by Meta AI
-
-Meta models power the intelligence behind Salmart Intelligence, enabling natural-language understanding, intent recognition and context-aware responses.
-
-Rather than simply answering questions, the assistant connects AI reasoning to real application actions.
-
-Why It Matters
-
-Salmart Intelligence explores a different future for digital platforms.
-
-Imagine Meta-powered applications that elderly people, first-time smartphone users and people who struggle with reading can operate without having to master complicated interfaces.
-
-This could help Meta's AI ecosystem stand out by making its models useful beyond conventional chat interfaces — enabling developers to build applications that adapt to people rather than expecting people to adapt to applications.
-
-The opportunity is bigger than shopping. It's digital inclusion through conversational AI.
-
-Verify the Implementation
-
+*Verify in 30 seconds:*
 cd backend
-npm test
-npm run demo
-
-See:
-
-- "DEMO.md" — Three-minute demonstration guide.
-- "NEW_WORK.md" — Hackathon implementation and changes.
-- "backend/" — AI orchestration, model integration and tool contracts.
-- "mobile/" — Mobile application integration and interaction changes.
-
-Our Vision
-
-Don't make people learn how to use technology. Make technology understand people.
-
-Built for the Meta AI Developer Hackathon 2026.
+npm run test:keyless  # 128/128
+npm run demo          # registration + buying + selling
+See `NEW_WORK.md` (what's new this week).

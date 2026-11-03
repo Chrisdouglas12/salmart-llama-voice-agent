@@ -73,9 +73,17 @@ async function loadProduct(ctx, { productId, itemType = 'post' } = {}) {
   const photo = product.photo
     || (Array.isArray(product.photos) && product.photos[0])
     || null;
-  const sellerName = type === 'showroom'
-    ? (product.sellerName || product.businessName || null)
+  const sellerName = type === 'showroom' ? (product.sellerName || product.businessName || null)
     : (product.createdBy?.name || null);
+
+  // How many units the seller still has. Services and digitals are not
+  // counted — they are always available. A regular post's `quantity` is the
+  // server's truth; null means unlimited/unknown, never zero.
+  const isServicePost = type === 'post' && product.postType === 'service';
+  const isDigitalPost = type === 'post' && product.postType === 'digital';
+  const stock = (isServicePost || isDigitalPost || type === 'showroom')
+    ? null
+    : (Number.isFinite(Number(product.quantity)) ? Math.max(0, Math.floor(Number(product.quantity))) : null);
 
   return {
     product,
@@ -86,6 +94,7 @@ async function loadProduct(ctx, { productId, itemType = 'post' } = {}) {
     title: product.title || product.description || 'Item',
     price: typeof product.price === 'number' ? product.price : null,
     description: product.description ? String(product.description).slice(0, 600) : null,
+    stock,
   };
 }
 
@@ -110,8 +119,13 @@ async function previewProduct(ctx, { productId, itemType = 'post' } = {}) {
 
 /**
  * addToCart({ productId, quantity?, itemType? })
- * Returns { added, title, quantity, cartCount }. Throws AUTH_REQUIRED,
- * TOOL_BAD_ARGS, or TOOL_FAILED with plain user-safe messages.
+ * Ask the caller's quantity ONCE, then check the server stock BEFORE writing:
+ * the total in the cart (existing + new) never exceeds what the seller has.
+ * Returns { added, title, quantity, addedNow, requested, capped, available,
+ * cartCount }. `available` is how many are left AFTER this add (null when the
+ * item is uncounted). Throws AUTH_REQUIRED, TOOL_BAD_ARGS, or TOOL_FAILED
+ * with plain user-safe messages — including when the shelf is empty or the
+ * request had to be cut down to what is left.
  */
 async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {}) {
   if (!ctx.userId) {
@@ -120,19 +134,45 @@ async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {
     throw e;
   }
   const loaded = await loadProduct(ctx, { productId, itemType });
-  const { product, type, sellerId, photo, sellerName } = loaded;
-  const qty = Math.min(Math.max(parseInt(quantity, 10) || 1, 1), MAX_QUANTITY);
+  const { product, type, sellerId, photo, sellerName, stock } = loaded;
+  const requested = Math.min(Math.max(parseInt(quantity, 10) || 1, 1), MAX_QUANTITY);
 
   const isService = type === 'post' && product.postType === 'service';
   const isDigital = type === 'post' && product.postType === 'digital';
-  const addQty = (isService || isDigital) ? 1 : qty;
+  const addQty = (isService || isDigital) ? 1 : requested;
 
   let cart = await Cart.findOne({ buyerId: ctx.userId });
   if (!cart) cart = await Cart.create({ buyerId: ctx.userId, items: [] });
 
   const existing = cart.items.find((i) => String(i.postId) === String(productId));
+  const inCart = existing ? (Number(existing.quantity) || 0) : 0;
+
+  // The server's stock is checked before anything is written. A repeat call
+  // for an already-saved item tops up only to what is left — never double.
+  if (stock != null) {
+    if (stock <= 0) {
+      const e = new Error('That item is sold out.');
+      e.code = 'TOOL_FAILED';
+      throw e;
+    }
+    if (inCart >= stock) {
+      const e = new Error(
+        `You already have all ${stock} available in your cart. There are none left to add.`,
+      );
+      e.code = 'TOOL_FAILED';
+      throw e;
+    }
+  }
+  const room = stock == null ? addQty : Math.max(0, stock - inCart);
+  const allowed = Math.min(addQty, room);
+  if (allowed <= 0) {
+    const e = new Error('That item is sold out.');
+    e.code = 'TOOL_FAILED';
+    throw e;
+  }
+
   if (existing) {
-    existing.quantity = Math.min(existing.quantity + addQty, MAX_QUANTITY);
+    existing.quantity = Math.min(inCart + allowed, MAX_QUANTITY);
   } else {
     if (cart.items.length >= MAX_CART_ITEMS) {
       const e = new Error(`Your cart is full (max ${MAX_CART_ITEMS} items).`);
@@ -143,11 +183,12 @@ async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {
       postId: productId,
       postModel: type === 'showroom' ? 'Showroom' : 'Post',
       sellerId,
-      quantity: addQty,
+      quantity: allowed,
     });
   }
   await cart.save();
 
+  const total = existing ? existing.quantity : allowed;
   return {
     added: true,
     productId: String(product._id),
@@ -158,7 +199,11 @@ async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {
     photo,
     sellerId,
     sellerName,
-    quantity: existing ? existing.quantity : addQty,
+    quantity: total,
+    addedNow: allowed,
+    requested,
+    capped: allowed < addQty,
+    available: stock == null ? null : Math.max(0, stock - total),
     cartCount: cart.items.length,
     note: 'Item added to the cart. Checkout stays manual on the cart screen.',
   };

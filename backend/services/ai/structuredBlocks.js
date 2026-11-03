@@ -85,7 +85,8 @@ function buildStructured(toolResults) {
       case 'cart.addToCart':
         // The buyer said save on a touched item. The tool result is the truth
         // that the row was written, so the app can show the cart card and the
-        // Open cart action.
+        // Open cart action. Stock fields ride along so the model reports the
+        // server's real remainder — never a guessed number.
         if (r.data.added && r.data.productId) {
           push({
             type: 'product_added',
@@ -100,6 +101,11 @@ function buildStructured(toolResults) {
               itemType: r.data.itemType,
             },
             cartCount: r.data.cartCount,
+            quantity: r.data.quantity ?? null,
+            addedNow: r.data.addedNow ?? null,
+            requested: r.data.requested ?? null,
+            capped: r.data.capped === true,
+            available: r.data.available ?? null,
           });
         }
         break;

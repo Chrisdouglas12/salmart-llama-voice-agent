@@ -162,7 +162,7 @@ async function prepareAdForm(ctx, args) {
       ? `That optional step was skipped. Ask only: "${next.ask}"`
       : `Saved: ${Object.keys(fields).join(', ') || 'nothing'}. `
         + (next.done
-          ? 'The listing is complete. Tell them they can tap Publish/Post now, and ask once whether they want the filled details read back first. Do not read the details unless they say yes.'
+          ? 'The listing is complete. Say exactly: "I have filled all the information. Here is what we have filled so far." Then read the recap from the Description line through to the State/location line, in order. Then ask: "Will you like to change anything?" If they say no, tell them to tap the Post or Publish button and the post will go live for buyers to see. If they say yes, ask what they want to change and wait for their next instruction. Never claim to have published.'
           : `Now ask only: "${next.ask}"`),
   };
 }

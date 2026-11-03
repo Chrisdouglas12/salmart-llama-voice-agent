@@ -107,6 +107,18 @@ test('selling: session advances from validated tool results only', () => {
   assert.deepEqual(switched.asked, ['postType']);
 });
 
+test('selling: question wording matches the voice walkthrough', () => {
+  assert.equal(flow.STEPS.price.ask, 'How much do you want to sell it?');
+  assert.equal(flow.STEPS.quantity.ask, 'How many of these items do you have to sell?');
+  assert.equal(
+    flow.STEPS.discount.ask,
+    'Will you like to give any discount or reduce if someone buys more than one?',
+  );
+  assert.equal(flow.STEPS.productCondition.ask, 'Is this item new or fairly used?');
+  assert.equal(flow.STEPS.location.ask, 'What state or location are you selling this item from?');
+  assert.ok(flow.STEPS.review.ask.includes('Will you like to change anything?'));
+});
+
 test('selling: prompt block names one question and the missing list', () => {
   const block = session.promptBlock(
     { postType: 'regular', currentStep: null, asked: [], updatedAt: Date.now() },

@@ -58,7 +58,7 @@ const STEPS = {
     defer: true,
   },
   price: {
-    ask: 'What price in naira?',
+    ask: 'How much do you want to sell it?',
     optional: false,
   },
   servicePrice: {
@@ -71,15 +71,15 @@ const STEPS = {
     optional: false,
   },
   quantity: {
-    ask: 'How many do you have available?',
+    ask: 'How many of these items do you have to sell?',
     optional: false,
   },
   discount: {
-    ask: 'Do you want to give a discount if a buyer takes more than one? For example, take 500 naira off each item when someone buys 5 or more. Say yes or no.',
+    ask: 'Will you like to give any discount or reduce if someone buys more than one?',
     optional: true,
   },
   productCondition: {
-    ask: 'Is it brand new, like new, fairly used, or faulty?',
+    ask: 'Is this item new or fairly used?',
     optional: false,
   },
   category: {
@@ -87,7 +87,7 @@ const STEPS = {
     optional: false,
   },
   location: {
-    ask: 'Where is the item? Tell me the state or city.',
+    ask: 'What state or location are you selling this item from?',
     optional: false,
   },
   serviceCategory: {
@@ -107,7 +107,7 @@ const STEPS = {
     optional: false,
   },
   photo: {
-    ask: 'First, add a photo of the item you want to sell. Choose one from your gallery, or take a new one with the camera. I will read it and fill what I can.',
+    ask: 'First, pick a photo of the item you want to sell. Choose one from your gallery, or say camera to take a new one. When you pick one I will ask if that is all or you want to pick more.',
     optional: false,
   },
   digitalFile: {
@@ -115,7 +115,7 @@ const STEPS = {
     optional: false,
   },
   review: {
-    ask: 'We have filled in your listing. Let us check it together before publishing.',
+    ask: 'I have filled all the information. Here is what we have filled so far. Will you like to change anything?',
     optional: false,
   },
 };

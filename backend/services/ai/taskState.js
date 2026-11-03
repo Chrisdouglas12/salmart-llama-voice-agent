@@ -320,8 +320,8 @@ function buildPromptBlock(task) {
     const pick = task.lastPick;
     const price = pick.price == null ? '' : `, price ₦${pick.price}`;
     const state = pick.saved === true
-      ? 'It is already saved in the cart; do NOT add it again.'
-      : 'It is NOT in the cart yet. If they say save it, keep it, or add it to the cart, call addToCart once with this productId, then tell them to ask you to open the cart when they are ready to buy.';
+      ? 'It is already saved in the cart; do NOT add it again unless they explicitly ask for more (then use mode "add").'
+      : 'It is NOT in the cart yet. If they say save it, keep it, or add it to the cart, ask how many they want in total, then call addToCart once with this productId and that number, then tell them to ask you to open the cart when they are ready to buy.';
     lines.push(`Item the user touched to buy: ${pick.title || 'item'} (productId ${pick.productId}${price}). ${state} If they ask to chat the seller or confirm the item, use this productId; do not search for it again.`);
   }
   if (task.lastScreen) lines.push(`Last screen opened: ${task.lastScreen}`);

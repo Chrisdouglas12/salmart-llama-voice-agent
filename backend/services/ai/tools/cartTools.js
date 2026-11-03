@@ -18,9 +18,9 @@ const mongoose = require('mongoose');
 const Cart = require('../../../models/cartSchema.js');
 const Post = require('../../../models/postSchema.js');
 const Showroom = require('../../../models/showRoomSchema.js');
+const { resolveCartQuantity } = require('../cartQuantity');
 
 const MAX_CART_ITEMS = 50;
-const MAX_QUANTITY = 10000;
 
 function sellerIdOf(product, itemType) {
   if (!product) return null;
@@ -118,16 +118,23 @@ async function previewProduct(ctx, { productId, itemType = 'post' } = {}) {
 }
 
 /**
- * addToCart({ productId, quantity?, itemType? })
- * Ask the caller's quantity ONCE, then check the server stock BEFORE writing:
- * the total in the cart (existing + new) never exceeds what the seller has.
- * Returns { added, title, quantity, addedNow, requested, capped, available,
- * cartCount }. `available` is how many are left AFTER this add (null when the
- * item is uncounted). Throws AUTH_REQUIRED, TOOL_BAD_ARGS, or TOOL_FAILED
- * with plain user-safe messages — including when the shelf is empty or the
- * request had to be cut down to what is left.
+ * addToCart({ productId, quantity?, itemType?, mode? })
+ *
+ * `quantity` is the TOTAL the buyer wants in the cart, because the voice flow
+ * asks "how many do you want?". It is not added on top of what is already
+ * there - that used to make the assistant put more units in the cart than the
+ * buyer asked for. Pass `mode: 'add'` only for an explicit "add two more".
+ *
+ * The server stock is checked BEFORE writing, and the final total never
+ * exceeds it. Returns { added, title, quantity, addedNow, requested, mode,
+ * previousQuantity, capped, reduced, available, cartCount }. `available` is how
+ * many are left AFTER this call (null when the item is uncounted). Throws
+ * AUTH_REQUIRED, TOOL_BAD_ARGS, or TOOL_FAILED with plain user-safe messages.
  */
-async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {}) {
+async function addToCart(
+  ctx,
+  { productId, quantity = 1, itemType = 'post', mode = 'set' } = {},
+) {
   if (!ctx.userId) {
     const e = new Error('Sign in to add items to your cart.');
     e.code = 'AUTH_REQUIRED';
@@ -135,11 +142,9 @@ async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {
   }
   const loaded = await loadProduct(ctx, { productId, itemType });
   const { product, type, sellerId, photo, sellerName, stock } = loaded;
-  const requested = Math.min(Math.max(parseInt(quantity, 10) || 1, 1), MAX_QUANTITY);
 
   const isService = type === 'post' && product.postType === 'service';
   const isDigital = type === 'post' && product.postType === 'digital';
-  const addQty = (isService || isDigital) ? 1 : requested;
 
   let cart = await Cart.findOne({ buyerId: ctx.userId });
   if (!cart) cart = await Cart.create({ buyerId: ctx.userId, items: [] });
@@ -147,32 +152,29 @@ async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {
   const existing = cart.items.find((i) => String(i.postId) === String(productId));
   const inCart = existing ? (Number(existing.quantity) || 0) : 0;
 
-  // The server's stock is checked before anything is written. A repeat call
-  // for an already-saved item tops up only to what is left — never double.
-  if (stock != null) {
-    if (stock <= 0) {
-      const e = new Error('That item is sold out.');
-      e.code = 'TOOL_FAILED';
-      throw e;
-    }
-    if (inCart >= stock) {
-      const e = new Error(
-        `You already have all ${stock} available in your cart. There are none left to add.`,
-      );
-      e.code = 'TOOL_FAILED';
-      throw e;
-    }
+  if (stock != null && stock <= 0) {
+    const e = new Error('That item is sold out.');
+    e.code = 'TOOL_FAILED';
+    throw e;
   }
-  const room = stock == null ? addQty : Math.max(0, stock - inCart);
-  const allowed = Math.min(addQty, room);
-  if (allowed <= 0) {
+
+  // One decision point for the final count: set-vs-add, the 10,000 ceiling and
+  // the seller's stock are all applied here before a single byte is written.
+  const plan = resolveCartQuantity({
+    requested: quantity,
+    inCart,
+    stock,
+    mode,
+    unitOnly: isService || isDigital,
+  });
+  if (plan.total <= 0) {
     const e = new Error('That item is sold out.');
     e.code = 'TOOL_FAILED';
     throw e;
   }
 
   if (existing) {
-    existing.quantity = Math.min(inCart + allowed, MAX_QUANTITY);
+    existing.quantity = plan.total;
   } else {
     if (cart.items.length >= MAX_CART_ITEMS) {
       const e = new Error(`Your cart is full (max ${MAX_CART_ITEMS} items).`);
@@ -183,12 +185,20 @@ async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {
       postId: productId,
       postModel: type === 'showroom' ? 'Showroom' : 'Post',
       sellerId,
-      quantity: allowed,
+      quantity: plan.total,
     });
   }
   await cart.save();
 
-  const total = existing ? existing.quantity : allowed;
+  let note;
+  if (plan.reduced) {
+    note = `Cart quantity set to ${plan.total}. Checkout stays manual on the cart screen.`;
+  } else if (plan.addedNow === 0) {
+    note = `The cart already has ${plan.total}. Checkout stays manual on the cart screen.`;
+  } else {
+    note = `Added ${plan.addedNow}; the cart now has ${plan.total}. Checkout stays manual on the cart screen.`;
+  }
+
   return {
     added: true,
     productId: String(product._id),
@@ -199,13 +209,16 @@ async function addToCart(ctx, { productId, quantity = 1, itemType = 'post' } = {
     photo,
     sellerId,
     sellerName,
-    quantity: total,
-    addedNow: allowed,
-    requested,
-    capped: allowed < addQty,
-    available: stock == null ? null : Math.max(0, stock - total),
+    quantity: plan.total,
+    addedNow: plan.addedNow,
+    requested: plan.requested,
+    mode: plan.mode,
+    previousQuantity: plan.previous,
+    capped: plan.capped,
+    reduced: plan.reduced,
+    available: plan.available,
     cartCount: cart.items.length,
-    note: 'Item added to the cart. Checkout stays manual on the cart screen.',
+    note,
   };
 }
 

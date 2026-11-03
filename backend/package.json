@@ -7,7 +7,7 @@
     "dev": "nodemon app.js",
     "dev:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-local.ps1",
     "test": "node --test \"tests/**/*.test.js\"",
-    "test:keyless": "node --test tests/ai-agent-fallback.test.js tests/ai-auth-accessibility.test.js tests/ai-auth-guidance.test.js tests/ai-auth-url.test.js tests/ai-cart-tool.test.js tests/ai-form-tools.test.js tests/ai-history.test.js tests/ai-navigation.test.js tests/ai-onboarding.test.js tests/ai-registration-script.test.js tests/ai-selling-flow.test.js tests/ai-selling-recap.test.js tests/ai-task-state.test.js tests/ai-touch-buy.test.js tests/assistant-glimmer-clean.test.js tests/assistant-tasks.test.js tests/speech-lang-mms.test.js",
+    "test:keyless": "node --test tests/ai-agent-fallback.test.js tests/ai-auth-accessibility.test.js tests/ai-auth-guidance.test.js tests/ai-auth-url.test.js tests/ai-cart-tool.test.js tests/ai-cart-quantity.test.js tests/ai-form-tools.test.js tests/ai-history.test.js tests/ai-navigation.test.js tests/ai-onboarding.test.js tests/ai-registration-script.test.js tests/ai-selling-flow.test.js tests/ai-selling-recap.test.js tests/ai-task-state.test.js tests/ai-touch-buy.test.js tests/assistant-glimmer-clean.test.js tests/assistant-tasks.test.js tests/speech-lang-mms.test.js",
     "demo": "node demo-flows.js",
     "eval:ai": "node scripts/ai-eval.js",
     "build": "npm install --legacy-peer-deps --ignore-scripts && npm rebuild mongodb --build-from-source",

@@ -104,6 +104,9 @@ function buildStructured(toolResults) {
             quantity: r.data.quantity ?? null,
             addedNow: r.data.addedNow ?? null,
             requested: r.data.requested ?? null,
+            mode: r.data.mode || 'set',
+            previousQuantity: r.data.previousQuantity ?? null,
+            reduced: r.data.reduced === true,
             capped: r.data.capped === true,
             available: r.data.available ?? null,
           });

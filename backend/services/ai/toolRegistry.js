@@ -658,17 +658,21 @@ define({
   name: 'addToCart',
   category: 'order',
   description:
-    'Add a product to the signed-in buyer\'s cart (quantity defaults to 1). ' +
-    'Only call after the user agrees to buy or reserve the item. Sold items, ' +
-    'missing listings, and the buyer\'s own listings are refused. ' +
-    'This only holds the item — checkout and payment stay manual on the ' +
-    'cart screen, where escrow protects the buyer.',
+    'Put a product in the signed-in buyer\'s cart. `quantity` is the TOTAL ' +
+    'number the buyer wants in the cart - it is not added on top of what is ' +
+    'already there. Use mode "add" only when they explicitly ask for that many ' +
+    'MORE. The server stock is checked before writing and the total is never ' +
+    'allowed to exceed it. Only call after the user agrees to buy or reserve ' +
+    'the item. Sold items, missing listings, and the buyer\'s own listings are ' +
+    'refused. This only holds the item - checkout and payment stay manual on ' +
+    'the cart screen, where escrow protects the buyer.',
   inputSchema: {
     type: 'object',
     properties: {
       productId: { type: 'string', pattern: '^[a-fA-F0-9]{24}$' },
       quantity: { type: 'integer', minimum: 1, maximum: 10000, default: 1 },
       itemType: { type: 'string', enum: ['post', 'showroom'], default: 'post' },
+      mode: { type: 'string', enum: ['set', 'add'], default: 'set' },
     },
     required: ['productId'],
     additionalProperties: false,

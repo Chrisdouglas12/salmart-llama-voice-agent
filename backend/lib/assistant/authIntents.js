@@ -52,7 +52,9 @@ const AUTH_STATE_SET = new Set(AUTH_STATES);
 
 const AUTH_TTL_MS = 30 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
-const MAX_SAY = 160;
+// Long enough for the password and privacy awareness summaries the assistant
+// must actually speak, still short enough for one voice turn.
+const MAX_SAY = 260;
 
 const CLARIFY_SAY =
   'I can help with that. Which part is giving trouble: your password, the email you used, Google sign-in, or something else?';
@@ -61,8 +63,13 @@ const REGISTRATION_QUESTIONS = {
   fullName: 'Let us create your account. What is your full name?',
   email: 'Do you have an email? It can be Google, Yahoo, or any other email.',
   phone: 'That is fine. What phone number should we use? It can be MTN, Airtel, Glo, or any other network.',
-  password: 'Now choose a secret code in the box. It needs 8 characters or more, with a letter and a number. Do not share it with anyone.',
-  agreement: 'Before you can buy or sell on Salmart, you must accept the Privacy Policy and Terms and Conditions. Tick the box if you agree.',
+  password:
+    'Now choose your secret code on the screen. Use at least eight characters, with a letter and a number. '
+    + 'A password protects your account, so never share it with anyone, not even someone who says they are '
+    + 'from Salmart. You can type one or use the suggested code.',
+  agreement:
+    'Before you can buy or sell on Salmart, you must accept the Privacy Policy and Terms and Conditions. '
+    + 'Please read them, then tick the box only if you agree.',
 };
 
 // When the previous answer did not contain the value, say plainly what was
@@ -312,8 +319,26 @@ function planAuthHelp({
       agreed,
       registration,
     });
-    if (!step) plan = REGISTRATION_READY;
-    else {
+    if (!step) {
+      // The final card is already on screen and the user just told the
+      // assistant to register them. That is not a request to read the summary
+      // again; it is time to create the account. The phone speaks and submits,
+      // so this sentence is only the server's acknowledgement.
+      const confirming = !!(prior && prior.intent === key && prior.field === 'confirm');
+      const draft = registerDraft && typeof registerDraft === 'object' ? registerDraft : {};
+      const name = String(
+        draft.fullName || [draft.firstName, draft.lastName].filter(Boolean).join(' '),
+      ).replace(/\s+/g, ' ').trim();
+      plan = confirming
+        ? {
+          ...REGISTRATION_READY,
+          say: name
+            ? `Alright ${name}, I am creating your account now.`
+            : 'Alright, I am creating your account now.',
+          submitting: true,
+        }
+        : REGISTRATION_READY;
+    } else {
       // A repeat of the same step means the previous answer did not carry the
       // value (misheard, empty audio, or off-topic). Ask for that one value
       // again in plain words instead of moving on or pretending it was heard.
@@ -348,6 +373,7 @@ function planAuthHelp({
     field: plan.field || null,
     method: plan.method || null,
     retry,
+    submitting: plan.submitting === true,
   };
 }
 

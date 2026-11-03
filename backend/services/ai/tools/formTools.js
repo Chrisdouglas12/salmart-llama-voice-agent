@@ -384,11 +384,13 @@ async function prepareRegistration(_ctx, args) {
   } else if (!hasEmail && !hasPhone) {
     nextAsk = 'What phone number should we use? It can be MTN, Airtel, Glo, or any other network.';
   } else if (!passwordSet) {
-    nextAsk = 'Now tap the secret code box and type the code you want. I will not see it.';
+    nextAsk = 'Now choose your secret code on the screen. Use at least eight characters, with a letter and a number, '
+      + 'and never share it with anyone. You can type one or use the suggested code.';
   } else if (!agreed) {
-    nextAsk = 'Now read the agreement and tick the box if you accept, then tell me when it is done.';
+    nextAsk = 'Now read the Privacy Policy and Terms and Conditions. Tick the box only if you agree, then tell me when it is done.';
   } else {
-    nextAsk = 'Should I create your account now, or would you like to change something?';
+    nextAsk = 'Your details are ready. Ask them to tap the microphone and say register me, '
+      + 'or tell you which detail to change.';
   }
 
   // The name step is the one moment the user hears their own name back. It

@@ -179,7 +179,13 @@ function buildStructured(toolResults) {
       // uses it to open the password box or the agreement card itself.
       case 'beginAuthHelp':
         if (r.data.nextScreen === 'register' && typeof r.data.field === 'string') {
-          registerFocus = r.data.field.slice(0, 20);
+          registerFocus = {
+            field: r.data.field.slice(0, 20),
+            say: typeof r.data.say === 'string' && r.data.say.trim()
+              ? r.data.say.trim().slice(0, 400)
+              : null,
+            submitting: r.data.submitting === true,
+          };
         }
         break;
 
@@ -240,7 +246,13 @@ function buildStructured(toolResults) {
     });
   }
   if (registerFocus) {
-    push({ type: 'register_focus', target: 'register', field: registerFocus });
+    push({
+      type: 'register_focus',
+      target: 'register',
+      field: registerFocus.field,
+      say: registerFocus.say,
+      ...(registerFocus.submitting ? { submitting: true } : {}),
+    });
   }
 
   // One navigation per turn. If the model asked for several (it should not),

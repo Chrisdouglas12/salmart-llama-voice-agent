@@ -15,6 +15,7 @@
 const metaProvider = require('./metaProvider');
 const toolExecutor = require('./toolExecutor');
 const { toolsForContext, toModelDefs } = require('./toolRegistry');
+const { spokenFallback } = require('./spokenFallback');
 
 // A spoken turn should finish in seconds, so the loop is deliberately short.
 // Two tool rounds plus the final answer fit; a third round would mean the model
@@ -153,8 +154,14 @@ async function runTurn({ ctx, messages, signal }) {
     if (stopReason === 'timeout') break;
   }
 
-  if (stopReason === 'final' && !finalText) {
-    finalText = 'I was not able to complete that. Could you rephrase or add a bit more detail?';
+  if (stopReason === 'final' && !String(finalText || '').trim()) {
+    // The model can spend its turn calling a tool and then return an empty
+    // final message. The tool result usually already contains the exact line
+    // the user must hear (auth plans and form fills all carry `say`), so speak
+    // that instead of a generic "please rephrase" that makes the assistant
+    // look deaf.
+    finalText = spokenFallback(toolResults)
+      || 'I was not able to complete that. Could you rephrase or add a bit more detail?';
   }
 
   ctx.logger?.info?.(`[agentRunner] turn end: requestId=${ctx.requestId} stop=${stopReason} llmMs=${llmMs} toolMs=${toolMs} llmCalls=${llmCalls} toolCalls=${toolCallCount} totalMs=${Date.now() - started}`);
@@ -171,4 +178,10 @@ function canonicalJson(o) {
   catch { return String(o); }
 }
 
-module.exports = { runTurn, MAX_ITERATIONS, MAX_TOOL_CALLS, WALL_CLOCK_MS };
+module.exports = {
+  runTurn,
+  spokenFallback,
+  MAX_ITERATIONS,
+  MAX_TOOL_CALLS,
+  WALL_CLOCK_MS,
+};

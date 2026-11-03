@@ -150,8 +150,9 @@ test('registration: a password never enters the patch, the note or the card line
   );
   assert.equal(r.fields.password, undefined);
   assert.doesNotMatch(JSON.stringify(r), /Secret123/);
-  assert.match(r.nextAsk, /create your account now/i);
-  assert.match(r.nextAsk, /change something/i);
+  assert.match(r.nextAsk, /microphone/i);
+  assert.match(r.nextAsk, /register me/i);
+  assert.match(r.nextAsk, /change/i);
   assert.ok(r.manualSteps.includes('confirm'));
 });
 
@@ -183,4 +184,114 @@ test('registration: the phone card uses the short say, not the model-facing note
   ]);
   const fill = blocks.find(b => b.type === 'fill_register');
   assert.equal(fill.say, 'Welcome Ada Obi. Do you have an email?');
+});
+
+test('registration: a complete form without a confirm prior still reads the details back', () => {
+  // Open the summary the first time: the phone reads the recap itself.
+  const plan = registerPlan({
+    registerDraft: NAME, emailProvided: true, passwordSet: true, agreed: true,
+  });
+  assert.equal(plan.submitting, false);
+  assert.match(plan.say, /read your details back/i);
+});
+
+test('registration: "register me" from the open summary acknowledges and submits', () => {
+  const plan = registerPlan({
+    prior: { intent: 'REGISTER', field: 'confirm', attempts: 1 },
+    registerDraft: NAME,
+    emailProvided: true,
+    passwordSet: true,
+    agreed: true,
+  });
+  assert.equal(plan.state, 'REGISTRATION_READY');
+  assert.equal(plan.field, 'confirm');
+  assert.equal(plan.submitting, true, 'the phone is told to submit');
+  assert.match(plan.say, /^Alright Ada Obi, I am creating your account now\.$/);
+  assert.doesNotMatch(plan.say, /read your details back/i);
+});
+
+test('registration: the creating line falls back to the neutral form without a name', () => {
+  const plan = registerPlan({
+    prior: { intent: 'REGISTER', field: 'confirm', attempts: 1 },
+    registration: { fullName: true, email: true, password: true, agreed: true },
+  });
+  assert.equal(plan.submitting, true);
+  assert.equal(plan.say, 'Alright, I am creating your account now.');
+});
+
+test('registration: only the confirm step sets submitting', () => {
+  const step = registerPlan({ registerDraft: NAME });
+  assert.equal(step.submitting, false);
+});
+
+test('registration: the password question explains the password and privacy rule', () => {
+  const plan = registerPlan({
+    registerDraft: NAME, emailProvided: true,
+  });
+  assert.equal(plan.field, 'password');
+  assert.match(plan.say, /secret code/i);
+  assert.match(plan.say, /eight characters/i);
+  assert.match(plan.say, /never share/i);
+  assert.match(plan.say, /not even someone/i);
+  assert.ok(plan.say.length <= intents.MAX_SAY);
+});
+
+test('registration: the agreement question explains the privacy policy and terms', () => {
+  const plan = registerPlan({
+    registerDraft: NAME, emailProvided: true, passwordSet: true,
+  });
+  assert.equal(plan.field, 'agreement');
+  assert.match(plan.say, /Privacy Policy/i);
+  assert.match(plan.say, /Terms and Conditions/i);
+  assert.match(plan.say, /tick the box/i);
+  assert.match(plan.say, /only if you agree/i);
+  assert.ok(plan.say.length <= intents.MAX_SAY);
+});
+
+test('registration: the register_focus block carries the server say and submitting flag', () => {
+  const blocks = buildStructured([
+    {
+      name: 'beginAuthHelp',
+      ok: true,
+      data: {
+        nextScreen: 'register',
+        field: 'confirm',
+        say: 'Alright Ada Obi, I am creating your account now.',
+        submitting: true,
+      },
+    },
+  ]);
+  const focus = blocks.find(b => b.type === 'register_focus');
+  assert.equal(focus.field, 'confirm');
+  assert.equal(focus.say, 'Alright Ada Obi, I am creating your account now.');
+  assert.equal(focus.submitting, true);
+});
+
+test('registration: a step focus without submitting omits the flag and keeps its say', () => {
+  const blocks = buildStructured([
+    {
+      name: 'beginAuthHelp',
+      ok: true,
+      data: {
+        nextScreen: 'register',
+        field: 'password',
+        say: 'Now choose your secret code on the screen.',
+      },
+    },
+  ]);
+  const focus = blocks.find(b => b.type === 'register_focus');
+  assert.equal(focus.field, 'password');
+  assert.equal(focus.say, 'Now choose your secret code on the screen.');
+  assert.equal(focus.submitting, undefined);
+});
+
+test('registration: the password and agreement summaries stay within the speech cap', () => {
+  for (const [step, extra] of [
+    ['password', { registerDraft: NAME, emailProvided: true }],
+    ['agreement', { registerDraft: NAME, emailProvided: true, passwordSet: true }],
+  ]) {
+    const plan = registerPlan(extra);
+    assert.equal(plan.field, step);
+    assert.ok(plan.say.length <= intents.MAX_SAY, `${step} fits one turn`);
+  }
 });

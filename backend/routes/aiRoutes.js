@@ -9,6 +9,7 @@
  * Endpoints:
  *   POST /api/ai/conversations           create or resume a conversation
  *   POST /api/ai/conversations/rebind    transition anonymous → authenticated
+ *   POST /api/ai/onboarding              first-run spoken welcome (server-owned)
  *   POST /api/ai/turn                    send one user message, run the agent
  *   POST /api/ai/cart/select             read back a product the buyer touched
  *   POST /api/ai/actions/:id/confirm     confirm a pending consequential action
@@ -66,7 +67,9 @@ const { sanitizeHistory, toModelMessages } = require('../services/ai/history');
 const metrics = require('../services/ai/metrics');
 const { runTurn } = require('../services/ai/agentRunner');
 const { executeConfirmed } = require('../services/ai/toolExecutor');
-const { config: aiConfig } = require('../lib/assistant/config');
+const metaProvider = require('../services/ai/metaProvider');
+const onboarding = require('../lib/assistant/onboarding');
+const { config: aiConfig, shouldUseMock } = require('../lib/assistant/config');
 const { activeBrainModel } = require('../lib/assistant/llama');
 const cartTools = require('../services/ai/tools/cartTools');
 const messagingTools = require('../services/ai/tools/messagingTools');
@@ -94,6 +97,10 @@ const turnLimiter = rateLimit({
 });
 const actionLimiter = rateLimit({
   windowMs: 60_000, max: 60, standardHeaders: true, legacyHeaders: false,
+  message: { success: false, message: 'Too many requests. Please wait a moment.' },
+});
+const onboardingLimiter = rateLimit({
+  windowMs: 60_000, max: 20, standardHeaders: true, legacyHeaders: false,
   message: { success: false, message: 'Too many requests. Please wait a moment.' },
 });
 
@@ -221,6 +228,11 @@ INTENT TO WORKFLOW
 - Buy/find/search → searchProducts, then the BUYING flow.
 - Ask/message the seller → SELLER CHAT HANDOFF.
 - Register/sign in/password/email/Google → AUTHENTICATION COACH.
+- "I am new", "I am new here", "I just joined", "how do I get started",
+  "where do I start", or "help me start using Salmart" means REGISTER, not an
+  unknown request. Call beginAuthHelp(REGISTER), say its sentence, and navigate
+  to register. Never reply that you cannot understand and never ask them to
+  rephrase a clear request to get started.
 - Anything else → help with words, or say plainly what you cannot do.
 
 NAVIGATION
@@ -256,7 +268,10 @@ AUTHENTICATION COACH
 - Only the app's real auth state proves success. Never claim an account was
   created, verified, or signed in until the app or a tool result confirms it.
 - Registration audio order. One question per turn, never skip ahead:
-  1. Ask for their full name and save it with prepareRegistration.
+  1. Ask for their full name and save it with prepareRegistration in that same
+     turn. Never ask the next question until the tool result lists the name as
+     saved. The phone fills the field the moment the tool returns, so the name
+     must be on screen before the email question is spoken.
   2. In your next reply, welcome them by that full name, then ask only whether
      they have an email — Google, Yahoo, or any other email.
   3. If they have an email, ask them to say it and save it with
@@ -275,41 +290,46 @@ AUTHENTICATION COACH
      say it again?" and do not move to another step. The same rule applies to
      the email: "I did not get the email. Please can you say it again? If you
      do not have one, say no email."
-  5. Call beginAuthHelp(REGISTER) and follow the 'field' it returns. For
-     'password' the phone opens its secure box: say a password is a secret code
-     that protects the account, they must not share it with anyone, and they
-     can type one or copy the suggested code. Never ask for, accept, repeat,
+     Every value they speak is saved with prepareRegistration on that same turn.
+     Asking the next question before the tool result confirms the value is a
+     failure: the form would stay empty while the assistant moves on.
+  5. Call beginAuthHelp(REGISTER) and say exactly the password sentence it
+     returns. That sentence explains the secret code and the privacy rule; do
+     not replace it with a shorter sentence and never ask for the password in
+     chat. For 'password' the phone opens and pulses its secure box: the user
+     types one or taps the suggested code. Never ask for, accept, repeat,
      spell, or fill a password.
-  6. For 'agreement' the phone opens its card: say briefly that they must
-     accept the Privacy Policy and Terms and Conditions before they can buy or
-     sell on Salmart, then ask them to tick the box only if they agree. Never
-     accept it for them.
+  6. For 'agreement' the phone opens and pulses its card: say exactly the
+     agreement sentence beginAuthHelp returns. It explains the Privacy Policy
+     and Terms and Conditions. Then ask them to tick the box only if they
+     agree. Never accept it for them.
   7. After the box is ticked the phone reads back the name, email and/or phone
-     number they gave (never the password) and asks whether to create the
-     account now or change something.
-  8. If they say yes, "create my account", or "go ahead", call
-     beginAuthHelp(REGISTER). When it returns field 'confirm', say its sentence,
-     then tell them plainly: "Tap the green Create my account button, or tap the
-     microphone and say create my account." The phone shows the final card with
-     its own microphone above it. There is no create-account tool: only that
-     button or their explicit spoken confirmation submits POST /register. Never
-     claim it yourself.
+     number they gave (never the password) and opens the final card.
+  8. The final card has ONE control: a pulsing "Speak to confirm" microphone.
+     There is no green create button in it. If the user says "register me",
+     "you can register me", "create my account", "sign me up", or "go ahead",
+     do NOT read the summary again, do NOT ask another question, and do NOT
+     call prepareRegistration. Reply only "Alright, I am creating your account
+     now." and stop. The phone speaks its own line, shows the submitting card,
+     and submits POST /register. Never claim it yourself.
+- At the final card, if they ask to change a detail, call prepareRegistration
+  with only the corrected field, say the new value in one short sentence, and
+  do not reopen the final card or repeat the whole read-back. The phone closes
+  the card and shows the updated field. Then wait for them to confirm again.
 - Once a name, email or phone number is in the form, it stays in. Confirm it in
   half a sentence and move on; never ask again, and never say you did not hear
   a value the form already holds.
-- If they ask to change a detail at the confirm step, call prepareRegistration
-  with only the corrected field, say the new value in one short sentence, then
-  ask the create-or-change question again.
 - If the user is confused at the password step, do not repeat the name, email
   or phone questions. Explain only the box: at least 8 characters with a letter
   and a number, or tap the suggested code, copy it and keep it safe. Never
   speak, spell or read out a password or the suggested code.
 - Never claim the account exists until the app confirms success. On success the
   app signs them in and opens Market. When the context carries
-  event=registration_complete and fullName, greet them once by that exact name,
-  confirm the account was created and that they are signed in, welcome them
-  once again, and ask whether they want to buy or sell. Do not restart
-  registration.
+  event=registration_complete and fullName, say exactly this and nothing else:
+  "Welcome once <fullName>, would you like to buy or sell right now, or is
+  there anything you want me to help you do? Just tap the mic and speak, I will
+  be glad to help." Use the exact name in the context. Do not restart
+  registration and do not add another question.
 - Forgotten email: ask whether they used Google or an email address before
   suggesting anything else. If Google, call startGoogleAuthentication. If they
   cannot find the address, explain the real limits above. Do not push a new
@@ -447,6 +467,62 @@ SELLER REPLIES
 // Fill patches are ALSO persisted server-side (see aiFormBridge) so a form
 // screen that mounts later can drain them, independent of this response.
 const { buildStructured } = require('../services/ai/structuredBlocks');
+
+// ─── POST /api/ai/onboarding ───────────────────────────────────────────────
+//
+// The first-run welcome is spoken by the phone but written on the server. With
+// a model key the model writes it; without one (the keyless event extract) the
+// same server module returns safe, fixed copy. The mobile app never owns the
+// words and only falls back locally when the request itself fails.
+router.post('/onboarding', onboardingLimiter, async (req, res) => {
+  const requestId = uuidv4();
+  const fallback = onboarding.sanitizeOnboarding(null);
+  if (!aiConfig.meta.configured || shouldUseMock()) {
+    return res.json({
+      success: true,
+      requestId,
+      source: 'fallback',
+      ...fallback,
+    });
+  }
+  try {
+    const result = await metaProvider.chat({
+      messages: [
+        { role: 'system', content: onboarding.ONBOARDING_SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content:
+            'Write the first-run welcome for a brand new Salmart user in Nigeria. '
+            + 'The phone will speak it aloud, then reveal the microphone permission card. '
+            + 'Return only the JSON object described in the system message.',
+        },
+      ],
+      requestId,
+      maxTokens: 420,
+      reasoningEffort: 'minimal',
+      timeoutMs: 9_000,
+    });
+    const lines = result?.kind === 'final'
+      ? onboarding.parseOnboardingReply(result.text)
+      : null;
+    if (!lines) throw new Error('onboarding_reply_unusable');
+    return res.json({
+      success: true,
+      requestId,
+      source: 'model',
+      model: result.model || null,
+      ...lines,
+    });
+  } catch (err) {
+    logger.warn(`[aiRoutes] onboarding model failed ${requestId}: ${err.message}`);
+    return res.json({
+      success: true,
+      requestId,
+      source: 'fallback',
+      ...fallback,
+    });
+  }
+});
 
 // ─── POST /api/ai/conversations ────────────────────────────────────────────
 router.post('/conversations', softAuth, conversationLimiter, async (req, res) => {

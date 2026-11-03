@@ -61,6 +61,7 @@ const pendingAction = require('../services/ai/pendingAction');
 const pendingFormPatch = require('../services/ai/pendingFormPatch');
 const taskState = require('../services/ai/taskState');
 const authSession = require('../services/ai/authSession');
+const authIntents = require('../lib/assistant/authIntents');
 const sellingSession = require('../services/ai/sellingSession');
 const credentialGuard = require('../lib/assistant/credentialGuard');
 const { sanitizeHistory, toModelMessages } = require('../services/ai/history');
@@ -238,10 +239,18 @@ INTENT TO WORKFLOW
 - Ask/message the seller → SELLER CHAT HANDOFF.
 - Register/sign in/password/email/Google → AUTHENTICATION COACH.
 - "I am new", "I am new here", "I just joined", "how do I get started",
-  "where do I start", or "help me start using Salmart" means REGISTER, not an
-  unknown request. Call beginAuthHelp(REGISTER), say its sentence, and navigate
-  to register. Never reply that you cannot understand and never ask them to
-  rephrase a clear request to get started.
+  "where do I start", or "help me start using Salmart" is a newness intent,
+  never an unknown request. Handle it in this order, one question per turn:
+  0. First check authState. If signed_in, they already have an account: say
+     so and ask whether they want to buy or sell. If guest, ask "Do you have
+     an account with Salmart?" and wait for the answer.
+  1. If they say yes, guide them to sign in (SIGN_IN path). If they say no,
+     say "That's not a problem, I can help you register on Salmart." and
+     call beginAuthHelp(REGISTER) in the same turn — the phone moves them to
+     the register screen by itself. Then say "Before we begin the
+     registration, please tell me your full name." Never reply that you
+     cannot understand and never ask them to rephrase a clear request to get
+     started.
 - Anything else → help with words, or say plainly what you cannot do.
 
 NAVIGATION
@@ -266,6 +275,10 @@ AUTHENTICATION COACH
   second question. One question and one next step per turn.
 - If the screen context includes authOutcome, call explainAuthError with exactly
   that code. It is a real result from the app, not a guess.
+- Always know which screen the user is viewing (Current screen). A
+  registration step lives only on the register screen: if the user has left
+  it, never describe the secret-code box, the agreement, or any registration
+  step, and never ask for a registration value. Answer only what they asked.
 - A vague complaint ("I cannot enter my account") is ACCOUNT_ACCESS or
   AUTH_ERROR, never RESET_PASSWORD. Ask the clarifying question first, then
   choose a specific path only after the user answers.
@@ -288,14 +301,17 @@ AUTHENTICATION COACH
      is: an email goes in the email field, digits go in the phone field. If
      they give both, save both with prepareRegistration in the same turn.
      Never invent a domain or a digit.
-  3. If they have an email, ask them to say it and save it with
-     prepareRegistration. If it is incomplete, help them one part at a time:
+  3. If they have an email, listen and save what they said with
+     prepareRegistration in that same turn. Never repeat the question after
+     they have answered it. If it is incomplete, help them one part at a time:
      the name, then "at", then the mail service, then "dot com". Never invent,
      guess or complete an address yourself. After it is saved, call
      beginAuthHelp(REGISTER) in the same turn so the phone opens the next box.
-  4. If they have no email, call prepareRegistration with noEmail=true and
+  4. If they have no email, say exactly "Okay, no problem, please call your
+     phone number." Then call prepareRegistration with noEmail=true and
      beginAuthHelp(REGISTER) in the same turn so the phone focuses its number
-     box, then ask for a phone number and save it in the phone field. Read the number back once. Never invent or
+     box, and save the digits in the phone field the moment they speak them.
+     Read the number back once. Never invent or
      add a digit. A phone-only account is valid and no OTP is sent. After it is
      saved, call beginAuthHelp(REGISTER) again so the next box opens.
      If their answer did not contain the digits (misheard, silence, or
@@ -713,37 +729,22 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     // only the hint the caller supplied when the turn started. Prefer the live
     // one everywhere the server needs to know where the user is.
     const liveScreen = safeContext?.activeScreen || safeContext?.screen || null;
-    // A registration completion is an app event, not a form step. It tells the
-    // model to write the welcome without asking for registration details again.
-    const eventBlock = safeContext?.event === 'registration_complete'
-      ? `\n\n[App event — the account was just created on the server and the user is signed in.`
-        + `${safeContext?.fullName ? ` The user's full name is "${String(safeContext.fullName).slice(0, 120)}".` : ''}`
-        + ' Say exactly two short sentences: first congratulate them by that full name and confirm the account was created and they are signed in; then welcome them once again by the same name and ask whether they want to buy or sell. Never invent a different name, never ask for any registration detail again, and do not restart registration.]'
-      // The phone heard nothing usable. This is not a failed question: the
-      // form keeps everything already filled, so the next line must continue
-      // from that state instead of saying "I did not hear you" and repeating
-      // a step that is already done.
-      : safeContext?.event === 'voice_unclear'
-        ? '\n\n[App event — the microphone captured no usable words on this turn. Nothing new was filled. Use the form state above. If the next missing field is the full name, email, or phone number and it still has no value, say the matching retry sentence and ask for that one value again. Otherwise say in one short sentence what is already done, then ask only the next missing question. If everything is done, say so and name the last tap.]'
-        : '';
 
     // Secrets typed into chat are removed before the model, the store, or a
     // log line can see them. The guard only fires when a value is present.
     const guarded = credentialGuard.inspect(message);
     const safeMessage = guarded.text;
 
-    // A finished registration must not follow the user to another screen or
-    // into a signed-in session. Drop it before any prompt block is built, so
-    // the model cannot resume an old step after a manual sign-up or a screen
-    // change.
+    // A finished registration must not follow the user into a signed-in
+    // session or past its own completion event: drop it before any prompt
+    // block is built. Leaving the register screen only PAUSES it — the values
+    // already supplied stay remembered, so coming back never re-asks for them.
     const storedCollected = found.doc.collectedInfo || null;
     const storedAuth = authSession.read(storedCollected);
-    const staleAuth = authSession.isStale(storedAuth, {
-      isAuthenticated: !!req.userId,
-      screen: liveScreen,
-      event: safeContext?.event,
-    });
-    const priorCollected = staleAuth
+    const finishedAuth = !!storedAuth && (
+      !!req.userId || safeContext?.event === 'registration_complete'
+    );
+    const priorCollected = finishedAuth
       ? authSession.withoutRegistration(storedCollected)
       : storedCollected;
 
@@ -755,15 +756,60 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       message: safeMessage,
     });
     const taskBlock = taskState.buildPromptBlock(task);
-    const authPrior = authSession.read(priorCollected);
+
+    // The phone's presence flags (never values) are the live truth for the
+    // form. Read them before the auth block so a pause and the next step agree.
+    const registrationSnapshot = safeContext && safeContext.registration
+      ? safeContext.registration
+      : null;
+    const registerOnScreen = !liveScreen
+      || liveScreen === 'register'
+      || liveScreen === 'ai';
+    let authPrior = authSession.read(priorCollected);
+    const shouldPause = !registerOnScreen;
+    if (authPrior && authPrior.intent === 'REGISTER'
+      && authPrior.paused !== shouldPause) {
+      authPrior = { ...authPrior, paused: shouldPause };
+    }
     const authBlock = authSession.promptBlock(authPrior, { screen: liveScreen });
+
+    // A registration completion is an app event, not a form step. It tells the
+    // model to write the welcome without asking for registration details again.
+    let eventBlock = '';
+    if (safeContext?.event === 'registration_complete') {
+      eventBlock = `\n\n[App event — the account was just created on the server and the user is signed in.`
+        + `${safeContext?.fullName ? ` The user's full name is "${String(safeContext.fullName).slice(0, 120)}".` : ''}`
+        + ' Say exactly two short sentences: first congratulate them by that full name and confirm the account was created and they are signed in; then welcome them once again by the same name and ask whether they want to buy or sell. Never invent a different name, never ask for any registration detail again, and do not restart registration.]';
+    } else if (safeContext?.event === 'voice_unclear') {
+      // The phone heard nothing usable. Do not let the model guess which field
+      // is missing: the server names the exact next step, and everything the
+      // user already supplied stays marked supplied in the auth block above.
+      let next = '';
+      if (authPrior && authPrior.intent === 'REGISTER' && !authPrior.paused) {
+        const plan = authIntents.planAuthHelp({
+          intent: 'REGISTER',
+          prior: authPrior,
+          registerDraft: task.drafts.register,
+          nameProvided: authPrior.nameProvided,
+          emailProvided: authPrior.emailProvided,
+          phoneProvided: authPrior.phoneProvided,
+          emailDeclined: authPrior.emailDeclined,
+          passwordSet: authPrior.passwordSet,
+          agreed: authPrior.agreed,
+          registration: registrationSnapshot,
+        });
+        if (plan && plan.field) {
+          next = ` The next registration step is "${plan.field}". Ask only that step and never ask again for anything already marked supplied above.`;
+        }
+      }
+      eventBlock = '\n\n[App event — the microphone captured no usable words on this turn. Nothing new was filled.'
+        + next
+        + ' Do not claim the user must give a name, email, or phone number that is already marked supplied. If everything is done, say so and name the last tap.]';
+    }
 
     // Listing workflow state, built from validated tool results and the
     // phone's form snapshot (presence flags only), never from model text.
     const listingSnapshot = sellingSession.snapshotFromContext(safeContext);
-    const registrationSnapshot = safeContext && safeContext.registration
-      ? safeContext.registration
-      : null;
     const sellingPrior = sellingSession.read(priorCollected);
     const sellingBlock = sellingSession.promptBlock(sellingPrior, listingSnapshot, task);
 
@@ -796,9 +842,18 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       auth: authPrior,
       registerDraft: task.drafts.register,
       registration: registrationSnapshot,
-      emailProvided: !!task.emailProvided || registrationSnapshot?.email === true,
-      phoneProvided: !!task.phoneProvided || registrationSnapshot?.phone === true,
-      emailDeclined: !!task.emailDeclined || registrationSnapshot?.emailDeclined === true,
+      nameProvided: !!(task.drafts.register.fullName
+        || (task.drafts.register.firstName && task.drafts.register.lastName)
+        || authPrior?.nameProvided),
+      emailProvided: !!task.emailProvided
+        || registrationSnapshot?.email === true
+        || !!authPrior?.emailProvided,
+      phoneProvided: !!task.phoneProvided
+        || registrationSnapshot?.phone === true
+        || !!authPrior?.phoneProvided,
+      emailDeclined: !!task.emailDeclined
+        || registrationSnapshot?.emailDeclined === true
+        || !!authPrior?.emailDeclined,
       passwordSet: registrationSnapshot?.password === true,
       agreed: registrationSnapshot?.agreed === true,
       // Multi-turn task memory. `adDraft` holds only values a validating tool

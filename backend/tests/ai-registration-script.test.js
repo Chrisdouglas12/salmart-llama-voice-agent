@@ -153,6 +153,9 @@ test('registration: a password never enters the patch, the note or the card line
   assert.match(r.nextAsk, /microphone/i);
   assert.match(r.nextAsk, /register me/i);
   assert.match(r.nextAsk, /change/i);
+  // The spoken line is for the user, never the model-facing instruction.
+  assert.doesNotMatch(r.say, /ask them/i);
+  assert.match(r.say, /everything is ready/i);
   assert.ok(r.manualSteps.includes('confirm'));
 });
 
@@ -294,4 +297,45 @@ test('registration: the password and agreement summaries stay within the speech 
     assert.equal(plan.field, step);
     assert.ok(plan.say.length <= intents.MAX_SAY, `${step} fits one turn`);
   }
+});
+
+test('registration: supplied name and email survive a turn with no form snapshot', () => {
+  const authSession = require('../services/ai/authSession');
+  const task = {
+    drafts: { register: { firstName: 'Ada', lastName: 'Obi' } },
+    emailProvided: true,
+  };
+  const next = authSession.applyToolResults(null, [
+    { name: 'beginAuthHelp', ok: true, data: { intent: 'REGISTER' } },
+  ], { isAuthenticated: false, task, registration: null });
+  assert.equal(next.nameProvided, true, 'the saved name stays supplied');
+  assert.equal(next.emailProvided, true, 'the saved email stays supplied');
+  assert.equal(next.field, 'password', 'so the next step is the secret code, not the name');
+});
+
+test('registration: a paused task names no next step and no secret code', () => {
+  const paused = intents.sanitizeAuthState({
+    intent: 'REGISTER',
+    state: 'COLLECTING_REGISTRATION_DETAILS',
+    method: null,
+    field: 'password',
+    nameProvided: true,
+    emailProvided: true,
+    paused: true,
+    attempts: 1,
+    updatedAt: Date.now(),
+  });
+  const block = intents.buildPromptBlock(paused, { screen: 'market' });
+  assert.match(block, /paused/i);
+  assert.doesNotMatch(block, /Next registration step/);
+  assert.match(block, /do not ask for any registration value/i);
+});
+
+test('registration: a server-known name is never asked for again', () => {
+  const plan = registerPlan({
+    nameProvided: true,
+    emailProvided: true,
+    registration: { password: true },
+  });
+  assert.equal(plan.field, 'agreement');
 });

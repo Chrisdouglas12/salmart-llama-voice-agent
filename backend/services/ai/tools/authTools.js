@@ -72,6 +72,7 @@ async function beginAuthHelp(ctx, { intent } = {}) {
     intent,
     prior: ctx && ctx.auth,
     registerDraft: ctx && ctx.registerDraft,
+    nameProvided: !!(ctx && ctx.nameProvided),
     emailProvided: !!(ctx && ctx.emailProvided),
     phoneProvided: !!(ctx && ctx.phoneProvided),
     emailDeclined: !!(ctx && ctx.emailDeclined),

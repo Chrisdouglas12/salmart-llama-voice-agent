@@ -330,6 +330,7 @@ async function prepareRegistration(_ctx, args) {
         firstName: fields.firstName,
         lastName: fields.lastName,
       };
+      _ctx.nameProvided = true;
     } else if (fields.firstName || fields.lastName) {
       _ctx.registerDraft = {
         ...(_ctx.registerDraft || {}),
@@ -354,6 +355,8 @@ async function prepareRegistration(_ctx, args) {
     ? _ctx.registerDraft
     : {};
   const hasName = !!(fields.firstName && fields.lastName)
+    || !!_ctx?.nameProvided
+    || snap.fullName === true
     || (snap.firstName === true && snap.lastName === true)
     || !!(draft.firstName && draft.lastName)
     || !!(draft.fullName && String(draft.fullName).trim().split(/\s+/).length >= 2);
@@ -382,7 +385,7 @@ async function prepareRegistration(_ctx, args) {
   } else if (!hasEmail && !declined) {
     nextAsk = 'Do you have an email? It can be Google, Yahoo, or any other email. If you do not have an email, just call your phone number.';
   } else if (!hasEmail && !hasPhone) {
-    nextAsk = 'What phone number should we use?';
+    nextAsk = 'Okay, no problem, please call your phone number.';
   } else if (!passwordSet) {
     nextAsk = 'Now choose your secret code on the screen. Use at least eight characters, with a letter and a number, '
       + 'and never share it with anyone. You can type one or use the suggested code.';
@@ -392,6 +395,13 @@ async function prepareRegistration(_ctx, args) {
     nextAsk = 'Your details are ready. Ask them to tap the microphone and say register me, '
       + 'or tell you which detail to change.';
   }
+
+  // `nextAsk` above is the model-facing instruction for the next turn. `say`
+  // is spoken and rendered to the user, so it may never carry an imperative
+  // written for the model. The ready case is the only one that differs.
+  const spokenNext = remaining.length
+    ? nextAsk
+    : 'Everything is ready. I will read your details back to you now.';
 
   // The name step is the one moment the user hears their own name back. It
   // works when the first and last name arrive in the same turn or in two, and
@@ -422,8 +432,9 @@ async function prepareRegistration(_ctx, args) {
       + (remaining.length
         ? `The only thing left is: ${remaining.join(', ')}.`
         : 'Everything on this form is done. Let them confirm, then the phone shows the final button.'),
-    // Short line for the phone's assistant card. Never contains a password.
-    say: welcome ? `${welcome} ${nextAsk}` : nextAsk,
+    // Short line for the phone's assistant card. Never contains a password
+    // and never carries a note written for the model.
+    say: welcome ? `${welcome} ${spokenNext}` : spokenNext,
     ...(noEmail ? { emailDeclined: true } : {}),
     // These are never part of `fields`, so the model can never report that it
     // filled a password or accepted the agreement for the user.

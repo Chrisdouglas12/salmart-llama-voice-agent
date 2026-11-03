@@ -109,7 +109,7 @@ test('a repeated registration step asks for the missing value again', () => {
   });
   assert.equal(first.field, 'phone');
   assert.equal(first.retry, false);
-  assert.match(first.say, /What phone number should we use/i);
+  assert.match(first.say, /please call your phone number/i);
 
   // The step survives persistence so the next turn can tell it is a repeat.
   assert.equal(intents.sanitizeAuthState(prior).field, 'phone');

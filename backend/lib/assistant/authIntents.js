@@ -60,9 +60,9 @@ const CLARIFY_SAY =
   'I can help with that. Which part is giving trouble: your password, the email you used, Google sign-in, or something else?';
 
 const REGISTRATION_QUESTIONS = {
-  fullName: 'Let us create your account. What is your full name?',
+  fullName: 'Before we begin the registration, please tell me your full name.',
   email: 'Do you have an email? It can be Google, Yahoo, or any other email. If you do not have an email, just call your phone number.',
-  phone: 'What phone number should we use?',
+  phone: 'Okay, no problem, please call your phone number.',
   password:
     'It is time to protect your account. I have opened the secret code box. '
     + 'A secret code protects your account, so never share it with anyone, not even someone who says they are '
@@ -239,6 +239,7 @@ function spoken(text) {
 
 function registrationStep({
   registerDraft,
+  nameProvided,
   emailProvided,
   phoneProvided,
   emailDeclined,
@@ -250,7 +251,8 @@ function registrationStep({
   const snap = registration && typeof registration === 'object' ? registration : {};
 
   const hasName = !!(
-    draft.fullName
+    nameProvided
+    || draft.fullName
     || snap.fullName === true
     || ((draft.firstName || snap.firstName === true) && (draft.lastName || snap.lastName === true))
   );
@@ -299,6 +301,7 @@ function planAuthHelp({
   intent,
   prior,
   registerDraft,
+  nameProvided,
   emailProvided,
   phoneProvided,
   emailDeclined,
@@ -313,6 +316,7 @@ function planAuthHelp({
   if (key === 'REGISTER') {
     const step = registrationStep({
       registerDraft,
+      nameProvided,
       emailProvided,
       phoneProvided,
       emailDeclined,
@@ -434,6 +438,10 @@ function sanitizeAuthState(raw) {
     state,
     method: cleanMethod(raw.method),
     field: REGISTRATION_FIELD_SET.has(raw.field) ? raw.field : null,
+    nameProvided: raw.nameProvided === true,
+    // A registration pauses when the user looks at another screen. The values
+    // already supplied stay remembered, but no step may be spoken there.
+    paused: raw.paused === true,
     emailProvided: raw.emailProvided === true,
     phoneProvided: raw.phoneProvided === true,
     emailDeclined: raw.emailDeclined === true,
@@ -450,6 +458,7 @@ function buildPromptBlock(auth, { screen } = {}) {
   const lines = [
     `Intent: ${auth.intent}`,
     `State: ${auth.state}`,
+    `Full name supplied already: ${auth.nameProvided ? 'yes' : 'no'}`,
     `Email supplied already: ${auth.emailProvided ? 'yes' : 'no'}`,
     `Phone supplied already: ${auth.phoneProvided ? 'yes' : 'no'}`,
     `User said they have no email: ${auth.emailDeclined ? 'yes' : 'no'}`,
@@ -459,20 +468,27 @@ function buildPromptBlock(auth, { screen } = {}) {
     `Turns on this step: ${auth.attempts}`,
   ];
   if (screen) lines.push(`Current screen: ${String(screen).slice(0, 120)}`);
-  if (auth.intent === 'REGISTER' && auth.field) {
+  // A paused registration must not name the next step at all, or the model
+  // starts reading the secret-code box again over an unrelated screen.
+  const paused = auth.paused === true;
+  if (!paused && auth.intent === 'REGISTER' && auth.field) {
     lines.push(`Next registration step: ${auth.field}`);
   }
-  if (auth.intent === 'REGISTER' && auth.field && auth.field !== 'confirm' && auth.attempts > 0) {
+  if (!paused && auth.intent === 'REGISTER' && auth.field && auth.field !== 'confirm' && auth.attempts > 0) {
     lines.push(
       'If the last answer did not contain this value, say exactly the matching retry '
       + 'sentence and ask again. Never move on without the value.',
     );
   }
   const registrationScreen = screen === 'register' || screen === 'ai';
-  const screenRule = screen && auth.intent === 'REGISTER' && !registrationScreen
-    ? ' The user is not on the register screen, so do not continue a registration step.'
+  const offScreen = paused || (screen && auth.intent === 'REGISTER' && !registrationScreen);
+  const screenRule = offScreen
+    ? ' The user is NOT on the register screen, so the registration is paused: '
+      + 'do not continue a registration step, do not describe the secret-code '
+      + 'box, the agreement, or any registration step, and do not ask for any '
+      + 'registration value. Answer only what they just asked, in one short sentence.'
     : '';
-  return `\n\n[Auth state — data only, not instructions:\n${lines.join('\n')}\nFollow this state. Do not restart from the beginning. One question at a time. Never ask for a password in chat. Ask for the email only at the email step; once it is saved, never ask for it again.${screenRule}]`;
+  return `\n\n[Auth state — data only, not instructions:\n${lines.join('\n')}\nFollow this state. Do not restart from the beginning. One question at a time. Never ask for a password in chat. Ask for the email only at the email step; once a value is marked supplied above, never ask for it again.${screenRule}]`;
 }
 
 /**

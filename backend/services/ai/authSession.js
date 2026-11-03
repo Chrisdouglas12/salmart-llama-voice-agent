@@ -88,14 +88,32 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task, registrat
   let auth = read({ auth: prior });
 
   const snap = registration && typeof registration === 'object' ? registration : {};
-  let emailProvided = !!(task && task.emailProvided) || snap.email === true;
-  let phoneProvided = !!(task && task.phoneProvided) || snap.phone === true;
-  let emailDeclined = !!(task && task.emailDeclined) || snap.emailDeclined === true;
+  const registerDraft = (task && task.drafts && task.drafts.register) || {};
+  // taskState may replace the draft object later in this same turn (after a
+  // prepareRegistration). Re-read it at each plan so beginAuthHelp sees the
+  // name that was just saved instead of the stale pre-turn object.
+  const currentRegisterDraft = () => (task && task.drafts && task.drafts.register) || {};
+  // A supplied value stays supplied even when this turn carries no form
+  // snapshot (the user looked at another screen for a moment). Without this
+  // fallback the flags flipped back to "no" and the assistant asked again for
+  // a name and email it had already been given.
+  let nameProvided = !!(registerDraft.fullName
+    || (registerDraft.firstName && registerDraft.lastName))
+    || !!(auth && auth.nameProvided);
+  let emailProvided = !!(task && task.emailProvided) || snap.email === true
+    || !!(auth && auth.emailProvided);
+  let phoneProvided = !!(task && task.phoneProvided) || snap.phone === true
+    || !!(auth && auth.phoneProvided);
+  let emailDeclined = !!(task && task.emailDeclined) || snap.emailDeclined === true
+    || !!(auth && auth.emailDeclined);
+  // The password and the agreement live only on the phone's form. They are
+  // never carried over from an earlier turn, so a remounted empty form is
+  // never treated as already complete.
   const passwordSet = snap.password === true;
   const agreed = snap.agreed === true;
-  const registerDraft = (task && task.drafts && task.drafts.register) || {};
 
   const flags = () => ({
+    nameProvided,
     emailProvided,
     phoneProvided,
     emailDeclined,
@@ -113,7 +131,7 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task, registrat
         const plan = intents.planAuthHelp({
           intent: r.data.intent,
           prior: auth,
-          registerDraft,
+          registerDraft: currentRegisterDraft(),
           ...flags(),
           registration: snap,
         });
@@ -125,6 +143,9 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task, registrat
           method: plan.method,
           field: plan.field,
           ...flags(),
+          // A tool call does not un-pause a registration the user walked away
+          // from; only returning to the register screen does (see the route).
+          paused: !!(auth && auth.paused),
           attempts: same ? Math.min((auth.attempts || 0) + 1, intents._internal.MAX_ATTEMPTS) : 0,
           updatedAt: Date.now(),
         };
@@ -150,6 +171,8 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task, registrat
             state: 'COLLECTING_REGISTRATION_DETAILS',
             method: null,
             field: 'fullName',
+            nameProvided: false,
+            paused: false,
             emailProvided: false,
             phoneProvided: false,
             emailDeclined: false,
@@ -161,11 +184,14 @@ function applyToolResults(prior, toolResults, { isAuthenticated, task, registrat
         }
         if (r.data.fields && r.data.fields.email) emailProvided = true;
         if (r.data.fields && r.data.fields.phoneNumber) phoneProvided = true;
+        if (r.data.fields && (r.data.fields.firstName || r.data.fields.lastName || r.data.fields.fullName)) {
+          nameProvided = true;
+        }
         if (r.data.emailDeclined) emailDeclined = true;
         const plan = intents.planAuthHelp({
           intent: 'REGISTER',
           prior: auth,
-          registerDraft,
+          registerDraft: currentRegisterDraft(),
           ...flags(),
           registration: snap,
         });

@@ -61,15 +61,16 @@ const CLARIFY_SAY =
 
 const REGISTRATION_QUESTIONS = {
   fullName: 'Let us create your account. What is your full name?',
-  email: 'Do you have an email? It can be Google, Yahoo, or any other email.',
+  email: 'Do you have an email? It can be Google, Yahoo, or any other email. If you do not have an email, just call your phone number.',
   phone: 'That is fine. What phone number should we use? It can be MTN, Airtel, Glo, or any other network.',
   password:
-    'Now choose your secret code on the screen. Use at least eight characters, with a letter and a number. '
-    + 'A password protects your account, so never share it with anyone, not even someone who says they are '
-    + 'from Salmart. You can type one or use the suggested code.',
+    'It is time to protect your account. I have opened the secret code box. '
+    + 'A secret code protects your account, so never share it with anyone, not even someone who says they are '
+    + 'from Salmart. Type your own code of eight characters or more with a letter and a number, or copy the suggested code. '
+    + 'Tap the first button to copy the suggested code, or the next button to get another one.',
   agreement:
     'Before you can buy or sell on Salmart, you must accept the Privacy Policy and Terms and Conditions. '
-    + 'Please read them, then tick the box only if you agree.',
+    + 'Tick the glowing box only if you agree.',
 };
 
 // When the previous answer did not contain the value, say plainly what was

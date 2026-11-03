@@ -243,7 +243,7 @@ test('registration: the agreement question explains the privacy policy and terms
   assert.equal(plan.field, 'agreement');
   assert.match(plan.say, /Privacy Policy/i);
   assert.match(plan.say, /Terms and Conditions/i);
-  assert.match(plan.say, /tick the box/i);
+  assert.match(plan.say, /tick the glowing box/i);
   assert.match(plan.say, /only if you agree/i);
   assert.ok(plan.say.length <= intents.MAX_SAY);
 });

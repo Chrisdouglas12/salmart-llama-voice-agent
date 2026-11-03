@@ -380,7 +380,7 @@ async function prepareRegistration(_ctx, args) {
       ? 'Thank you. What is your last name?'
       : 'What is your full name, first and last?';
   } else if (!hasEmail && !declined) {
-    nextAsk = 'Do you have an email? It can be Google, Yahoo, or any other email.';
+    nextAsk = 'Do you have an email? It can be Google, Yahoo, or any other email. If you do not have an email, just call your phone number.';
   } else if (!hasEmail && !hasPhone) {
     nextAsk = 'What phone number should we use? It can be MTN, Airtel, Glo, or any other network.';
   } else if (!passwordSet) {

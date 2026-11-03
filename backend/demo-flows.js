@@ -137,8 +137,9 @@ const complete = sellingSession.promptBlock(
   doneSnap, doneTask,
 );
 say(complete.split('\n').find((l) => l.includes('Status:')));
-you('Yes, read it for me.');
+you('No, nothing to change.');
+say('I have filled all the information. Here is what we have filled so far.');
 for (const l of complete.split('\n').filter((l) => /^\d+\. /.test(l))) say(l);
-say('Do you want to correct anything, or tap Publish/Post? (the seller always posts — there is no publish tool)');
+say('Will you like to change anything? No — tap the Post or Publish button and the post will go live for buyers to see. (the seller always posts — there is no publish tool)');
 
 console.log('\nDone. Registration + buying + selling, keyless. Nothing was published; the seller always taps Post.');

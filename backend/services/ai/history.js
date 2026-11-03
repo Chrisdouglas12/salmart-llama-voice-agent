@@ -49,18 +49,20 @@ function sanitizeHistory(messages) {
       continue;
     }
 
-    const pending = new Set();
-    for (const c of calls) {
-      if (c && c.id) pending.add(c.id);
-    }
+    const pending = [...calls];
     const responses = [];
     let j = i + 1;
-    while (j < list.length && list[j] && list[j].role === 'tool' && pending.has(list[j].toolCallId)) {
+    // Match each response to one still-unanswered call. A Set of ids is not
+    // enough: some gateways repeat an id across parallel calls, and a Set
+    // would let one tool message "answer" both, storing an incomplete pair.
+    while (j < list.length && list[j] && list[j].role === 'tool') {
+      const idx = pending.findIndex(c => c && c.id && c.id === list[j].toolCallId);
+      if (idx === -1) break;
+      pending.splice(idx, 1);
       responses.push(list[j]);
-      pending.delete(list[j].toolCallId);
       j++;
     }
-    if (pending.size === 0) {
+    if (pending.length === 0) {
       out.push(m, ...responses);
     } else {
       dropped++;

@@ -15,6 +15,7 @@
 
 const { chatCompletion } = require('../../lib/assistant/llama');
 const { config } = require('../../lib/assistant/config');
+const { normalizeToolCalls } = require('./toolCallIds');
 
 /**
  * @param {object} opts
@@ -71,17 +72,12 @@ async function chat({ messages, tools = [], requestId, maxTokens, reasoningEffor
     kind: 'tool_calls',
     text: msg.content || null,
     model,
-    toolCalls: rawCalls.map(tc => {
-      let args = {};
-      if (typeof tc.function?.arguments === 'string') {
-        try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
-      } else if (tc.function?.arguments && typeof tc.function.arguments === 'object') {
-        args = tc.function.arguments;
-      }
-      return { id: tc.id || `call_${Math.random().toString(36).slice(2)}`, name: tc.function?.name, arguments: args };
-    }),
+    toolCalls: normalizeToolCalls(rawCalls),
     raw,
   };
 }
 
-module.exports = { chat };
+/**
+ * Re-exported for callers that already import this module.
+ */
+module.exports = { chat, normalizeToolCalls };

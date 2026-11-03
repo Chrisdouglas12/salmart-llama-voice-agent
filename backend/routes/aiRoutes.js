@@ -882,7 +882,7 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       // break the next replay (see the sanitizeHistory note above).
       const { messages: storable, dropped: storeDropped } = sanitizeHistory(toStore);
       if (storeDropped > 0) {
-        logger.warn(`[aiRoutes] dropped ${storeDropped} orphaned turn message(s) before store: conversationId=${conversationId} requestId=${requestId}`);
+        logger.warn(`[aiRoutes] dropped ${storeDropped} orphaned turn message(s) before store: conversationId=${conversationId} requestId=${requestId} stop=${result.stopReason} turns=${toStore.length}`);
       }
       await store.appendMessages(conversationId, storable);
     }

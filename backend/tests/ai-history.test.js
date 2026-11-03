@@ -12,6 +12,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { sanitizeHistory, toModelMessages } = require('../services/ai/history');
+const { normalizeToolCalls } = require('../services/ai/toolCallIds');
 
 const asst = (content = '') => ({ role: 'assistant', content });
 const user = (content) => ({ role: 'user', content });
@@ -39,6 +40,37 @@ test('history: partially answered pairs are dropped whole', () => {
   const { messages, dropped } = sanitizeHistory(msgs);
   assert.equal(dropped, 1);
   assert.deepEqual(messages, [user('hi')]);
+});
+
+test('history: repeated ids across parallel calls keep both pairs', () => {
+  // Some gateways reuse one id for parallel calls. Both calls must still have
+  // their own response or the replay is incomplete.
+  const msgs = [user('hi'), calls(['a', 'a']), tool('a'), tool('a')];
+  const { messages, dropped } = sanitizeHistory(msgs);
+  assert.equal(dropped, 0);
+  assert.deepEqual(messages, msgs);
+});
+
+test('history: a repeated id with one response is dropped, never half-stored', () => {
+  const msgs = [user('hi'), calls(['a', 'a']), tool('a')];
+  const { messages, dropped } = sanitizeHistory(msgs);
+  assert.equal(dropped, 1);
+  assert.deepEqual(messages, [user('hi')]);
+});
+
+test('provider: a repeated tool_call id is renamed so both pairs survive', () => {
+  const out = normalizeToolCalls([
+    { id: 'call_0', function: { name: 'searchProducts', arguments: '{"q":"shoe"}' } },
+    { id: 'call_0', function: { name: 'addToCart', arguments: '{}' } },
+  ]);
+  assert.deepEqual(out.map(c => c.id), ['call_0', 'call_0_2']);
+  assert.deepEqual(out.map(c => c.name), ['searchProducts', 'addToCart']);
+  assert.deepEqual(out[0].arguments, { q: 'shoe' });
+});
+
+test('provider: missing tool_call ids are generated uniquely', () => {
+  const out = normalizeToolCalls([{ function: { name: 'a' } }, { function: { name: 'b' } }]);
+  assert.equal(new Set(out.map(c => c.id)).size, 2);
 });
 
 test('history: stray tool messages without a pair are dropped', () => {

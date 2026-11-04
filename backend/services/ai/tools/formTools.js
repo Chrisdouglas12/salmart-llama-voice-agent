@@ -266,6 +266,30 @@ function normalizeNgPhone(value) {
   return PHONE_RE.test(digits) ? digits : '';
 }
 
+// Pull one Nigerian phone number out of a whole sentence. The model sees the
+// transcript too, but small models routinely drop the digits when the user
+// declines an email in the same breath ("no email, here is my number ...").
+// This is the deterministic backstop, never a guess: only a complete number is
+// returned.
+const PHONE_TEXT_RE = /(?:\+?234[\s-]*|0[\s-]*)[789][\s-]*[01](?:[\s-]*\d){8}/;
+const PHONE_TEXT_BARE_RE = /\b[789][\s-]*[01](?:[\s-]*\d){8}\b/;
+
+function phoneFromText(value) {
+  const text = wordsToDigits(value);
+  const full = text.match(PHONE_TEXT_RE);
+  if (full) return normalizeNgPhone(full[0]);
+  const bare = text.match(PHONE_TEXT_BARE_RE);
+  return bare ? normalizeNgPhone(bare[0]) : '';
+}
+
+// "I don't have an email", "no email", "I don't want to use an email",
+// "my email is none". Only used when the turn carries no usable address.
+const EMAIL_DECLINE_RE = /\b(?:no|not|don'?t|do not|without|never)\b[\s\w]{0,22}\b(?:e-?mail|mail)\b|\b(?:e-?mail|mail)\b[\s\w]{0,18}\b(?:no|not|none|nothing|never)\b/i;
+
+function declinesEmail(value) {
+  return EMAIL_DECLINE_RE.test(String(value == null ? '' : value));
+}
+
 function normalizeRegistrationPatch(raw) {
   const r = raw && typeof raw === 'object' ? raw : {};
   const out = {};
@@ -303,13 +327,32 @@ function normalizeRegistrationPatch(raw) {
 
 async function prepareRegistration(_ctx, args) {
   const raw = args && typeof args === 'object' ? args : {};
+  // The user's exact words for this turn. A spoken phone number often arrives
+  // inside a longer sentence ("I don't have an email, here is my number
+  // zero eight zero three ..."), and a small model can drop the digits from
+  // the tool call. Parsing the sentence here is the deterministic safety net.
+  const heard = String(_ctx?.lastUserMessage || '');
+  const heardPhone = phoneFromText(heard);
+  const rawPhone = String(
+    raw.phoneNumber || raw.phone || raw.tel || raw.phone_number || '',
+  ).trim();
+  const phoneValue = normalizeNgPhone(rawPhone) || heardPhone;
+
   const fields = normalizeRegistrationPatch(raw);
-  const noEmail = raw.noEmail === true;
+  if (!fields.phoneNumber && phoneValue) fields.phoneNumber = phoneValue;
+
+  // A "none" / "no email" value is a decline, not a malformed address.
+  const rawEmail = String(raw.email == null ? '' : raw.email).trim();
+  const emailDeclineToken = /^(?:none|no|nil|n\/a|n\.a\.|not applicable|no email|no e-mail|-+)$/i
+    .test(rawEmail);
+  // Only infer a decline when no usable email was given. The spoken words own
+  // this turn, so "I do not want to use an email" moves straight to the phone.
+  const noEmail = raw.noEmail === true || emailDeclineToken
+    || (!rawEmail && declinesEmail(heard));
 
   // A partial email or phone is not saved, but the model must hear why so it
   // can help the user finish it instead of silently asking again.
-  const rawEmail = String(raw.email == null ? '' : raw.email).trim();
-  if (rawEmail && !EMAIL_RE.test(rawEmail.toLowerCase())) {
+  if (rawEmail && !emailDeclineToken && !EMAIL_RE.test(rawEmail.toLowerCase())) {
     const e = new Error(
       'That email is not complete yet. Ask them to say it again slowly, one part at a time: '
       + 'the name, then "at", then the mail service, then "dot com" or the ending. Never invent a domain.'
@@ -317,8 +360,7 @@ async function prepareRegistration(_ctx, args) {
     e.code = 'TOOL_BAD_ARGS';
     throw e;
   }
-  const rawPhone = String(raw.phoneNumber == null ? '' : raw.phoneNumber).trim();
-  if (rawPhone && !normalizeNgPhone(rawPhone)) {
+  if (rawPhone && !normalizeNgPhone(rawPhone) && !heardPhone) {
     const e = new Error(
       'That phone number is not complete. Ask them to say the 11 digits again, starting with zero. '
       + 'Never guess or add a missing digit.'
@@ -510,5 +552,9 @@ module.exports = {
     normalizeRequestPatch,
     normalizeProfilePatch,
     normalizeRegistrationPatch,
+    normalizeNgPhone,
+    phoneFromText,
+    declinesEmail,
+    wordsToDigits,
   },
 };

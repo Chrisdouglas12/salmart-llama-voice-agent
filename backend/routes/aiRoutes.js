@@ -975,6 +975,10 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       conversationId,
       requestId,
       logger,
+      // The exact words of this turn. prepareRegistration parses a spoken phone
+      // number (and an email decline) from here when the model's tool call
+      // dropped it, so a called-out number is never lost.
+      lastUserMessage: safeMessage,
       // Used by startGoogleAuthentication when the model omits `platform`.
       platform: safeContext?.platform,
       screen: liveScreen,

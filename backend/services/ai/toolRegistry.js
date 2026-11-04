@@ -484,6 +484,10 @@ define({
       lastName: { type: 'string', maxLength: 60 },
       email: { type: 'string', maxLength: 254 },
       phoneNumber: { type: 'string', maxLength: 20 },
+      // Common aliases so a model that says "phone" does not lose the number
+      // to argument validation. The handler folds them into phoneNumber.
+      phone: { type: 'string', maxLength: 20 },
+      tel: { type: 'string', maxLength: 20 },
       noEmail: { type: 'boolean' },
       referrer: { type: 'string', maxLength: 64 },
     },

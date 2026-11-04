@@ -1,36 +1,47 @@
 # Salmart Intelligence
-### AI that understands people, not just commands.
 
-_Meta-powered, voice-first assistant built during Meta AI Developer Hackathon 2026._
+Voice-first AI inside the Salmart marketplace. Speak, and the app does it.
 
-Salmart marketplace existed before. _Salmart Intelligence is the new AI layer built this week._
+Built for the Meta AI Developer Hackathon 2026. The Salmart app existed before; this repo is only the new AI layer.
 
-*The Problem*
-Most apps assume you can read, type, and navigate menus. But millions can't.
+## Demo (video)
 
-I've seen it myself — even educated people asking "Please, how do I do this? How do I do that?" And even we developers struggle when an app is new to us.
+The video shows two flows (limited time):
 
-What if you could just speak to the app and it understands you, and does exactly what you want or guides you through it?
+- **Registration by voice** — guided one-question steps, email optional, Nigerian phone accepted, secure password box, tick-to-agree, spoken summary, say "register me".
+- **Buying by voice + touch** — say "I want to buy", the AI says "touch the one you want", tap previews photo and price, say "save it" to add to cart.
 
-That's why I built Salmart Intelligence — an agentic AI inside Salmart that helps educated and uneducated people use the app without learning the interface.
+**Selling is also supported, not shown in the video:** snap a product photo and the AI auto-fills title, description, and category, then walks through price, quantity, and discount one question at a time. Same for cart, checkout guidance, and seller chat.
 
-*What we built — voice + touch from any screen:*
+## Models used
 
-- *Register by voice:* Guided conversation, email optional, Nigerian phone accepted
-- *Shop by touch:* Say "I want to buy", AI says "touch the one you want" — touch shows photo, real price, seller. Tap never buys, you say "save it"
-- *Buy & pay with guidance:* Add to cart, chat seller, tick-to-pay via Paystack — AI guides, you tap the final button
-- *First-run onboarding:* Welcome spoken from server, asks for mic with voice, not a system popup
+| Job | Model |
+|---|---|
+| Chat + reasoning (brain) | `muse-spark-1.3` (fallback `muse-spark-1.2`) |
+| Vision (product photos, Shelfie) | `muse-spark-1.3` |
+| Speech-to-text | `muse-voice-transcribe-1.0` (push-to-talk) |
+| Deep reasoning | `muse-wonder-1.0` |
+| Image tasks | `muse-image-1.0` |
+| Backup brain (no key needed) | Muse Glimmer 30B via Together AI |
 
-*Powered by Meta*
-Meta Llama for intent + context, Meta ASR for voice (PUSH_TO_TALK), vision for Shelfie scan. AI reasoning connected to 21 real app tools — it doesn't just chat, it does.
+Voice output uses the **phone's own TTS voice** — we have no access to hosted Meta MMS voices, so the server writes the words and the device speaks them.
 
-*Why it matters*
-If Meta's models can power apps that adapt to people, not the other way round — elderly users, illiterate users, anyone — Meta's ecosystem wins beyond chat.
+## Try it
 
-> Don't make people learn technology. Make technology understand people.
+**App (easiest):** install from the Play Store and run the registration flow with any mock data (no real data needed):
+https://play.google.com/store/apps/details?id=com.salmartTech.salmart
 
-*Verify in 30 seconds:*
+**Server:** live on Render — `https://salmart.onrender.com`. The demo's API calls go through Render to the Meta-hosted models above.
+
+**Run the code on any machine:**
+
+```bash
 cd backend
-npm run test:keyless  # 128/128
-npm run demo          # registration + buying + selling
-See `NEW_WORK.md` (what's new this week).
+cp .env.example .env   # add META_API_KEY (or leave blank for keyless mode)
+npm install
+npm run test:keyless   # 179/179, no keys needed
+npm run demo           # registration + buying + selling walkthrough
+npm start              # serves on PORT (default 3000)
+```
+
+Keyless tests and the demo run with no API keys and no database.

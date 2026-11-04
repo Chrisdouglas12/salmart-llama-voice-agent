@@ -37,11 +37,14 @@ https://play.google.com/store/apps/details?id=com.salmartTech.salmart
 
 ```bash
 cd backend
-cp .env.example .env   # add META_API_KEY (or leave blank for keyless mode)
 npm install
-npm run test:keyless   # 179/179, no keys needed
-npm run demo           # registration + buying + selling walkthrough
-npm start              # serves on PORT (default 3000)
+npm run test:keyless   # 179/179, no keys or database needed
+npm run demo           # registration + buying + selling walkthrough, no keys needed
 ```
 
-Keyless tests and the demo run with no API keys and no database.
+Full server (`npm start`, serves on `PORT`, default 3000) needs a `.env` — copy
+`.env.example` to `.env` and set at least `MONGO_URI`, `JWT_SECRET`, and
+`META_API_KEY`. Keyless mode never touches the network or a database.
+
+`mobile/` holds the AI-voice changes as patch files, not the full app — judges
+should use the Play Store build above to test on a phone.

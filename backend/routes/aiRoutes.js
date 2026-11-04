@@ -840,13 +840,14 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
         + ' Say exactly the agreement step in at most two short sentences: before they can buy or sell on Salmart they must accept the Privacy Policy and Terms and Conditions, and they should tick the glowing box only if they agree. Never ask for any registration detail again.]';
     } else if (safeContext?.event === 'ready_to_confirm') {
       // The final summary card is on screen (the user ticked the agreement or
-      // tapped Create account with everything filled). The phone shows the
-      // name and contact it holds; the model speaks the summary moment: thank
-      // them, confirm everything is in, and tell them to tap the microphone
-      // and say "register me" to create the account. Never read out or ask
+      // tapped Create account with everything filled). The phone has just read
+      // the values aloud itself and shows them on the card; the model speaks
+      // only the question: thank them, confirm everything is ready, and tell
+      // them to tap the microphone and say "register me" to create the
+      // account — or to say which detail to change. Never read out or ask
       // for any contact detail, and never mention a password.
-      eventBlock = `\n\n[App event — the registration summary card is on screen and everything is filled.`
-        + ' Say exactly two short sentences: first thank them and confirm everything is ready; then tell them to tap the microphone and say "register me" to create the account. Never ask for any registration detail again.]';
+      eventBlock = `\n\n[App event — the registration summary card is on screen, the phone has read the details aloud, and everything is filled.`
+        + ' Say exactly two short sentences: first thank them and confirm everything is ready; then tell them to tap the microphone and say "register me" to create the account, or to say which detail to change. Never ask for any registration detail again.]';
     } else if (safeContext?.event === 'voice_unclear') {
       // The phone heard nothing usable. Do not let the model guess which field
       // is missing: the server names the exact next step, and everything the

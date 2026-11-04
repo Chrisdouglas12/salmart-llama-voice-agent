@@ -791,6 +791,31 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       eventBlock = `\n\n[App event — the account was just created on the server and the user is signed in.`
         + `${safeContext?.fullName ? ` The user's full name is "${String(safeContext.fullName).slice(0, 120)}".` : ''}`
         + ' Say exactly two short sentences: first congratulate them by that full name and confirm the account was created and they are signed in; then say "Welcome to Salmart <name>, we are glad to have you. Would you like to buy or sell anything?" using that same name. Never invent a different name, never ask for any registration detail again, and do not restart registration.]';
+    } else if (safeContext?.event === 'account_creating') {
+      // The user confirmed and the phone is about to POST /register. The model
+      // speaks the handoff line so the phone never invents its own words.
+      eventBlock = `\n\n[App event — the user just confirmed and the account is being created now.`
+        + `${safeContext?.fullName ? ` The user's full name is "${String(safeContext.fullName).slice(0, 120)}".` : ''}`
+        + ' Say exactly one short sentence: "Alright <name>, I am creating your account now." using that name. Say nothing else. Never ask for any registration detail again.]';
+    } else if (safeContext?.event === 'registration_created') {
+      // The account now exists but the congratulations card is still on
+      // screen. The model speaks the congratulations plus the signing-in line;
+      // the Market welcome comes later through registration_complete.
+      eventBlock = `\n\n[App event — the account was just created and the congratulations card is on screen.`
+        + `${safeContext?.fullName ? ` The user's full name is "${String(safeContext.fullName).slice(0, 120)}".` : ''}`
+        + ' Say exactly two short sentences: first congratulate them by that full name and confirm the account was created; then say you are signing them in right now. Never invent a different name, never ask for any registration detail again, and do not mention the Market yet.]';
+    } else if (safeContext?.event === 'password_help') {
+      // The user tapped "Hear how" on the secret-code box. The model explains
+      // the mechanics; the phone never reads its own help line.
+      eventBlock = `\n\n[App event — the user asked how to create their secret code on the register screen.`
+        + ' Explain in at most two short sentences: type at least 8 characters with a letter and a number, or tap the suggested code and copy it somewhere safe. Never share the code with anyone. Never ask for, repeat, or fill a password.]';
+    } else if (safeContext?.event === 'signup_help') {
+      // The user tapped "hear the steps" on the register screen. Walk the
+      // whole flow in order: name, email-or-phone, secret code box, agreement
+      // tick, then read-back and spoken confirmation. Short sentences, no more
+      // than four.
+      eventBlock = `\n\n[App event — the user asked for the sign-up steps on the register screen.`
+        + ' Describe the steps in order in at most four short sentences: (1) say your full name; (2) give an email, or call your phone number if you have no email; (3) a box opens for the secret code — type 8 characters with a letter and a number, or tap the suggested code; (4) tick the glowing agreement box, then hear the read-back and say "register me" into the card microphone to create the account. Never ask for a password in chat.]';
     } else if (safeContext?.event === 'voice_unclear') {
       // The phone heard nothing usable. Do not let the model guess which field
       // is missing: the server names the exact next step, and everything the

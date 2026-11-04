@@ -11,7 +11,7 @@ Salmart Intelligence fixes that: Register by voice. Buy by touch. Chat seller by
 
 **Demo Video (3 min):** https://youtube.com/shorts/1EfUJaZ6D40?si=BRfFtk7PVaBrQBsg
 **Try it:** Play Store: https://play.google.com/store/apps/details?id=com.salmartTech.salmart
-**Server:** Live on Render — `https://salmart.onrender.com`
+**Server:** Live on Render — `app.salmartonline.com.ng`
 
 ---
 
@@ -36,7 +36,7 @@ Snap a product photo and AI auto-fills title, description, and category, then wa
 
 Live Render logs show real calls to Meta-hosted models:
 
-- `muse-spark-1.3` — reasoning + tool calls: `registration_started`, `navigateToScreen`, `account_created`
+- `muse-spark-1.3` — reasoning + real tool calls: `prepareRegistration`, `beginAuthHelp`, `navigateToScreen`, `searchProducts`, `addToCart`
 - `muse-voice-transcribe-1.0` — speech-to-text (push-to-talk)
 
 ## Models used
@@ -46,8 +46,6 @@ Live Render logs show real calls to Meta-hosted models:
 | Chat + reasoning (brain) | `muse-spark-1.3` (fallback `muse-spark-1.2`) |
 | Vision (product photos, Shelfie) | `muse-spark-1.3` |
 | Speech-to-text | `muse-voice-transcribe-1.0` (push-to-talk) |
-| Deep reasoning | `muse-wonder-1.0` |
-| Image tasks | `muse-image-1.0` |
 
 Voice output uses the **phone's own TTS voice** — we have no access to hosted Meta MMS voices, so the server writes the words and the device speaks them.
 
@@ -56,7 +54,7 @@ Voice output uses the **phone's own TTS voice** — we have no access to hosted 
 **App (easiest):** install from the Play Store and run the registration flow with any mock data (no real data needed):
 https://play.google.com/store/apps/details?id=com.salmartTech.salmart
 
-**Server:** live on Render — `https://salmart.onrender.com`. The demo's API calls go through Render to the Meta-hosted models above.
+**Server:** live on Render — `app.salmartonline.com.ng`. The demo's API calls go through Render to the Meta-hosted models above.
 
 **Run the code on any machine:**
 

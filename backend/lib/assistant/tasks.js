@@ -22,6 +22,59 @@ function scopeResetDetected(text) {
   return SCOPE_RESET_RX.test(String(text || ''));
 }
 
+/* Flow-aware listening: the AI must follow a new request instead of
+ * replaying an unfinished task the user walked away from. Each flow owns its
+ * screens and drafts (selling→createAd/adDraft, registration→register,
+ * request→createRequest, profile→editProfile, buying→market/search/pick).
+ * A message that clearly starts a different flow than the stored task resets
+ * the task — unless it reads as a continuation of the old one (a correction,
+ * a yes/no answer, or a detail like "make it seventy thousand"). */
+const FLOW_INTENT_RX = {
+  selling: /\b(sell|advertise|advert|post (an? )?(ad|listing)|create (an? )?(ad|listing)|my (ads?|listings?))\b/i,
+  buying: /\b(buy|search|find|looking for|how much|order|checkout|cart|my orders?)\b/i,
+  registration: /\b(register|sign ?up|create (an? )?account|get started|i'?m new)\b/i,
+  request: /\b(request|i need (a|an|someone)|find (me )?(someone|a (vendor|plumber|tailor|driver|caterer)))\b/i,
+  profile: /\b(my profile|edit (my )?profile|change my name|my bio)\b/i,
+};
+
+// Continuations of the current task, never a new request on their own.
+const CONTINUATION_RX = /\b(make it|change .* to|no,? (it'?s|that)|yes|yeah|yep|correct|same (one|item)|that one|chat (him|her|them|seller)|save it|add .*cart|more|less|fewer|too (much|little|high|low)|negotiate)\b/i;
+
+function messageFlow(text) {
+  const s = String(text || '');
+  for (const [flow, rx] of Object.entries(FLOW_INTENT_RX)) {
+    if (rx.test(s)) return flow;
+  }
+  return null;
+}
+
+/** Which flow does the stored task belong to, if any. */
+function taskFlow(task) {
+  if (!task || typeof task !== 'object') return null;
+  if (Object.keys(task.adDraft || {}).length) return 'selling';
+  const d = task.drafts || {};
+  if (Object.keys(d.register || {}).length || task.emailProvided || task.phoneProvided || task.emailDeclined) return 'registration';
+  if (Object.keys(d.request || {}).length) return 'request';
+  if (Object.keys(d.profile || {}).length) return 'profile';
+  if (task.lastPick) return 'buying';
+  if (task.lastSearch && /^(searchProducts|getMyOrders|addToCart)$/.test(String(task.lastSearch.tool || ''))) return 'buying';
+  // A goal with no drafts yet still names a flow ("I want to sell a blender").
+  return messageFlow(task.goal) || null;
+}
+
+/**
+ * True when the user starts a different flow than the stored unfinished
+ * task. The new request wins: the caller drops the old drafts and starts
+ * clean instead of nagging about a page the user already left.
+ */
+function flowSwitchDetected(message, task) {
+  const from = taskFlow(task);
+  if (!from) return false;
+  const to = messageFlow(message);
+  if (!to || to === from) return false;
+  return !CONTINUATION_RX.test(String(message || ''));
+}
+
 function createTask(goal = '') {
   return {
     goal: String(goal || '').slice(0, 160),
@@ -158,6 +211,9 @@ module.exports = {
   TASK_TTL_MS,
   SCOPE_RESET_RX,
   scopeResetDetected,
+  messageFlow,
+  taskFlow,
+  flowSwitchDetected,
   createTask,
   mergeTaskDraft,
   validatePriceChange,

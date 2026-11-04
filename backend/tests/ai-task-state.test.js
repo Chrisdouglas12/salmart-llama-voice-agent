@@ -125,3 +125,45 @@ test('task: collectedInfo keeps unrelated keys', () => {
   assert.equal(info.lastIntent, 'search');
   assert.equal(info.task.goal, 'Find a phone');
 });
+
+test('task: a new request in a different flow drops the abandoned draft', () => {
+  const selling = taskState.beginTurn({ collectedInfo: null, message: 'Sell a blender' });
+  selling.task.adDraft = { title: 'Blender' };
+  const stored = taskState.toCollectedInfo({}, selling.task);
+
+  const switched = taskState.beginTurn({
+    collectedInfo: stored,
+    message: 'I want to buy shoes',
+  });
+  assert.equal(switched.reset, true);
+  assert.deepEqual(switched.task.adDraft, {});
+  assert.match(switched.task.goal, /shoes/i);
+});
+
+test('task: a correction keeps the abandoned-looking draft', () => {
+  const selling = taskState.beginTurn({ collectedInfo: null, message: 'Sell a blender' });
+  selling.task.adDraft = { title: 'Blender' };
+  const stored = taskState.toCollectedInfo({}, selling.task);
+
+  for (const msg of ['Make it seventy thousand', 'Yes', 'Change the price to 80000']) {
+    const kept = taskState.beginTurn({ collectedInfo: stored, message: msg });
+    assert.equal(kept.reset, false, msg);
+    assert.equal(kept.task.adDraft.title, 'Blender', msg);
+  }
+});
+
+test('task: a touch pick is dropped when the user starts selling instead', () => {
+  const buying = taskState.beginTurn({ collectedInfo: null, message: 'Find a phone' });
+  buying.task.lastPick = {
+    productId: '0123456789abcdef01234567', title: 'Phone', price: 50000,
+    sellerId: null, sellerName: '', itemType: 'post', saved: false, at: Date.now(),
+  };
+  const stored = taskState.toCollectedInfo({}, buying.task);
+
+  const switched = taskState.beginTurn({
+    collectedInfo: stored,
+    message: 'I want to sell my generator',
+  });
+  assert.equal(switched.reset, true);
+  assert.ok(!switched.task.lastPick);
+});

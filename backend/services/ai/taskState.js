@@ -22,6 +22,7 @@
 const {
   TASK_TTL_MS,
   scopeResetDetected,
+  flowSwitchDetected,
   createTask,
   mergeTaskDraft,
 } = require('../../lib/assistant/tasks');
@@ -167,7 +168,7 @@ function hasDrafts(task) {
  */
 function beginTurn({ collectedInfo, message } = {}) {
   const previous = normalizeTask(collectedInfo);
-  const reset = scopeResetDetected(message);
+  const reset = scopeResetDetected(message) || flowSwitchDetected(message, previous);
   const said = cleanText(message, MAX_GOAL);
 
   let task;

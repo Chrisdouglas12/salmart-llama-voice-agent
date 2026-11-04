@@ -525,12 +525,15 @@ const { buildStructured } = require('../services/ai/structuredBlocks');
 // words and only falls back locally when the request itself fails.
 router.post('/onboarding', onboardingLimiter, async (req, res) => {
   const requestId = uuidv4();
+  const started = Date.now();
   const fallback = onboarding.sanitizeOnboarding(null);
   if (!aiConfig.meta.configured || shouldUseMock()) {
+    logger.info(`[aiRoutes] onboarding source=fallback requestId=${requestId} reason=no_model ms=${Date.now() - started}`);
     return res.json({
       success: true,
       requestId,
       source: 'fallback',
+      model: null,
       ...fallback,
     });
   }
@@ -555,6 +558,7 @@ router.post('/onboarding', onboardingLimiter, async (req, res) => {
       ? onboarding.parseOnboardingReply(result.text)
       : null;
     if (!lines) throw new Error('onboarding_reply_unusable');
+    logger.info(`[aiRoutes] onboarding source=model requestId=${requestId} model=${result.model || '?'} welcomeChars=${lines.welcome.length} ms=${Date.now() - started}`);
     return res.json({
       success: true,
       requestId,
@@ -563,11 +567,12 @@ router.post('/onboarding', onboardingLimiter, async (req, res) => {
       ...lines,
     });
   } catch (err) {
-    logger.warn(`[aiRoutes] onboarding model failed ${requestId}: ${err.message}`);
+    logger.warn(`[aiRoutes] onboarding source=fallback requestId=${requestId} reason=${err.message} ms=${Date.now() - started}`);
     return res.json({
       success: true,
       requestId,
       source: 'fallback',
+      model: null,
       ...fallback,
     });
   }

@@ -30,6 +30,7 @@
  *     - 'order_information'  { orders, total }
  *     - 'order_details'      { found, order }
  *     - 'onboarding_options' { methods }
+ *     - 'auth_signin'          {}  ← phone applies the held registration session on the AI's signing_in turn
  *     - 'message_preview'    { prepared }
  *     - 'chat_handoff'       { sellerId, sellerName, productId, productTitle, imageUrl, price, draft }
  *     - 'seller_thread'      { thread }                       ← read-only digest, never rendered as chat
@@ -799,11 +800,20 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
         + ' Say exactly one short sentence: "Alright <name>, I am creating your account now." using that name. Say nothing else. Never ask for any registration detail again.]';
     } else if (safeContext?.event === 'registration_created') {
       // The account now exists but the congratulations card is still on
-      // screen. The model speaks the congratulations plus the signing-in line;
-      // the Market welcome comes later through registration_complete.
-      eventBlock = `\n\n[App event — the account was just created and the congratulations card is on screen.`
+      // screen and the user is NOT signed in yet: POST /register returned a
+      // token the phone holds without applying. The model speaks only the
+      // congratulations here; the signing_in turn performs the sign-in next.
+      eventBlock = `\n\n[App event — the account was just created and the congratulations card is on screen. The user is not signed in yet.`
         + `${safeContext?.fullName ? ` The user's full name is "${String(safeContext.fullName).slice(0, 120)}".` : ''}`
-        + ' Say exactly two short sentences: first congratulate them by that full name and confirm the account was created; then say you are signing them in right now. Never invent a different name, never ask for any registration detail again, and do not mention the Market yet.]';
+        + ' Say exactly one short sentence: congratulate them by that full name and confirm the account was created. Never invent a different name, never ask for any registration detail again, and do not mention signing in or the Market yet.]';
+    } else if (safeContext?.event === 'signing_in') {
+      // The AI performs the sign-in: the model says the line and the server
+      // attaches an explicit auth_signin directive the phone executes by
+      // applying the session it held from POST /register. The token itself
+      // never travels through the model or that block.
+      eventBlock = `\n\n[App event — the account exists, the user is still signed out, and the phone is waiting for your word to sign them in.`
+        + `${safeContext?.fullName ? ` The user's full name is "${String(safeContext.fullName).slice(0, 120)}".` : ''}`
+        + ' Say exactly one short sentence: "Now signing you in, <name>." using that name. Say nothing else. Never ask for any registration detail again and do not mention the Market yet.]';
     } else if (safeContext?.event === 'password_help') {
       // The user tapped "Hear how" on the secret-code box. The model explains
       // the mechanics; the phone never reads its own help line.
@@ -973,6 +983,13 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     }
 
     const structured = buildStructured(result.toolResults || []);
+
+    // The signing_in event is the AI performing the sign-in: the model says
+    // the line and this directive tells the phone to apply the session it
+    // held from POST /register. No token travels through the model.
+    if (safeContext?.event === 'signing_in') {
+      structured.push({ type: 'auth_signin' });
+    }
 
     // Persist fill_* blocks so a form that isn't open right now can drain
     // them the moment it mounts. Best-effort: a persistence failure must not

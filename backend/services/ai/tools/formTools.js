@@ -242,8 +242,24 @@ async function fillProfileForm(_ctx, args) {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const PHONE_RE = /^0[789][01]\d{8}$/;
 
+// Spoken digits arrive as words ("zero eight oh ...", "plus two three four").
+// Convert them before extracting digits so a called-out phone number fills
+// instead of failing validation and stalling the registration flow.
+const NUMBER_WORDS = {
+  zero: '0', oh: '0', o: '0',
+  one: '1', two: '2', three: '3', four: '4', five: '5',
+  six: '6', seven: '7', eight: '8', nine: '9',
+};
+
+function wordsToDigits(value) {
+  return String(value == null ? '' : value)
+    .toLowerCase()
+    .replace(/\bplus\b/g, '+')
+    .replace(/\b(zero|oh|o|one|two|three|four|five|six|seven|eight|nine)\b/g, w => NUMBER_WORDS[w]);
+}
+
 function normalizeNgPhone(value) {
-  let digits = String(value == null ? '' : value).replace(/[^\d+]/g, '');
+  let digits = wordsToDigits(value).replace(/[^\d+]/g, '');
   if (digits.startsWith('+234')) digits = '0' + digits.slice(4);
   else if (digits.startsWith('234') && digits.length === 13) digits = '0' + digits.slice(3);
   else if (/^[789][01]\d{8}$/.test(digits)) digits = '0' + digits;

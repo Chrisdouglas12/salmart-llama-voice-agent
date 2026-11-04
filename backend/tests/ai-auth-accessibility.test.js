@@ -83,6 +83,26 @@ test('registration walks one field at a time, then goes ready', () => {
   assert.equal(ready.nextScreen, 'register');
 });
 
+test('a fresh registration opens like a human, not a bare question', () => {
+  const first = plan('REGISTER', { registerDraft: {} });
+  assert.equal(first.field, 'fullName');
+  assert.match(first.say, /not a problem/i);
+  assert.match(first.say, /register on Salmart/i);
+  assert.match(first.say, /full name/i);
+
+  // Once the task is underway, the name ask stays a plain question.
+  const again = intents.planAuthHelp({
+    intent: 'REGISTER',
+    prior: {
+      intent: 'REGISTER', state: 'COLLECTING_REGISTRATION_DETAILS',
+      method: null, field: 'email', attempts: 1, updatedAt: Date.now(),
+    },
+    registerDraft: {},
+  });
+  assert.equal(again.field, 'fullName');
+  assert.doesNotMatch(again.say, /not a problem/i);
+});
+
 test('a repeated registration step asks for the missing value again', () => {
   const prior = {
     intent: 'REGISTER', state: 'COLLECTING_REGISTRATION_DETAILS',

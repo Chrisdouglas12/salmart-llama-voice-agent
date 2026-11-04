@@ -208,6 +208,17 @@ test('registration: a full name becomes first and last in the patch', () => {
   );
 });
 
+test('registration: spoken number words become a fillable phone number', () => {
+  assert.equal(
+    normalizeRegistrationPatch({ phoneNumber: 'zero eight zero three one two three four five six seven' }).phoneNumber,
+    '08031234567'
+  );
+  assert.equal(
+    normalizeRegistrationPatch({ phoneNumber: 'oh eight oh three one two three four five six seven' }).phoneNumber,
+    '08031234567'
+  );
+});
+
 test('registration: handler rejects an empty patch and states manual steps', async () => {
   await assert.rejects(
     () => prepareRegistration({}, { password: 'hunter2' }),

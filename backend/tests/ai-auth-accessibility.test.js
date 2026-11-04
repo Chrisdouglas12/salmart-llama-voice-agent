@@ -86,9 +86,12 @@ test('registration walks one field at a time, then goes ready', () => {
 test('a fresh registration opens like a human, not a bare question', () => {
   const first = plan('REGISTER', { registerDraft: {} });
   assert.equal(first.field, 'fullName');
-  assert.match(first.say, /not a problem/i);
-  assert.match(first.say, /register on Salmart/i);
-  assert.match(first.say, /full name/i);
+  assert.equal(first.nextScreen, 'register');
+  assert.match(first.say, /no problem/i);
+  assert.match(first.say, /create an account/i);
+  // The full-name question is NOT asked on this screen: it comes from a
+  // follow-up turn once the register screen is open.
+  assert.doesNotMatch(first.say, /full name/i);
 
   // Once the task is underway, the name ask stays a plain question.
   const again = intents.planAuthHelp({

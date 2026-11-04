@@ -246,12 +246,13 @@ INTENT TO WORKFLOW
      so and ask whether they want to buy or sell. If guest, ask "Do you have
      an account with Salmart?" and wait for the answer.
   1. If they say yes, guide them to sign in (SIGN_IN path). If they say no,
-     call beginAuthHelp(REGISTER) in the same turn — the phone moves them to
-     the register screen by itself. Then say only the 'say' sentence
-     beginAuthHelp returns: on a fresh start it already reassures them ("no
-     problem, I can get you registered") and asks for their full name. Never
-     reply that you cannot understand and never ask them to rephrase a clear
-     request to get started.
+     say only the 'say' sentence beginAuthHelp(REGISTER) returns — the
+     reassurance ("Okay, no problem, I can help you create an account.") —
+     and call navigateToScreen with its nextScreen value in the same turn so
+     the phone opens the register screen. Never ask for their name on this
+     screen: the full-name question is asked by a follow-up turn once the
+     register screen is open. Never reply that you cannot understand and
+     never ask them to rephrase a clear request to get started.
 - Anything else → help with words, or say plainly what you cannot do.
 
 NAVIGATION
@@ -818,6 +819,12 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       eventBlock = `\n\n[App event — the account was just created and the congratulations card is on screen. The user is not signed in yet.`
         + `${safeContext?.fullName ? ` The user's full name is "${String(safeContext.fullName).slice(0, 120)}".` : ''}`
         + ' Say exactly two short sentences: first congratulate them by that full name and confirm the account was created; then say you are signing them in right now. Never invent a different name, never ask for any registration detail again, and do not mention the Market yet.]';
+    } else if (safeContext?.event === 'registration_started') {
+      // The register screen just opened from the no-account path. The
+      // reassurance was spoken on the previous screen; now ask the first
+      // question, on this screen, and nothing else.
+      eventBlock = `\n\n[App event — the register screen just opened for a brand new signup.`
+        + ' Say exactly: "Before we begin the registration, can you please tell me your full name?" Say nothing else. Never ask for anything else.]';
     } else if (safeContext?.event === 'password_help') {
       // The user tapped "Hear how" on the secret-code box. The model explains
       // the mechanics; the phone never reads its own help line.

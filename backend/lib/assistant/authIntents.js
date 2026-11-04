@@ -352,16 +352,18 @@ function planAuthHelp({
         && prior.field === step
         && Number(prior.attempts) >= 1
       );
-      // A brand-new registration always opens like a human: reassure first
-      // ("no problem, I can get you registered"), then ask for the full
-      // name. Repeats keep the plain retry line instead.
+      // A brand-new registration opens like a human: reassure first ("no
+      // problem, I can create an account for you"). The full-name question
+      // is NOT asked here — it comes from a follow-up turn once the register
+      // screen is open, so the question is always heard on the right screen.
+      // Repeats keep the plain retry line instead.
       const firstAsk = step === 'fullName' && !(prior && prior.intent === key);
       plan = {
         ...PLANS.REGISTER,
         say: repeated
           ? (REGISTRATION_RETRY_QUESTIONS[step] || REGISTRATION_QUESTIONS[step])
           : (firstAsk
-            ? `That's not a problem, I can help you register on Salmart. ${REGISTRATION_QUESTIONS.fullName}`
+            ? 'Okay, no problem, I can help you create an account.'
             : REGISTRATION_QUESTIONS[step]),
         field: step,
         state: 'COLLECTING_REGISTRATION_DETAILS',

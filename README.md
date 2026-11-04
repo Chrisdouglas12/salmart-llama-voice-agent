@@ -1,17 +1,43 @@
-# Salmart Intelligence
+# Salmart Intelligence — Voice-first marketplace
 
-Voice-first AI inside the Salmart marketplace. Speak, and the app does it.
+> Don't make people learn technology. Make technology understand people.
 
-Built for the Meta AI Developer Hackathon 2026. The Salmart app existed before; this repo is only the new AI layer.
+**Impact:** 700M+ people worldwide struggle to read or type. Most apps today assumes you can read 12 form fields and type perfectly. If you can't, you're locked out of the app.
 
-## Demo (video)
+Salmart Intelligence fixes that: Register by voice. Buy by touch. Chat seller by voice. No typing. No reading required.
 
-The video shows two flows (limited time):
+**Built for:** Meta AI Developer Hackathon 2026 — Track: Build for Your World
+**Declaration:** The Salmart app existed before. This repo is only the new AI layer built during the hackathon.
 
-- **Registration by voice** — guided one-question steps, email optional, Nigerian phone accepted, secure password box, tick-to-agree, spoken summary, say "register me".
-- **Buying by voice + touch** — say "I want to buy", the AI says "touch the one you want", tap previews photo and price, say "save it" to add to cart.
+**Demo Video (3 min):** https://youtube.com/shorts/1EfUJaZ6D40?si=BRfFtk7PVaBrQBsg
+**Try it:** Play Store: https://play.google.com/store/apps/details?id=com.salmartTech.salmart
+**Server:** Live on Render — `https://salmart.onrender.com`
 
-**Selling is also supported, not shown in the video:** snap a product photo and the AI auto-fills title, description, and category, then walks through price, quantity, and discount one question at a time. Same for cart, checkout guidance, and seller chat.
+---
+
+## What it does
+
+### 1. Registration by voice
+Guided one-question steps. Email optional. Nigerian phone accepted. Secure password box. Tick-to-agree. Spoken summary — AI reads back "Is everything correct?" — say "register me" to create account.
+
+### 2. Buying by voice + touch
+Say "I want to buy a bag/shoe or anything", AI says "touch the one you want", you tap,ai reads price, title and description for you. you can ask ai to save it/add it to cart for, or chat the seller.
+
+**Reliability by design:**
+- AI confirms what it heard before it acts
+- Tap previews, never auto-buys
+- User still controls payment — AI never charges
+- Works on low-end Android, low network
+
+### 3. Selling + Chat (also supported)
+Snap a product photo and AI auto-fills title, description, and category, then walks through price, quantity, and discount one question at a time. Same for cart, checkout guidance, and seller chat with auto-attached product photo.
+
+## Proof it uses Meta AI
+
+Live Render logs show real calls to Meta-hosted models:
+
+- `muse-spark-1.3` — reasoning + tool calls: `registration_started`, `navigateToScreen`, `account_created`
+- `muse-voice-transcribe-1.0` — speech-to-text (push-to-talk)
 
 ## Models used
 
@@ -22,7 +48,6 @@ The video shows two flows (limited time):
 | Speech-to-text | `muse-voice-transcribe-1.0` (push-to-talk) |
 | Deep reasoning | `muse-wonder-1.0` |
 | Image tasks | `muse-image-1.0` |
-| Backup brain (no key needed) | Muse Glimmer 30B via Together AI |
 
 Voice output uses the **phone's own TTS voice** — we have no access to hosted Meta MMS voices, so the server writes the words and the device speaks them.
 
@@ -40,11 +65,3 @@ cd backend
 npm install
 npm run test:keyless   # 179/179, no keys or database needed
 npm run demo           # registration + buying + selling walkthrough, no keys needed
-```
-
-Full server (`npm start`, serves on `PORT`, default 3000) needs a `.env` — copy
-`.env.example` to `.env` and set at least `MONGO_URI`, `JWT_SECRET`, and
-`META_API_KEY`. Keyless mode never touches the network or a database.
-
-`mobile/` holds the AI-voice changes as patch files, not the full app — judges
-should use the Play Store build above to test on a phone.

@@ -790,7 +790,7 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     if (safeContext?.event === 'registration_complete') {
       eventBlock = `\n\n[App event — the account was just created on the server and the user is signed in.`
         + `${safeContext?.fullName ? ` The user's full name is "${String(safeContext.fullName).slice(0, 120)}".` : ''}`
-        + ' Say exactly two short sentences: first congratulate them by that full name and confirm the account was created and they are signed in; then welcome them once again by the same name and ask whether they want to buy or sell. Never invent a different name, never ask for any registration detail again, and do not restart registration.]';
+        + ' Say exactly two short sentences: first congratulate them by that full name and confirm the account was created and they are signed in; then say "Welcome to Salmart <name>, we are glad to have you. Would you like to buy or sell anything?" using that same name. Never invent a different name, never ask for any registration detail again, and do not restart registration.]';
     } else if (safeContext?.event === 'voice_unclear') {
       // The phone heard nothing usable. Do not let the model guess which field
       // is missing: the server names the exact next step, and everything the

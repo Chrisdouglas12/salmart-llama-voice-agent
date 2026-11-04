@@ -1,17 +1,16 @@
-
-# NEW_WORK — Built 26 Oct - 4 Nov 2026
+NEW_WORK — Built 26 Oct - 4 Nov 2026
 
 *Salmart app existed before this hackathon. This repo = ONLY the new AI feature built this week.*
 
-### What we built
+What I built
 
 *Meta-first voice assistant* that works from any screen. Speak, don't type.
 
 *Backend `backend/` — all new files, this week:*
 - `lib/assistant/` — Meta client (chat/vision/transcribe), 11 auth intents, credential guard, session state
-- `services/ai/` — `/api/ai` agent loop (21 tools), selling flow (photo-first), touch-to-buy, cart tools
+- `services/ai/` — `/api/ai` agent loop (21 tools total across surfaces, 17 in `/api/ai` alone), selling flow (photo-first), touch-to-buy, cart tools
 - `routes/aiRoutes.js`, `visionRoutes.js`, `voiceRoutes.js` — AI endpoints
-- `scripts/` + `tests/` — 24 test files, 156/156 pass keyless
+- `scripts/` + `tests/` — 24 test files, 156/156 pass keyless (128/128 backend alone)
 
 *Patches to old files — small diffs only:*
 - Voice/vision routes, Shelfie scan, search bridge, payment selection, chat fraud filter
@@ -26,12 +25,31 @@
 5. Selling — photo-first, auto-fill with "I filled X", quantity→discount offer, auto-scroll to filled field
 6. First-run onboarding — server-written welcome spoken over the sign-in screen as a bottom card, then a pulsing microphone-permission card, thanks line, global mic reuse
 
-*How judges can run (no keys):*
+Two AI Surfaces (see `backend/README.md` for full tables)
+
+*Live `app.js` mounts:*
+```js
+app.use('/api/assistant', assistantRoutes);
+app.use('/api/ai/forms', aiFormBridge);
+app.use('/api/ai', aiRoutes);
+1. `/api/assistant` — Voice / Vision — 14 tools (9 original + 5 event)
+   - `POST /chat`, `/transcribe`, `/speak`, `/ad-from-image`, `/photo-clean`, `/scan-shop`
+   - `GET /status`, `/ping`
+
+2. `/api/ai` — Conversational Agent — 17 tools
+   - `POST /conversations`, `/conversations/rebind`, `/turn`
+   - `POST /actions/:id/confirm`, `/actions/:id/cancel`
+   - `GET /tasks/:id`, `POST /forms/drain`
+
+Total distinct tools across both surfaces = 21 (some overlap). No publish, price-guess, or payment tool — by design.
+
+How judges can run (no keys):
 - `npm run demo` — shows registration, buying, selling via real modules
 - `npm run test:keyless` — 156/156 tests
 
-*Proof:*
+Proof:
 - 156/156 keyless tests pass, including the registration script, first-run welcome and empty-final fallback contracts
+- Backend alone: 128/128 keyless, 20 test files
 - Voice turn: median 12.6s (STT 4.7s + agent 6.4s), streaming first sentence in ∼1.1s
 - Touch-to-buy: 18/18 tests, live Meta calls in English and Pidgin passed
 - No keys, tokens, or DB URIs in repo. Agent never publishes or pays — user taps final button.

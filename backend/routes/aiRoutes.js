@@ -907,16 +907,44 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
         + ' Do not claim the user must give a name, email, or phone number that is already marked supplied. If everything is done, say so and name the last tap.]';
     }
 
-    // New-user trigger on an auth screen. The static coach rule is not always
-    // followed by smaller models, and navigating without the reassurance left
-    // the user on the register screen hearing nothing. When the words clearly
-    // say "new / no account", make the exact line and the navigation a hard
-    // instruction for this turn.
+    // New-user trigger. The static coach rule is not always followed by smaller
+    // models, and navigating without the reassurance left the user on the
+    // register screen hearing nothing. When the words clearly say "new / no
+    // account", or the user answers the "do you have an account?" question
+    // with no, make the exact line and the navigation a hard instruction.
     const NEW_ACCOUNT_RE = /\b(?:no account|don'?t have (?:an )?account|do not have (?:an )?account|i(?:'m| am) new(?: here)?|never registered|not registered)\b/i;
+    const lastAssistantLine = [...history].reverse()
+      .find(m => m && m.role === 'assistant' && typeof m.content === 'string');
+    const askedHasAccount = !!lastAssistantLine
+      && /account with salmart/i.test(lastAssistantLine.content);
+    const answersNo = askedHasAccount
+      && /^\s*(?:no|nope|nah|none|never|not really|nothing)\b/i.test(safeMessage);
+    const answersYes = askedHasAccount
+      && /^\s*(?:yes|yeah|yep|yup|sure|i do|i have|correct)\b/i.test(safeMessage);
     if (!safeContext?.event
-      && NEW_ACCOUNT_RE.test(safeMessage)
-      && (liveScreen === 'signin' || liveScreen === 'forgot' || liveScreen === 'reset')) {
-      eventBlock += '\n\n[App event — the user just said they are new or have no account. Call beginAuthHelp(REGISTER) and say exactly "Okay, no problem, I can help you create an account." and nothing else. Then call navigateToScreen with screen "register" in the same turn. Never ask for a name, email, or phone number on this screen.]';
+      && !req.userId
+      && liveScreen !== 'register'
+      && (NEW_ACCOUNT_RE.test(safeMessage) || answersNo)) {
+      eventBlock += '\n\n[App event — the user just said they are new or have no account. Call beginAuthHelp(REGISTER) and say exactly "Okay, no problem, I can help you create an account." and nothing else. Then call navigateToScreen with screen "register" in the same turn. Never ask for a name, email, or phone number on this screen: the full-name question is asked by a follow-up turn on the register screen.]';
+    } else if (!safeContext?.event && !req.userId && answersYes) {
+      eventBlock += '\n\n[App event — the user says they already have a Salmart account. Call beginAuthHelp(SIGN_IN), say one short sentence inviting them to sign in with their email or phone and password, or continue with Google, then call navigateToScreen with screen "signin" in the same turn. Never ask for a name.]';
+    }
+
+    // Final registration confirmation. The phone owns the summary card and
+    // speaks the single creating-account line itself, so a spoken "register
+    // me" must never make the model read the details back again. This is the
+    // server-side backstop for any client that does not silence that turn.
+    if (!safeContext?.event
+      && liveScreen === 'register'
+      && hasRegistrationSnapshot
+      && registrationSnapshot.password === true
+      && registrationSnapshot.agreed === true) {
+      const heard = safeMessage.toLowerCase();
+      const confirms = /\b(?:register me|create (?:my |the )?account|make (?:my |the )?account|sign me up|go ahead|do it|submit|i agree|confirm)\b|\byes\b/.test(heard);
+      const corrects = /\b(?:change|correct|edit|different|instead|wrong|not|don'?t|do not|cancel|wait|stop)\b/.test(heard);
+      if (confirms && !corrects) {
+        eventBlock += '\n\n[App event — the user just confirmed at the final registration step. The phone is creating the account now. Do not read, repeat, or summarise the registration details again, and do not ask any registration question. Reply with one short sentence: "Creating your account now."]';
+      }
     }
 
     // Listing workflow state, built from validated tool results and the

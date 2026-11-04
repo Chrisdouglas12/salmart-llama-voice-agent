@@ -30,7 +30,7 @@
  *     - 'order_information'  { orders, total }
  *     - 'order_details'      { found, order }
  *     - 'onboarding_options' { methods }
- *     - 'auth_signin'          {}  ← phone applies the held registration session on the AI's signing_in turn
+ *     - 'auth_signin'          {}  ← phone applies the held registration session on the AI's registration_created turn
  *     - 'message_preview'    { prepared }
  *     - 'chat_handoff'       { sellerId, sellerName, productId, productTitle, imageUrl, price, draft }
  *     - 'seller_thread'      { thread }                       ← read-only digest, never rendered as chat
@@ -796,8 +796,8 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     let eventBlock = '';
     if (safeContext?.event === 'registration_complete') {
       eventBlock = `\n\n[App event — the account was just created on the server and the user is signed in.`
-        + `${safeContext?.fullName ? ` The user's full name is "${String(safeContext.fullName).slice(0, 120)}".` : ''}`
-        + ' Say exactly two short sentences: first congratulate them by that full name and confirm the account was created and they are signed in; then say "Welcome to Salmart <name>, we are glad to have you. Would you like to buy or sell anything?" using that same name. Never invent a different name, never ask for any registration detail again, and do not restart registration.]';
+        + `${safeContext?.fullName ? ` The user's first name is "${String(safeContext.fullName).slice(0, 120).split(/\s+/)[0]}".` : ''}`
+        + ' Say exactly this, using their first name: "Welcome once again, <firstname>, would you like to buy or sell anything? Just tell me, I can help you." Never invent a different name, never ask for any registration detail again, and do not restart registration.]';
     } else if (safeContext?.event === 'account_creating') {
       // The user confirmed and the phone is about to POST /register. The model
       // speaks the handoff line so the phone never invents its own words.
@@ -805,21 +805,15 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
         + `${safeContext?.fullName ? ` The user's full name is "${String(safeContext.fullName).slice(0, 120)}".` : ''}`
         + ' Say exactly one short sentence: "Alright <name>, I am creating your account now." using that name. Say nothing else. Never ask for any registration detail again.]';
     } else if (safeContext?.event === 'registration_created') {
-      // The account now exists but the congratulations card is still on
-      // screen and the user is NOT signed in yet: POST /register returned a
-      // token the phone holds without applying. The model speaks only the
-      // congratulations here; the signing_in turn performs the sign-in next.
+      // The account now exists and the congratulations card is on screen, but
+      // the user is NOT signed in yet: POST /register returned a token the
+      // phone holds without applying. The model speaks congratulations and
+      // the signing-in line together in one message, and the server attaches
+      // the auth_signin directive to this same turn — the phone signs the
+      // user in the moment this message finishes. No separate signing turn.
       eventBlock = `\n\n[App event — the account was just created and the congratulations card is on screen. The user is not signed in yet.`
         + `${safeContext?.fullName ? ` The user's full name is "${String(safeContext.fullName).slice(0, 120)}".` : ''}`
-        + ' Say exactly one short sentence: congratulate them by that full name and confirm the account was created. Never invent a different name, never ask for any registration detail again, and do not mention signing in or the Market yet.]';
-    } else if (safeContext?.event === 'signing_in') {
-      // The AI performs the sign-in: the model says the line and the server
-      // attaches an explicit auth_signin directive the phone executes by
-      // applying the session it held from POST /register. The token itself
-      // never travels through the model or that block.
-      eventBlock = `\n\n[App event — the account exists, the user is still signed out, and the phone is waiting for your word to sign them in.`
-        + `${safeContext?.fullName ? ` The user's full name is "${String(safeContext.fullName).slice(0, 120)}".` : ''}`
-        + ' Say exactly one short sentence: "Now signing you in, <name>." using that name. Say nothing else. Never ask for any registration detail again and do not mention the Market yet.]';
+        + ' Say exactly two short sentences: first congratulate them by that full name and confirm the account was created; then say you are signing them in right now. Never invent a different name, never ask for any registration detail again, and do not mention the Market yet.]';
     } else if (safeContext?.event === 'password_help') {
       // The user tapped "Hear how" on the secret-code box. The model explains
       // the mechanics; the phone never reads its own help line.
@@ -847,7 +841,7 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       // account — or to say which detail to change. Never read out or ask
       // for any contact detail, and never mention a password.
       eventBlock = `\n\n[App event — the registration summary card is on screen, the phone has read the details aloud, and everything is filled.`
-        + ' Say exactly two short sentences: first thank them and confirm everything is ready; then tell them to tap the microphone and say "register me" to create the account, or to say which detail to change. Never ask for any registration detail again.]';
+        + ' Say exactly this: thank them, confirm everything is ready, then say "Speak to the mic and say register me, or do you want me to correct anything?" Never ask for any registration detail again.]';
     } else if (safeContext?.event === 'voice_unclear') {
       // The phone heard nothing usable. Do not let the model guess which field
       // is missing: the server names the exact next step, and everything the
@@ -991,10 +985,11 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
 
     const structured = buildStructured(result.toolResults || []);
 
-    // The signing_in event is the AI performing the sign-in: the model says
-    // the line and this directive tells the phone to apply the session it
-    // held from POST /register. No token travels through the model.
-    if (safeContext?.event === 'signing_in') {
+    // The registration_created turn is the AI performing the sign-in: the
+    // model speaks congratulations plus the signing-in line, and this
+    // directive tells the phone to apply the session it held from
+    // POST /register. No token travels through the model.
+    if (safeContext?.event === 'registration_created') {
       structured.push({ type: 'auth_signin' });
     }
 

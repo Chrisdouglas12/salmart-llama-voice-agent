@@ -794,6 +794,10 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     // A registration completion is an app event, not a form step. It tells the
     // model to write the welcome without asking for registration details again.
     let eventBlock = '';
+    // Ephemeral personal values for one turn (the summary read-back). They
+    // are voiced by the model from the live prompt only: stripped from the
+    // context before logging and redacted from the stored reply below.
+    const piiRedact = [];
     if (safeContext?.event === 'registration_complete') {
       eventBlock = `\n\n[App event — the account was just created on the server and the user is signed in.`
         + `${safeContext?.fullName ? ` The user's first name is "${String(safeContext.fullName).slice(0, 120).split(/\s+/)[0]}".` : ''}`
@@ -834,14 +838,21 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
         + ' Say exactly the agreement step in at most two short sentences: before they can buy or sell on Salmart they must accept the Privacy Policy and Terms and Conditions, and they should tick the glowing box only if they agree. Never ask for any registration detail again.]';
     } else if (safeContext?.event === 'ready_to_confirm') {
       // The final summary card is on screen (the user ticked the agreement or
-      // tapped Create account with everything filled). The phone has just read
-      // the values aloud itself and shows them on the card; the model speaks
-      // only the question: thank them, confirm everything is ready, and tell
-      // them to tap the microphone and say "register me" to create the
-      // account — or to say which detail to change. Never read out or ask
-      // for any contact detail, and never mention a password.
-      eventBlock = `\n\n[App event — the registration summary card is on screen, the phone has read the details aloud, and everything is filled.`
-        + ' Say exactly this: thank them, confirm everything is ready, then say "Speak to the mic and say register me, or do you want me to correct anything?" Never ask for any registration detail again.]';
+      // tapped Create account with everything filled). The phone sends the
+      // held details with this one turn so the model reads the summary aloud
+      // itself. These values are EPHEMERAL: they are used only for this
+      // prompt, then stripped from the context before logging and redacted
+      // from the stored reply, so they never persist in logs or the database.
+      const summaryName = String(safeContext?.fullName || '').trim().slice(0, 120);
+      const summaryEmail = String(safeContext?.email || '').trim().slice(0, 120);
+      const summaryPhone = String(safeContext?.phoneNumber || '').trim().slice(0, 40);
+      piiRedact.push(summaryName, summaryEmail, summaryPhone);
+      eventBlock = `\n\n[App event — the registration summary card is on screen and everything is filled.`
+        + `${summaryName ? ` The user's details for THIS turn only are — full name: "${summaryName}"; email: "${summaryEmail || 'none — they use a phone number'}"; phone: "${summaryPhone || 'none — they use email'}".` : ''}`
+        + ' First read those details back exactly as given (never the password — say it stays hidden on their phone), then say exactly: "Speak to the mic and say register me, or do you want me to correct anything?" Never ask for any registration detail again.]';
+      delete safeContext.fullName;
+      delete safeContext.email;
+      delete safeContext.phoneNumber;
     } else if (safeContext?.event === 'voice_unclear') {
       // The phone heard nothing usable. Do not let the model guess which field
       // is missing: the server names the exact next step, and everything the
@@ -931,14 +942,26 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     const result = await runTurn({ ctx, messages: modelMessages });
 
     if (result.turns.length > 0) {
+      // Ephemeral personal values (the summary read-back) never persist: the
+      // stored copy of this turn has them replaced, while the live reply the
+      // phone voices is untouched.
+      const redactPII = (text) => {
+        let out = String(text || '');
+        for (const secret of piiRedact) {
+          if (!secret || secret.length < 3) continue;
+          const escaped = secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          out = out.replace(new RegExp(escaped, 'g'), '[withheld]');
+        }
+        return out;
+      };
       const toStore = result.turns.map(t => {
         if (t.role === 'assistant' && Array.isArray(t.tool_calls)) {
-          return { role: 'assistant', content: t.content || '', toolCalls: t.tool_calls };
+          return { role: 'assistant', content: redactPII(t.content) || '', toolCalls: t.tool_calls };
         }
         if (t.role === 'tool') {
-          return { role: 'tool', content: t.content || '', toolCallId: t.tool_call_id, name: t.name };
+          return { role: 'tool', content: redactPII(t.content) || '', toolCallId: t.tool_call_id, name: t.name };
         }
-        return { role: t.role, content: t.content || '' };
+        return { role: t.role, content: redactPII(t.content) || '' };
       });
       // Do not store a new orphan when a turn dies mid-tool-loop; it would
       // break the next replay (see the sanitizeHistory note above).

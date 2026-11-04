@@ -64,10 +64,9 @@ const REGISTRATION_QUESTIONS = {
   email: 'Do you have an email? It can be Google, Yahoo, or any other email. If you do not have an email, just call your phone number.',
   phone: 'Okay, no problem, please call your phone number.',
   password:
-    'It is time to protect your account. I have opened the secret code box. '
-    + 'A secret code protects your account, so never share it with anyone, not even someone who says they are '
-    + 'from Salmart. Type your own code of eight characters or more with a letter and a number, or copy the suggested code. '
-    + 'Tap the first button to copy the suggested code, or the next button to get another one.',
+    'Time to protect your account: the secret code box is open. Never share this code, not even someone who says they are from Salmart. '
+    + 'Type eight characters or more with a letter and a number, or tap the suggested code. '
+    + 'Tap Save my code when you are done.',
   agreement:
     'Before you can buy or sell on Salmart, you must accept the Privacy Policy and Terms and Conditions. '
     + 'Tick the glowing box only if you agree.',

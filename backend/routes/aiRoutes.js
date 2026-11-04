@@ -810,6 +810,13 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       eventBlock = `\n\n[App event — the account was just created on the server and the user is signed in.`
         + `${safeContext?.fullName ? ` The user's first name is "${String(safeContext.fullName).slice(0, 120).split(/\s+/)[0]}".` : ''}`
         + ' Say exactly this, using their first name: "Welcome once again, <firstname>, would you like to buy or sell anything? Just tell me, I can help you." Never invent a different name, never ask for any registration detail again, and do not restart registration.]';
+    } else if (safeContext?.event === 'signin_complete') {
+      // A plain sign-in (not a fresh registration) just landed the user on the
+      // Market screen with no resumed conversation. Greet once and offer the
+      // two things Salmart does. Never ask for any registration detail.
+      eventBlock = `\n\n[App event — the user just signed in and is now on the Market screen.`
+        + `${safeContext?.fullName ? ` The user's first name is "${String(safeContext.fullName).slice(0, 120).split(/\s+/)[0]}".` : ''}`
+        + ' Say exactly this, using their first name when given, otherwise without a name: "Welcome back, <firstname>, would you like to buy or sell anything? Just tell me, I can help you." Never invent a name, never ask for any registration detail, and do not restart registration.]';
     } else if (safeContext?.event === 'account_creating') {
       // The user confirmed and the phone is about to POST /register. The model
       // speaks the handoff line so the phone never invents its own words.
@@ -915,10 +922,14 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     const NEW_ACCOUNT_RE = /\b(?:no account|don'?t have (?:an )?account|do not have (?:an )?account|i(?:'m| am) new(?: here)?|never registered|not registered)\b/i;
     const lastAssistantLine = [...history].reverse()
       .find(m => m && m.role === 'assistant' && typeof m.content === 'string');
+    // The question can be phrased with or without "with Salmart" depending on
+    // the turn ("Do you have an account?" vs "Do you have an account with
+    // Salmart?"). Match either, or a bare "no" can be missed and the user is
+    // moved on without ever hearing the reassurance.
     const askedHasAccount = !!lastAssistantLine
-      && /account with salmart/i.test(lastAssistantLine.content);
+      && /do you have an?\s+account|have an?\s+account|account with salmart/i.test(lastAssistantLine.content);
     const answersNo = askedHasAccount
-      && /^\s*(?:no|nope|nah|none|never|not really|nothing)\b/i.test(safeMessage);
+      && /^\s*(?:no|nope|nah|none|never|not yet|not really|nothing|i don'?t|i do not|dont have|do not have)\b/i.test(safeMessage);
     const answersYes = askedHasAccount
       && /^\s*(?:yes|yeah|yep|yup|sure|i do|i have|correct)\b/i.test(safeMessage);
     if (!safeContext?.event

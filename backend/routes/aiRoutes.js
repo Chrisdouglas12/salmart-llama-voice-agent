@@ -816,6 +816,21 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       // than four.
       eventBlock = `\n\n[App event — the user asked for the sign-up steps on the register screen.`
         + ' Describe the steps in order in at most four short sentences: (1) say your full name; (2) give an email, or call your phone number if you have no email; (3) a box opens for the secret code — type 8 characters with a letter and a number, or tap the suggested code; (4) tick the glowing agreement box, then hear the read-back and say "register me" into the card microphone to create the account. Never ask for a password in chat.]';
+    } else if (safeContext?.event === 'password_saved') {
+      // The user just saved their secret code by tapping in the phone UI, so
+      // no voice turn spoke the next step. The agreement card opens by itself:
+      // the model says the agreement line now, exactly as on the voice path.
+      eventBlock = `\n\n[App event — the user just saved their secret code and the agreement card is opening on the register screen.`
+        + ' Say exactly the agreement step in at most two short sentences: before they can buy or sell on Salmart they must accept the Privacy Policy and Terms and Conditions, and they should tick the glowing box only if they agree. Never ask for any registration detail again.]';
+    } else if (safeContext?.event === 'ready_to_confirm') {
+      // The final summary card is on screen (the user ticked the agreement or
+      // tapped Create account with everything filled). The phone shows the
+      // name and contact it holds; the model speaks the summary moment: thank
+      // them, confirm everything is in, and tell them to tap the microphone
+      // and say "register me" to create the account. Never read out or ask
+      // for any contact detail, and never mention a password.
+      eventBlock = `\n\n[App event — the registration summary card is on screen and everything is filled.`
+        + ' Say exactly two short sentences: first thank them and confirm everything is ready; then tell them to tap the microphone and say "register me" to create the account. Never ask for any registration detail again.]';
     } else if (safeContext?.event === 'voice_unclear') {
       // The phone heard nothing usable. Do not let the model guess which field
       // is missing: the server names the exact next step, and everything the

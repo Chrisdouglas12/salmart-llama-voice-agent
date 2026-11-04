@@ -786,6 +786,8 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
     const registrationSnapshot = safeContext && safeContext.registration
       ? safeContext.registration
       : null;
+    const hasRegistrationSnapshot = !!(registrationSnapshot
+      && Object.keys(registrationSnapshot).length);
     const registerOnScreen = !liveScreen
       || liveScreen === 'register'
       || liveScreen === 'ai';
@@ -844,10 +846,23 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
         + ' Describe the steps in order in at most four short sentences: (1) say your full name; (2) give an email, or call your phone number if you have no email; (3) a box opens for the secret code — type 8 characters with a letter and a number, or tap the suggested code; (4) tick the glowing agreement box, then hear the read-back and say "register me" into the card microphone to create the account. Never ask for a password in chat.]';
     } else if (safeContext?.event === 'password_saved') {
       // The user just saved their secret code by tapping in the phone UI, so
-      // no voice turn spoke the next step. The agreement card opens by itself:
-      // the model says the agreement line now, exactly as on the voice path.
-      eventBlock = `\n\n[App event — the user just saved their secret code and the agreement card is opening on the register screen.`
-        + ' Say exactly the agreement step in at most two short sentences: before they can buy or sell on Salmart they must accept the Privacy Policy and Terms and Conditions, and they should tick the glowing box only if they agree. Never ask for any registration detail again.]';
+      // no voice turn spoke the next step. The server reads the live form
+      // snapshot: if the name or contact is still missing it asks only for
+      // that; when everything is in, the agreement card opens by itself.
+      const snap = registrationSnapshot || {};
+      const nameSaved = snap.fullName === true
+        || (snap.firstName === true && snap.lastName === true);
+      const contactSaved = snap.email === true || snap.phone === true;
+      if (!nameSaved || !contactSaved) {
+        const missing = !nameSaved
+          ? 'their full name, first and last'
+          : 'an email address or a phone number';
+        eventBlock = `\n\n[App event — the user just saved their secret code, but the registration form is still missing ${missing}.`
+          + ` Ask only for ${missing} in one short question. Never say the secret code is missing, never ask for a password, and never read the agreement yet.]`;
+      } else {
+        eventBlock = `\n\n[App event — the user just saved their secret code and the agreement card is opening on the register screen.`
+          + ' Say exactly the agreement step in at most two short sentences: before they can buy or sell on Salmart they must accept the Privacy Policy and Terms and Conditions, and they should tick the glowing box only if they agree. Never ask for any registration detail again.]';
+      }
     } else if (safeContext?.event === 'ready_to_confirm') {
       // The final summary card is on screen (the user ticked the agreement or
       // tapped Create account with everything filled). The phone sends the
@@ -892,6 +907,18 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
         + ' Do not claim the user must give a name, email, or phone number that is already marked supplied. If everything is done, say so and name the last tap.]';
     }
 
+    // New-user trigger on an auth screen. The static coach rule is not always
+    // followed by smaller models, and navigating without the reassurance left
+    // the user on the register screen hearing nothing. When the words clearly
+    // say "new / no account", make the exact line and the navigation a hard
+    // instruction for this turn.
+    const NEW_ACCOUNT_RE = /\b(?:no account|don'?t have (?:an )?account|do not have (?:an )?account|i(?:'m| am) new(?: here)?|never registered|not registered)\b/i;
+    if (!safeContext?.event
+      && NEW_ACCOUNT_RE.test(safeMessage)
+      && (liveScreen === 'signin' || liveScreen === 'forgot' || liveScreen === 'reset')) {
+      eventBlock += '\n\n[App event — the user just said they are new or have no account. Call beginAuthHelp(REGISTER) and say exactly "Okay, no problem, I can help you create an account." and nothing else. Then call navigateToScreen with screen "register" in the same turn. Never ask for a name, email, or phone number on this screen.]';
+    }
+
     // Listing workflow state, built from validated tool results and the
     // phone's form snapshot (presence flags only), never from model text.
     const listingSnapshot = sellingSession.snapshotFromContext(safeContext);
@@ -925,20 +952,28 @@ router.post('/turn', softAuth, turnLimiter, async (req, res) => {
       screen: liveScreen,
       // Read-only auth context for beginAuthHelp. No email value, ever.
       auth: authPrior,
+      // A fresh form snapshot is the live truth. Old task/auth flags describe
+      // what a previous turn thought it saved; trusting them is what let a
+      // dropped phone fill advance the flow to the password box with an empty
+      // number field. Same-turn prepareRegistration calls still flip these
+      // flags on this same ctx object after the request starts.
       registerDraft: task.drafts.register,
       registration: registrationSnapshot,
-      nameProvided: !!(task.drafts.register.fullName
-        || (task.drafts.register.firstName && task.drafts.register.lastName)
-        || authPrior?.nameProvided),
-      emailProvided: !!task.emailProvided
-        || registrationSnapshot?.email === true
-        || !!authPrior?.emailProvided,
-      phoneProvided: !!task.phoneProvided
-        || registrationSnapshot?.phone === true
-        || !!authPrior?.phoneProvided,
-      emailDeclined: !!task.emailDeclined
-        || registrationSnapshot?.emailDeclined === true
-        || !!authPrior?.emailDeclined,
+      nameProvided: hasRegistrationSnapshot
+        ? (registrationSnapshot.fullName === true
+          || (registrationSnapshot.firstName === true && registrationSnapshot.lastName === true))
+        : !!(task.drafts.register.fullName
+          || (task.drafts.register.firstName && task.drafts.register.lastName)
+          || authPrior?.nameProvided),
+      emailProvided: hasRegistrationSnapshot
+        ? registrationSnapshot.email === true
+        : (!!task.emailProvided || !!authPrior?.emailProvided),
+      phoneProvided: hasRegistrationSnapshot
+        ? registrationSnapshot.phone === true
+        : (!!task.phoneProvided || !!authPrior?.phoneProvided),
+      emailDeclined: hasRegistrationSnapshot
+        ? registrationSnapshot.emailDeclined === true
+        : (!!task.emailDeclined || !!authPrior?.emailDeclined),
       passwordSet: registrationSnapshot?.password === true,
       agreed: registrationSnapshot?.agreed === true,
       // Multi-turn task memory. `adDraft` holds only values a validating tool

@@ -367,6 +367,7 @@ async function prepareRegistration(_ctx, args) {
   const snap = _ctx?.registration && typeof _ctx.registration === 'object'
     ? _ctx.registration
     : {};
+  const snapKnown = Object.keys(snap).length > 0;
   const draft = _ctx?.registerDraft && typeof _ctx.registerDraft === 'object'
     ? _ctx.registerDraft
     : {};
@@ -374,8 +375,13 @@ async function prepareRegistration(_ctx, args) {
     || !!_ctx?.nameProvided
     || snap.fullName === true
     || (snap.firstName === true && snap.lastName === true)
-    || !!(draft.firstName && draft.lastName)
-    || !!(draft.fullName && String(draft.fullName).trim().split(/\s+/).length >= 2);
+    // The saved draft is only a fallback when the phone sent no snapshot. A
+    // live snapshot showing an empty name means the field really is empty,
+    // even if an earlier turn thought it saved one.
+    || (!snapKnown && (
+      !!(draft.firstName && draft.lastName)
+      || !!(draft.fullName && String(draft.fullName).trim().split(/\s+/).length >= 2)
+    ));
   const hasEmail = !!fields.email || !!_ctx?.emailProvided || snap.email === true;
   const hasPhone = !!fields.phoneNumber || !!_ctx?.phoneProvided || snap.phone === true;
   const declined = noEmail || !!_ctx?.emailDeclined || snap.emailDeclined === true;

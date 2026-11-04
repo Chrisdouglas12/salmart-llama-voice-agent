@@ -248,13 +248,17 @@ function registrationStep({
 } = {}) {
   const draft = registerDraft && typeof registerDraft === 'object' ? registerDraft : {};
   const snap = registration && typeof registration === 'object' ? registration : {};
+  const snapKnown = Object.keys(snap).length > 0;
 
-  const hasName = !!(
-    nameProvided
-    || draft.fullName
-    || snap.fullName === true
-    || ((draft.firstName || snap.firstName === true) && (draft.lastName || snap.lastName === true))
-  );
+  // When the phone sent a live form snapshot, it is the truth about what is
+  // on screen. The saved draft may still remember a name the phone never
+  // received (a dropped fill), and trusting it would skip to the next step
+  // with an empty field. Same-turn tool calls still set the *Provided flags.
+  const hasName = !!nameProvided || (snapKnown
+    ? (snap.fullName === true || (snap.firstName === true && snap.lastName === true))
+    : (!!draft.fullName
+      || ((draft.firstName || snap.firstName === true)
+        && (draft.lastName || snap.lastName === true))));
   const hasEmail = !!(emailProvided || snap.email === true);
   const hasPhone = !!(phoneProvided || snap.phone === true);
   const declined = !!(emailDeclined || snap.emailDeclined === true);
